@@ -1,0 +1,7 @@
+# Python 3.12+
+Django==6.0.5
+djangorestframework==3.17.1
+
+# Transitive dependencies pinned for reproducible shared-PC setup.
+asgiref==3.11.1
+sqlparse==0.5.5

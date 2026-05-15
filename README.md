@@ -1,0 +1,324 @@
+# map-score-api
+
+職業訓練校の共用 Mac で使うことを想定した Django REST Framework プロジェクトです。
+Python パッケージはプロジェクト直下の `.venv` にだけ入れ、PC 本体の Python 環境はできるだけ汚さない構成にします。
+
+## プロジェクトの目標
+
+地図情報を取得してグリッド状に分割し、各グリッドに点数を付けられる API を作ります。
+ユーザーが採点した点数を集計し、分割された地図上で一目でわかる形に反映することを目指します。
+
+現時点では仕様未定の点が多いため、まずは `API_SPEC.md` と `TASK.md` を更新しながら、小さい単位で設計と実装を進めます。
+
+## 前提
+
+- Python 3.12 以上
+- macOS のターミナル
+- `pip` は必ず `.venv` のものを使う
+
+現在の依存関係は Django 6 系を前提にしているため、Python 3.11 以下では動きません。
+
+## 初回セットアップ
+
+プロジェクト直下で実行します。
+
+```bash
+python3 --version
+python3 -m venv .venv
+source .venv/bin/activate
+PIP_CACHE_DIR=.pip-cache python -m pip install --upgrade pip
+PIP_CACHE_DIR=.pip-cache python -m pip install -r requirements.txt
+```
+
+仮想環境が有効な間は、プロンプトの先頭に `(.venv)` が表示されます。
+
+## 起動
+
+```bash
+source .venv/bin/activate
+python manage.py migrate
+python manage.py runserver
+```
+
+ブラウザで `http://127.0.0.1:8000/` を開きます。
+
+## 開発時のコマンド
+
+```bash
+# 仮想環境を有効化
+source .venv/bin/activate
+
+# 依存関係をインストール
+PIP_CACHE_DIR=.pip-cache python -m pip install -r requirements.txt
+
+# マイグレーション
+python manage.py migrate
+
+# 開発サーバー
+python manage.py runserver
+
+# 仮想環境を終了
+deactivate
+```
+
+## 実装済み API の手動確認
+
+ここでは、ローカル開発用 DB に確認用データを作り、実装済みの採点 API を `curl` で確認します。
+
+`curl` はターミナルから API にリクエストを送るためのコマンドです。
+`-u testuser:test-password` は Basic 認証で、ユーザー名とパスワードを送る指定です。
+
+### 1. 事前準備
+
+プロジェクト直下で実行します。
+
+```bash
+source .venv/bin/activate
+python manage.py migrate
+```
+
+確認用ユーザー、地図範囲、グリッドを作成します。
+すでに同じユーザーがある場合は再利用します。
+
+```bash
+python manage.py shell
+```
+
+`>>>` が表示されたら、次の Python コードを貼り付けて Enter を押します。
+
+```python
+from django.contrib.auth import get_user_model
+from maps.models import GridCell, MapArea
+
+User = get_user_model()
+user, _ = User.objects.get_or_create(
+    username="testuser",
+    defaults={"email": "test@example.com"},
+)
+user.set_password("test-password")
+user.save()
+
+area, _ = MapArea.objects.get_or_create(
+    name="Manual Test Area",
+    defaults={
+        "north": 35.7,
+        "south": 35.6,
+        "east": 139.8,
+        "west": 139.7,
+        "grid_size_meters": 500,
+        "created_by": user,
+    },
+)
+grid1, _ = GridCell.objects.get_or_create(
+    area=area,
+    row_index=0,
+    col_index=0,
+    defaults={
+        "north": 35.7,
+        "south": 35.69,
+        "east": 139.8,
+        "west": 139.79,
+        "initial_score": 3,
+    },
+)
+grid2, _ = GridCell.objects.get_or_create(
+    area=area,
+    row_index=0,
+    col_index=1,
+    defaults={
+        "north": 35.7,
+        "south": 35.69,
+        "east": 139.79,
+        "west": 139.78,
+        "initial_score": 7,
+    },
+)
+print("user:", user.username)
+print("area_id:", area.id)
+print("grid1_id:", grid1.id)
+print("grid2_id:", grid2.id)
+```
+
+表示された `area_id`、`grid1_id`、`grid2_id` を、次の確認コマンドの `<AREA_ID>`、`<GRID1_ID>`、`<GRID2_ID>` に置き換えてください。
+確認が終わったら、`exit()` で shell を終了します。
+
+別のターミナルを開き、開発サーバーを起動します。
+
+```bash
+source .venv/bin/activate
+python manage.py runserver
+```
+
+### 2. 単体採点 API
+
+1 つのグリッドに点数を付けます。
+
+```bash
+curl -i -u testuser:test-password \
+  -H "Content-Type: application/json" \
+  -X POST http://127.0.0.1:8000/api/maps/grids/<GRID1_ID>/ratings/ \
+  -d '{"score": 8, "comment": "水辺が近くて良さそう"}'
+```
+
+初回採点では `201 Created` が返ります。
+同じコマンドをもう一度実行すると、新しい採点行は作らず既存採点を更新するため `200 OK` が返ります。
+
+レスポンスには、作成または更新された `rating` と、再集計後の `grid` が含まれます。
+
+### 3. 一括採点 API
+
+複数のグリッドに同じ点数をまとめて付けます。
+
+```bash
+curl -i -u testuser:test-password \
+  -H "Content-Type: application/json" \
+  -X POST http://127.0.0.1:8000/api/maps/grids/bulk-ratings/ \
+  -d '{"grid_ids": [<GRID1_ID>, <GRID2_ID>], "score": 5, "comment": "まとめて採点"}'
+```
+
+すべて新規採点なら `201 Created` が返ります。
+既存採点が 1 件以上更新された場合は `200 OK` が返ります。
+
+レスポンスには、再集計後の `grids` 一覧が含まれます。
+
+### 4. 点数付きグリッド一覧 API
+
+指定した地図範囲に属するグリッド一覧を、点数付きで取得します。
+
+```bash
+curl -i -u testuser:test-password \
+  http://127.0.0.1:8000/api/maps/areas/<AREA_ID>/grids/
+```
+
+正常に取得できた場合は `200 OK` が返ります。
+レスポンスには `area` と `grids` が含まれます。
+
+`grids` には、各グリッドの位置情報と点数が含まれます。
+地図画面では `calculated_score` を使って色分け表示する想定です。
+
+```json
+{
+  "area": {
+    "id": 1,
+    "name": "Manual Test Area"
+  },
+  "grids": [
+    {
+      "id": 1,
+      "area": 1,
+      "row_index": 0,
+      "col_index": 0,
+      "north": 35.7,
+      "south": 35.69,
+      "east": 139.8,
+      "west": 139.79,
+      "initial_score": 3.0,
+      "average_user_score": 8.0,
+      "rating_count": 1,
+      "calculated_score": 5.5,
+      "score_updated_at": "2026-05-15T10:00:00+09:00"
+    }
+  ]
+}
+```
+
+この API は保存済みの集計値を読むだけです。
+新しく採点したい場合は、単体採点 API または一括採点 API を使います。
+
+### 5. エラー確認
+
+ログイン情報を付けずに送ると、ログイン必須のため `401 Unauthorized` になります。
+
+```bash
+curl -i \
+  -H "Content-Type: application/json" \
+  -X POST http://127.0.0.1:8000/api/maps/grids/<GRID1_ID>/ratings/ \
+  -d '{"score": 8}'
+```
+
+点数が 1 から 10 の範囲外の場合は `400 Bad Request` になります。
+
+```bash
+curl -i -u testuser:test-password \
+  -H "Content-Type: application/json" \
+  -X POST http://127.0.0.1:8000/api/maps/grids/<GRID1_ID>/ratings/ \
+  -d '{"score": 11}'
+```
+
+存在しない `grid_id` を一括採点に含めた場合も `400 Bad Request` になります。
+
+```bash
+curl -i -u testuser:test-password \
+  -H "Content-Type: application/json" \
+  -X POST http://127.0.0.1:8000/api/maps/grids/bulk-ratings/ \
+  -d '{"grid_ids": [<GRID1_ID>, 999999], "score": 5}'
+```
+
+存在しない `area_id` で点数付きグリッド一覧 API を呼ぶと、`404 Not Found` になります。
+
+```bash
+curl -i -u testuser:test-password \
+  http://127.0.0.1:8000/api/maps/areas/999999/grids/
+```
+
+## 依存関係を追加したいとき
+
+必ず `.venv` を有効化してからインストールします。
+
+```bash
+source .venv/bin/activate
+PIP_CACHE_DIR=.pip-cache python -m pip install パッケージ名
+python -m pip freeze > requirements.txt
+```
+
+`pip install` だけを直接使うと、別の Python に入ってしまうことがあります。
+このプロジェクトでは `python -m pip ...` の形を推奨します。
+
+## Git に入れないもの
+
+以下は PC ごとに作られるため、Git 管理しません。
+
+- `.venv/`
+- `db.sqlite3`
+- `.env`
+- `__pycache__/`
+- `.pip-cache/`
+- `.DS_Store`
+
+## 環境変数
+
+通常の開発では設定不要です。
+端末ごとに値を変えたい場合は `.env.example` を参考に `.env` を作成し、ターミナルで読み込んでから Django を起動します。
+
+```bash
+cp .env.example .env
+set -a
+source .env
+set +a
+python manage.py runserver
+```
+
+## Codex で作業するとき
+
+Codex には次の手順をセットアップとして伝えると安定します。
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+PIP_CACHE_DIR=.pip-cache python -m pip install --upgrade pip
+PIP_CACHE_DIR=.pip-cache python -m pip install -r requirements.txt
+python manage.py migrate
+```
+
+テストや管理コマンドを依頼するときも、`.venv` を使う前提で次の形にすると PC 本体の環境に依存しにくくなります。
+
+```bash
+source .venv/bin/activate
+python manage.py check
+```
+
+## 設計メモ
+
+- `TASK.md`: 現在の目標変更と作業メモ
+- `API_SPEC.md`: 地図採点 API の仕様案
+- `AGENTS.md`: Codex に依頼するときの役割分担ルール

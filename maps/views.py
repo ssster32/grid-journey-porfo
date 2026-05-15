@@ -1,0 +1,103 @@
+from rest_framework import status
+from rest_framework.authentication import BasicAuthentication, SessionAuthentication
+from rest_framework.generics import get_object_or_404
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from rest_framework.views import APIView
+
+from .models import GridCell, GridRating, MapArea
+from .serializers import (
+    BulkGridRatingSerializer,
+    GridCellScoreSerializer,
+    GridRatingCreateSerializer,
+    GridRatingResponseSerializer,
+)
+from .services import update_grid_cell_score
+
+
+class GridRatingCreateView(APIView):
+    authentication_classes = [BasicAuthentication, SessionAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, grid_id):
+        grid = get_object_or_404(GridCell, id=grid_id)
+        serializer = GridRatingCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        rating, created = GridRating.objects.update_or_create(
+            grid=grid,
+            user=request.user,
+            defaults={
+                "score": serializer.validated_data["score"],
+                "comment": serializer.validated_data.get("comment", ""),
+            },
+        )
+        updated_grid = update_grid_cell_score(grid)
+
+        response_status = status.HTTP_201_CREATED if created else status.HTTP_200_OK
+        return Response(
+            {
+                "rating": GridRatingResponseSerializer(rating).data,
+                "grid": GridCellScoreSerializer(updated_grid).data,
+            },
+            status=response_status,
+        )
+
+
+class BulkGridRatingCreateView(APIView):
+    authentication_classes = [BasicAuthentication, SessionAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        serializer = BulkGridRatingSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        grid_ids = serializer.validated_data["grid_ids"]
+        grids = GridCell.objects.filter(id__in=grid_ids)
+        grids_by_id = {grid.id: grid for grid in grids}
+        ordered_grids = [grids_by_id[grid_id] for grid_id in grid_ids]
+
+        has_updated_rating = False
+        updated_grids = []
+        for grid in ordered_grids:
+            _, created = GridRating.objects.update_or_create(
+                grid=grid,
+                user=request.user,
+                defaults={
+                    "score": serializer.validated_data["score"],
+                    "comment": serializer.validated_data.get("comment", ""),
+                },
+            )
+            if not created:
+                has_updated_rating = True
+            updated_grids.append(update_grid_cell_score(grid))
+
+        response_status = (
+            status.HTTP_200_OK if has_updated_rating else status.HTTP_201_CREATED
+        )
+        return Response(
+            {
+                "grids": GridCellScoreSerializer(updated_grids, many=True).data,
+            },
+            status=response_status,
+        )
+
+
+class GridCellListView(APIView):
+    authentication_classes = [BasicAuthentication, SessionAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, area_id):
+        area = get_object_or_404(MapArea, id=area_id)
+        grids = area.grid_cells.order_by("row_index", "col_index")
+
+        return Response(
+            {
+                "area": {
+                    "id": area.id,
+                    "name": area.name,
+                },
+                "grids": GridCellScoreSerializer(grids, many=True).data,
+            },
+            status=status.HTTP_200_OK,
+        )
