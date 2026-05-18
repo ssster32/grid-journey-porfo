@@ -613,6 +613,239 @@ model は DB のテーブル設計に対応します。
 - `score` は 1 から 10 の整数です。
 - 同じ `grid` と `user` の組み合わせは重複できません。
 
+## 設計中: GridCell 自動生成 service
+
+### 目的
+
+`MapArea` の緯度経度範囲と `grid_size_meters` をもとに、`GridCell` を自動生成するための service を設計します。
+この service は、後続タスクで `POST /api/maps/areas/{area_id}/grids/` から呼び出す想定です。
+
+初心者向け補足:
+
+- service は、view から切り出した共通処理を置く場所です。
+- view はリクエストを受け取りレスポンスを返す処理です。
+- グリッドは、地図を一定の大きさに区切った 1 マスです。
+
+### service 名
+
+```python
+generate_grid_cells_for_area(map_area)
+```
+
+### 入力
+
+| 項目 | 内容 |
+| --- | --- |
+| `map_area` | `MapArea` instance |
+
+`map_area` の存在確認は、基本的には API 側で行います。
+たとえば `area_id` が存在しない場合は、view 側で `404 Not Found` にする想定です。
+
+### 出力
+
+生成して DB に保存した `GridCell` の一覧を返します。
+
+例:
+
+```python
+[grid_cell_1, grid_cell_2, grid_cell_3]
+```
+
+後続 API では、この一覧を serializer で JSON に変換して返す想定です。
+serializer は、Python のデータと JSON の変換を担当する部品です。
+
+### 使用する MapArea の値
+
+| フィールド | 内容 |
+| --- | --- |
+| `north` | 地図範囲の北端 |
+| `south` | 地図範囲の南端 |
+| `east` | 地図範囲の東端 |
+| `west` | 地図範囲の西端 |
+| `grid_size_meters` | 1 マスの大きさ |
+
+### 生成する GridCell の項目
+
+| フィールド | 方針 |
+| --- | --- |
+| `area` | 対象の `MapArea` |
+| `row_index` | 上から何行目か。0 始まり |
+| `col_index` | 左から何列目か。0 始まり |
+| `north` | そのマスの北端 |
+| `south` | そのマスの南端 |
+| `east` | そのマスの東端 |
+| `west` | そのマスの西端 |
+| `initial_score` | まずは `0` |
+| `average_user_score` | 初期値 `0` |
+| `rating_count` | 初期値 `0` |
+| `calculated_score` | まずは `initial_score` と同じ `0` |
+| `score_updated_at` | `null` |
+
+`GridCell` には集計済みの表示用スコアを保存します。
+採点データそのものは `GridRating` に保存するため、自動生成時点では採点数は 0 件です。
+
+### 緯度経度の簡易計算方針
+
+最初の学習用実装では、厳密な地球測地計算ではなく簡易計算を使います。
+
+```text
+1 度の緯度は約 111,000m として扱う
+緯度方向の 1 マス = grid_size_meters / 111000
+経度方向も最初は同じ近似値を使う
+```
+
+計算例:
+
+```python
+lat_step = map_area.grid_size_meters / 111000
+lng_step = map_area.grid_size_meters / 111000
+```
+
+注意点:
+
+- 緯度は北南方向の位置です。
+- 経度は東西方向の位置です。
+- 経度 1 度あたりの距離は、本来は緯度によって変わります。
+- そのため、この計算は学習用の簡易実装です。
+- より正確な計算は、別タスクで扱います。
+
+### 行数・列数の計算方針
+
+`MapArea` 全体を覆えるように、行数と列数は切り上げで計算します。
+
+```python
+row_count = ceil((map_area.north - map_area.south) / lat_step)
+col_count = ceil((map_area.east - map_area.west) / lng_step)
+```
+
+`ceil` は、小数を切り上げる処理です。
+たとえば `2.1` は `3` になります。
+範囲が 2.1 マス分ある場合に 2 マスだけ作ると端が足りなくなるため、切り上げます。
+
+### 端のグリッドの扱い
+
+範囲ぴったりに割り切れない場合、最後の行や列は `MapArea` の境界に合わせて小さめのグリッドにします。
+これにより、生成した `GridCell` が `MapArea` の範囲外にはみ出さないようにします。
+
+```python
+cell_north = map_area.north - row_index * lat_step
+cell_south = max(map_area.south, cell_north - lat_step)
+
+cell_west = map_area.west + col_index * lng_step
+cell_east = min(map_area.east, cell_west + lng_step)
+```
+
+行と列の考え方:
+
+- `row_index` は上から下へ増えます。
+- `col_index` は左から右へ増えます。
+- 北端から南へ進むため、緯度は `north` から引き算します。
+- 西端から東へ進むため、経度は `west` に足し算します。
+
+### 既存 GridCell がある場合の扱い
+
+最初の実装では安全のため、対象の `MapArea` に `GridCell` が 1 件以上ある場合は新規生成しません。
+service 側でエラーにする方針です。
+
+理由:
+
+- 重複生成を防ぐため
+- 既存の採点や集計値を壊さないため
+- 削除して再生成する処理は影響が大きいため、別タスクで扱うため
+
+想定する確認:
+
+```python
+if map_area.grid_cells.exists():
+    raise ValueError("この MapArea には既に GridCell があります。")
+```
+
+実装時のエラー型やメッセージは、後続タスクで view から扱いやすい形に調整します。
+
+### 想定エラー
+
+| 状況 | 方針 |
+| --- | --- |
+| `map_area` が存在しない | API 側で `404 Not Found` にする |
+| 対象 `MapArea` に既に `GridCell` がある | service でエラーにする |
+| `grid_size_meters <= 0` | model 制約上は保存できない想定だが、service 側でも念のためエラー候補 |
+| `north <= south` | model 制約上は保存できない想定 |
+| `east <= west` | model 制約上は保存できない想定 |
+
+model は DB のテーブル設計に対応します。
+現在の `MapArea` model には `north > south`、`east > west`、`grid_size_meters > 0` の制約があります。
+ただし service を安全に使うため、実装時には service 側でも入力チェックを検討します。
+
+### 今回は実装しないこと
+
+- `models.py` の変更
+- migration の作成
+- `maps/services.py` への実装
+- `maps/views.py` への実装
+- `maps/urls.py` への URL 追加
+- `maps/tests.py` へのテスト追加
+- 外部地図 API の利用
+- 正確な地球測地計算
+- 地形情報や観光情報からの `initial_score` 計算
+- 認証方式の変更
+- 依存関係の追加
+
+migration は、model の変更を DB に反映するための履歴です。
+今回は model を変えないため、migration も作りません。
+
+### 後続 API 候補
+
+```text
+POST /api/maps/areas/{area_id}/grids/
+```
+
+目的:
+
+- 指定した `MapArea` から `GridCell` を自動生成する
+
+認証:
+
+- ログイン必須
+
+想定レスポンス:
+
+```json
+{
+  "area": {
+    "id": 1,
+    "name": "東京駅周辺"
+  },
+  "grids": [
+    {
+      "id": 10,
+      "area": 1,
+      "row_index": 0,
+      "col_index": 0,
+      "north": 35.7,
+      "south": 35.6954954954955,
+      "east": 139.7045045045045,
+      "west": 139.7,
+      "initial_score": 0.0,
+      "average_user_score": 0.0,
+      "rating_count": 0,
+      "calculated_score": 0.0,
+      "score_updated_at": null
+    }
+  ]
+}
+```
+
+想定ステータス:
+
+| 状況 | ステータス |
+| --- | --- |
+| 生成成功 | `201 Created` |
+| 未ログイン | `401 Unauthorized` |
+| `area_id` が存在しない | `404 Not Found` |
+| 既に `GridCell` がある | `400 Bad Request` |
+
+今回は API 実装は行いません。
+
 ## 現在の serializer
 
 serializer は、Python のデータと JSON を変換する部品です。

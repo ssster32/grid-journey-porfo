@@ -1,63 +1,57 @@
 # 現在のタスク
 
-GridCell 自動生成 service の仕様を設計してください。
+GridCell 自動生成 service を実装し、service テストを追加してください。
 
 # 目的
 
-`MapArea` の緯度経度範囲と `grid_size_meters` をもとに、将来的に `GridCell` を自動生成できるようにするため、まず service の仕様を `API_SPEC.md` に整理します。
+`MapArea` の緯度経度範囲と `grid_size_meters` をもとに、`GridCell` を自動生成できるようにします。
 
-今回は設計だけ行います。
-`models.py` 変更や migration 作成は行いません。
+今回は service 実装と service テスト追加まで行います。
+API view / URL 追加はまだ行いません。
 
 # 担当役割
 
-API Designer / Backend Developer
+Backend Developer / Tester
 
-# 進め方
+# 作業前に確認するファイル
 
-このタスクでは、次を行ってください。
+- `memo.md`
+- `AGENTS.md`
+- `README.md`
+- `RULES.md`
+- `TASK.md`
+- `API_SPEC.md`
+- `requirements.txt`
+- `config/settings.py`
+- `config/urls.py`
+- `maps/models.py`
+- `maps/services.py`
+- `maps/tests.py`
 
-- `memo.md` を読んで現在の状況を確認する
-- `API_SPEC.md` を読んで既存 API と未実装 API 候補を確認する
-- `maps/models.py` を読んで `MapArea` と `GridCell` の現在のフィールドを確認する
-- `maps/services.py` を読んで既存 service の書き方を確認する
-- `API_SPEC.md` に GridCell 自動生成 service の設計を追記する
-- 必要なら `TASK.md` には触れず、完了報告だけ行う
+# 編集してよいファイル
 
-# 何を設計するか
+- `maps/services.py`
+- `maps/tests.py`
 
-`MapArea` から `GridCell` を自動生成する service を設計します。
+必要な場合のみ:
 
-想定する service 名:
+- `API_SPEC.md`
+- `TASK.md`
 
-```python
-generate_grid_cells_for_area(map_area)
-```
+# 変更しないファイル
 
-想定する役割:
+指示がない限り、次は変更しないでください。
 
-- `MapArea.north`, `south`, `east`, `west`, `grid_size_meters` をもとにグリッドを作る
-- 作成した `GridCell` を DB に保存する
-- 生成した `GridCell` 一覧を返す
-- 既にその `MapArea` に `GridCell` がある場合の扱いを決める
+- `maps/models.py`
+- `maps/migrations/`
+- `maps/views.py`
+- `maps/urls.py`
+- `maps/serializers.py`
+- `config/settings.py`
+- `config/urls.py`
+- `requirements.txt`
 
-# 今回やらないこと
-
-- `models.py` は変更しない
-- migration は作らない
-- `maps/services.py` にはまだ実装しない
-- `maps/views.py` にはまだ実装しない
-- `maps/urls.py` にはまだ URL を追加しない
-- `maps/tests.py` にはまだテストを追加しない
-- 外部地図 API は使わない
-- 正確な地球測地計算はまだ実装しない
-- 地形情報や観光情報から `initial_score` を計算しない
-- 認証方式は変更しない
-- 依存関係は追加しない
-
-# 最低限決めたい仕様
-
-## service 名
+# 実装する service
 
 ```python
 generate_grid_cells_for_area(map_area)
@@ -71,27 +65,53 @@ generate_grid_cells_for_area(map_area)
 
 ## 出力
 
-生成された `GridCell` の一覧。
-
-例:
+生成して DB に保存した `GridCell` の一覧。
 
 ```python
 [grid_cell_1, grid_cell_2, grid_cell_3]
 ```
 
-## 使用する MapArea の値
+# 実装方針
 
-| フィールド | 内容 |
-| --- | --- |
-| `north` | 地図範囲の北端 |
-| `south` | 地図範囲の南端 |
-| `east` | 地図範囲の東端 |
-| `west` | 地図範囲の西端 |
-| `grid_size_meters` | 1 マスの大きさ |
+## 緯度経度の簡易計算
+
+最初の学習用実装では、厳密な測地計算ではなく簡易計算にしてください。
+
+```python
+lat_step = map_area.grid_size_meters / 111000
+lng_step = map_area.grid_size_meters / 111000
+```
+
+注意:
+
+- 経度 1 度あたりの距離は本来緯度によって変わります。
+- 今回は学習用の簡易実装として、緯度方向と同じ近似値を使います。
+- 外部ライブラリや外部地図 API は使わないでください。
+
+## 行数・列数
+
+```python
+row_count = ceil((map_area.north - map_area.south) / lat_step)
+col_count = ceil((map_area.east - map_area.west) / lng_step)
+```
+
+`math.ceil` を使ってください。
+
+## 端のグリッド
+
+範囲がぴったり割り切れない場合、最後の行・列は `MapArea` の境界に合わせて小さめにしてください。
+
+```python
+cell_north = map_area.north - row_index * lat_step
+cell_south = max(map_area.south, cell_north - lat_step)
+
+cell_west = map_area.west + col_index * lng_step
+cell_east = min(map_area.east, cell_west + lng_step)
+```
 
 ## 生成する GridCell の値
 
-| フィールド | 方針 |
+| フィールド | 値 |
 | --- | --- |
 | `area` | 対象の `MapArea` |
 | `row_index` | 上から何行目か。0 始まり |
@@ -100,142 +120,88 @@ generate_grid_cells_for_area(map_area)
 | `south` | そのマスの南端 |
 | `east` | そのマスの東端 |
 | `west` | そのマスの西端 |
-| `initial_score` | まずは `0` |
-| `average_user_score` | 初期値 `0` |
-| `rating_count` | 初期値 `0` |
-| `calculated_score` | まずは `initial_score` と同じ `0` |
-| `score_updated_at` | `null` |
+| `initial_score` | `0` |
+| `average_user_score` | `0` |
+| `rating_count` | `0` |
+| `calculated_score` | `0` |
+| `score_updated_at` | `None` |
 
-# 設計で決めてほしいこと
+# 既存 GridCell がある場合
 
-以下を `API_SPEC.md` に整理してください。
+対象の `MapArea` に `GridCell` が 1 件以上ある場合は、新規生成しないでください。
 
-## 1. 緯度経度への変換方針
+方針:
 
-`grid_size_meters` はメートル単位ですが、`MapArea` と `GridCell` は緯度経度で保存しています。
-
-最初の学習用実装では、厳密な測地計算ではなく、簡易計算でよいです。
-
-候補:
-
-```text
-1 度の緯度は約 111,000m として扱う
-緯度方向の 1 マス = grid_size_meters / 111000
-経度方向も最初は同じ近似値を使う
-```
-
-ただし、経度は本来緯度によって距離が変わるため、これは簡易実装であることを明記してください。
-
-## 2. 行数・列数の計算
-
-例:
-
-```text
-lat_step = grid_size_meters / 111000
-lng_step = grid_size_meters / 111000
-
-row_count = ceil((north - south) / lat_step)
-col_count = ceil((east - west) / lng_step)
-```
-
-## 3. 端のグリッドの扱い
-
-範囲ぴったりに割り切れない場合、最後の行・列は `MapArea` の境界に合わせて小さめのグリッドにする方針にしてください。
-
-例:
-
-```text
-cell_north = north - row_index * lat_step
-cell_south = max(south, cell_north - lat_step)
-
-cell_west = west + col_index * lng_step
-cell_east = min(east, cell_west + lng_step)
-```
-
-## 4. 既存 GridCell がある場合
-
-最初の実装では安全のため、既に対象 `MapArea` に `GridCell` が 1 件以上ある場合は新規生成しない方針にしてください。
-
-候補:
-
-```text
-既存 GridCell がある場合はエラーにする
+```python
+raise ValueError("この MapArea には既に GridCell があります。")
 ```
 
 理由:
+
 - 重複生成を防ぐため
 - 既存の採点や集計値を壊さないため
-- 削除して再生成する処理は影響が大きいため、別タスクで扱う
+- 削除して再生成する処理は影響が大きいため
 
-## 5. 想定するエラー
+# 入力チェック
 
-| 状況 | 方針 |
+`MapArea` model には制約がありますが、service 側でも念のため次をチェックしてください。
+
+| 条件 | 方針 |
 | --- | --- |
-| `map_area` が存在しない | API 側で 404 にする想定 |
-| 対象 `MapArea` に既に `GridCell` がある | service でエラー |
-| `grid_size_meters <= 0` | model 制約上は保存できない想定だが、service 側でも念のためエラー候補 |
-| `north <= south` | model 制約上は保存できない想定 |
-| `east <= west` | model 制約上は保存できない想定 |
+| `grid_size_meters <= 0` | `ValueError` |
+| `north <= south` | `ValueError` |
+| `east <= west` | `ValueError` |
 
-## 6. 後続 API の候補
+# テスト追加
 
-service 設計の後に、次の API を作る想定です。
+`maps/tests.py` に service テストを追加してください。
 
-```text
-POST /api/maps/areas/{area_id}/grids/
-```
+最低限ほしいテスト:
 
-目的:
-- 指定した `MapArea` から `GridCell` を自動生成する
+1. `MapArea` から `GridCell` が生成される
+2. 生成された `GridCell` の `row_index` / `col_index` が 0 始まりになる
+3. `initial_score`, `average_user_score`, `rating_count`, `calculated_score`, `score_updated_at` が初期値になる
+4. 端のグリッドが `MapArea` の境界を超えない
+5. 既に `GridCell` がある場合は `ValueError` になり、新規生成されない
+6. `grid_size_meters <= 0` 相当の不正値では `ValueError`
+7. `north <= south` 相当の不正値では `ValueError`
+8. `east <= west` 相当の不正値では `ValueError`
 
-今回は API 実装はしません。
-`API_SPEC.md` に「後続 API 候補」として軽く書く程度でよいです。
+不正値テストで model 制約に引っかかる場合は、DB に保存済みの `MapArea` instance の属性を一時的に変更して service に渡す形を検討してください。
 
-# API_SPEC.md に書いてほしい構成
+# 今回やらないこと
 
-`API_SPEC.md` の適切な位置に、次のような見出しで追記してください。
-
-```markdown
-## 設計中: GridCell 自動生成 service
-```
-
-中に以下を含めてください。
-
-- 目的
-- service 名
-- 入力
-- 出力
-- 生成する GridCell の項目
-- 緯度経度の簡易計算方針
-- 行数・列数の計算方針
-- 端のグリッドの扱い
-- 既存 GridCell がある場合の扱い
-- 想定エラー
-- 今回は実装しないこと
-- 後続 API 候補
+- `models.py` の変更
+- migration の作成
+- API view の追加
+- URL の追加
+- serializer の追加
+- 認証方式の変更
+- 依存関係の追加
+- 外部地図 API の利用
+- 正確な地球測地計算
+- 地形情報や観光情報からの `initial_score` 計算
 
 # 確認方法
 
 作業後に次を実行してください。
 
 ```bash
-git diff -- API_SPEC.md
-git diff --check -- API_SPEC.md
-```
-
-今回は設計だけなので、Django のテスト実行は必須ではありません。
-ただし、実装ファイルを変更してしまった場合は必ず次も実行してください。
-
-```bash
 .venv/bin/python manage.py test maps
 .venv/bin/python manage.py check
+git diff -- maps/services.py maps/tests.py
+git diff --check -- maps/services.py maps/tests.py
 ```
 
 # 完了報告
 
-短めでよいです。
+短めでよいので、次を報告してください。
 
+- 担当した役割
+- 変更したファイル
 - 変更内容
+- 初心者向け補足
+- 実行した確認コマンド
 - 確認結果
-- 未対応
-- 次にやるとよいこと
+- 未対応のこと
+- 次にやるとよい作業

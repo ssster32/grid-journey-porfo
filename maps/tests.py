@@ -12,7 +12,7 @@ from .serializers import (
     GridRatingResponseSerializer,
     MapAreaSerializer,
 )
-from .services import update_grid_cell_score
+from .services import generate_grid_cells_for_area, update_grid_cell_score
 
 
 class SerializerTestDataMixin:
@@ -265,6 +265,105 @@ class UpdateGridCellScoreTests(SerializerTestDataMixin, TestCase):
         self.assertEqual(self.grid.rating_count, 0)
         self.assertEqual(self.grid.calculated_score, self.grid.initial_score)
         self.assertIsNone(self.grid.score_updated_at)
+
+
+class GenerateGridCellsForAreaTests(TestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            username="testuser",
+            password="test-password",
+        )
+        self.area = MapArea.objects.create(
+            name="Grid Area",
+            north=1.0,
+            south=0.85,
+            east=1.0,
+            west=0.85,
+            grid_size_meters=11100,
+            created_by=self.user,
+        )
+
+    def test_map_area_generates_grid_cells(self):
+        grid_cells = generate_grid_cells_for_area(self.area)
+
+        self.assertEqual(len(grid_cells), 4)
+        self.assertEqual(GridCell.objects.filter(area=self.area).count(), 4)
+
+    def test_generated_grid_indexes_start_from_zero(self):
+        generate_grid_cells_for_area(self.area)
+
+        positions = list(
+            GridCell.objects.filter(area=self.area).values_list(
+                "row_index",
+                "col_index",
+            )
+        )
+
+        self.assertEqual(positions, [(0, 0), (0, 1), (1, 0), (1, 1)])
+
+    def test_generated_grid_score_fields_use_initial_values(self):
+        grid_cells = generate_grid_cells_for_area(self.area)
+
+        for grid_cell in grid_cells:
+            self.assertEqual(grid_cell.initial_score, 0)
+            self.assertEqual(grid_cell.average_user_score, 0)
+            self.assertEqual(grid_cell.rating_count, 0)
+            self.assertEqual(grid_cell.calculated_score, 0)
+            self.assertIsNone(grid_cell.score_updated_at)
+
+    def test_edge_grid_cells_do_not_exceed_map_area_bounds(self):
+        generate_grid_cells_for_area(self.area)
+
+        for grid_cell in GridCell.objects.filter(area=self.area):
+            self.assertLessEqual(grid_cell.north, self.area.north)
+            self.assertGreaterEqual(grid_cell.south, self.area.south)
+            self.assertLessEqual(grid_cell.east, self.area.east)
+            self.assertGreaterEqual(grid_cell.west, self.area.west)
+
+        edge_grid = GridCell.objects.get(area=self.area, row_index=1, col_index=1)
+
+        self.assertAlmostEqual(edge_grid.south, self.area.south)
+        self.assertAlmostEqual(edge_grid.east, self.area.east)
+
+    def test_existing_grid_cells_raise_value_error_without_creating_more(self):
+        GridCell.objects.create(
+            area=self.area,
+            row_index=0,
+            col_index=0,
+            north=1.0,
+            south=0.9,
+            east=0.95,
+            west=0.85,
+        )
+
+        with self.assertRaises(ValueError):
+            generate_grid_cells_for_area(self.area)
+
+        self.assertEqual(GridCell.objects.filter(area=self.area).count(), 1)
+
+    def test_grid_size_meters_less_than_or_equal_to_zero_raises_value_error(self):
+        self.area.grid_size_meters = 0
+
+        with self.assertRaises(ValueError):
+            generate_grid_cells_for_area(self.area)
+
+        self.assertEqual(GridCell.objects.filter(area=self.area).count(), 0)
+
+    def test_north_less_than_or_equal_to_south_raises_value_error(self):
+        self.area.north = self.area.south
+
+        with self.assertRaises(ValueError):
+            generate_grid_cells_for_area(self.area)
+
+        self.assertEqual(GridCell.objects.filter(area=self.area).count(), 0)
+
+    def test_east_less_than_or_equal_to_west_raises_value_error(self):
+        self.area.east = self.area.west
+
+        with self.assertRaises(ValueError):
+            generate_grid_cells_for_area(self.area)
+
+        self.assertEqual(GridCell.objects.filter(area=self.area).count(), 0)
 
 
 class MapAreaCreateViewTests(TestCase):
