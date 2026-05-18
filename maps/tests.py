@@ -522,6 +522,96 @@ class MapAreaListViewTests(TestCase):
         self.assertIn("created_at", response.data["areas"][0])
         self.assertIn("updated_at", response.data["areas"][0])
 
+    def test_other_users_map_areas_are_not_included_in_list(self):
+        other_user = get_user_model().objects.create_user(
+            username="otheruser",
+            password="test-password",
+        )
+        own_area = MapArea.objects.create(
+            name="Own Area",
+            north=35.7,
+            south=35.6,
+            east=139.8,
+            west=139.7,
+            grid_size_meters=500,
+            created_by=self.user,
+        )
+        other_area = MapArea.objects.create(
+            name="Other User Area",
+            north=36.7,
+            south=36.6,
+            east=140.8,
+            west=140.7,
+            grid_size_meters=1000,
+            created_by=other_user,
+        )
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.get(self.url)
+        area_ids = [area["id"] for area in response.data["areas"]]
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn(own_area.id, area_ids)
+        self.assertNotIn(other_area.id, area_ids)
+
+    def test_map_areas_without_creator_are_not_included_in_list(self):
+        own_area = MapArea.objects.create(
+            name="Own Area",
+            north=35.7,
+            south=35.6,
+            east=139.8,
+            west=139.7,
+            grid_size_meters=500,
+            created_by=self.user,
+        )
+        no_creator_area = MapArea.objects.create(
+            name="No Creator Area",
+            north=36.7,
+            south=36.6,
+            east=140.8,
+            west=140.7,
+            grid_size_meters=1000,
+            created_by=None,
+        )
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.get(self.url)
+        area_ids = [area["id"] for area in response.data["areas"]]
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn(own_area.id, area_ids)
+        self.assertNotIn(no_creator_area.id, area_ids)
+
+    def test_list_returns_empty_when_user_has_no_own_map_areas(self):
+        other_user = get_user_model().objects.create_user(
+            username="otheruser",
+            password="test-password",
+        )
+        MapArea.objects.create(
+            name="Other User Area",
+            north=35.7,
+            south=35.6,
+            east=139.8,
+            west=139.7,
+            grid_size_meters=500,
+            created_by=other_user,
+        )
+        MapArea.objects.create(
+            name="No Creator Area",
+            north=36.7,
+            south=36.6,
+            east=140.8,
+            west=140.7,
+            grid_size_meters=1000,
+            created_by=None,
+        )
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["areas"], [])
+
     def test_area_without_map_areas_returns_empty_list(self):
         self.client.force_authenticate(user=self.user)
 
@@ -583,6 +673,44 @@ class MapAreaDetailViewTests(TestCase):
     def test_unknown_area_id_returns_404(self):
         self.client.force_authenticate(user=self.user)
         url = reverse("map-area-detail", kwargs={"area_id": 999999})
+
+        response = self.client.get(url)
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_other_users_map_area_detail_returns_404(self):
+        other_user = get_user_model().objects.create_user(
+            username="otheruser",
+            password="test-password",
+        )
+        other_area = MapArea.objects.create(
+            name="Other User Area",
+            north=36.7,
+            south=36.6,
+            east=140.8,
+            west=140.7,
+            grid_size_meters=1000,
+            created_by=other_user,
+        )
+        self.client.force_authenticate(user=self.user)
+        url = reverse("map-area-detail", kwargs={"area_id": other_area.id})
+
+        response = self.client.get(url)
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_map_area_without_creator_detail_returns_404(self):
+        no_creator_area = MapArea.objects.create(
+            name="No Creator Area",
+            north=36.7,
+            south=36.6,
+            east=140.8,
+            west=140.7,
+            grid_size_meters=1000,
+            created_by=None,
+        )
+        self.client.force_authenticate(user=self.user)
+        url = reverse("map-area-detail", kwargs={"area_id": no_creator_area.id})
 
         response = self.client.get(url)
 
@@ -841,6 +969,83 @@ class GridCellGenerateViewTests(TestCase):
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertEqual(GridCell.objects.filter(area=self.area).count(), 4)
 
+    def test_area_creator_can_generate_grid_cells_for_area(self):
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.post(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+    def test_other_user_cannot_generate_grid_cells_for_area(self):
+        other_user = get_user_model().objects.create_user(
+            username="otheruser",
+            password="test-password",
+        )
+        self.client.force_authenticate(user=other_user)
+
+        response = self.client.post(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(
+            response.data["detail"],
+            "この MapArea の GridCell を生成する権限がありません。",
+        )
+
+    def test_other_user_does_not_create_grid_cells(self):
+        other_user = get_user_model().objects.create_user(
+            username="otheruser",
+            password="test-password",
+        )
+        self.client.force_authenticate(user=other_user)
+
+        self.client.post(self.url)
+
+        self.assertEqual(GridCell.objects.filter(area=self.area).count(), 0)
+
+    def test_area_without_creator_returns_403(self):
+        area_without_creator = MapArea.objects.create(
+            name="No Creator Area",
+            north=1.0,
+            south=0.85,
+            east=1.0,
+            west=0.85,
+            grid_size_meters=11100,
+            created_by=None,
+        )
+        url = reverse(
+            "grid-cell-generate",
+            kwargs={"area_id": area_without_creator.id},
+        )
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.post(url)
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertIn("detail", response.data)
+
+    def test_area_without_creator_does_not_create_grid_cells(self):
+        area_without_creator = MapArea.objects.create(
+            name="No Creator Area",
+            north=1.0,
+            south=0.85,
+            east=1.0,
+            west=0.85,
+            grid_size_meters=11100,
+            created_by=None,
+        )
+        url = reverse(
+            "grid-cell-generate",
+            kwargs={"area_id": area_without_creator.id},
+        )
+        self.client.force_authenticate(user=self.user)
+
+        self.client.post(url)
+
+        self.assertEqual(
+            GridCell.objects.filter(area=area_without_creator).count(),
+            0,
+        )
+
     def test_generate_response_contains_area_and_grids(self):
         self.client.force_authenticate(user=self.user)
 
@@ -1003,6 +1208,64 @@ class GridCellListViewTests(SerializerTestDataMixin, TestCase):
     def test_unknown_area_id_returns_404(self):
         self.client.force_authenticate(user=self.user)
         url = reverse("grid-cell-list", kwargs={"area_id": 999999})
+
+        response = self.client.get(url)
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_other_users_area_grid_cells_return_404(self):
+        other_user = get_user_model().objects.create_user(
+            username="otheruser",
+            password="test-password",
+        )
+        other_area = MapArea.objects.create(
+            name="Other User Area",
+            north=35.8,
+            south=35.7,
+            east=139.9,
+            west=139.8,
+            grid_size_meters=500,
+            created_by=other_user,
+        )
+        GridCell.objects.create(
+            area=other_area,
+            row_index=0,
+            col_index=0,
+            north=35.8,
+            south=35.79,
+            east=139.9,
+            west=139.89,
+            initial_score=9,
+        )
+        self.client.force_authenticate(user=self.user)
+        url = reverse("grid-cell-list", kwargs={"area_id": other_area.id})
+
+        response = self.client.get(url)
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_area_without_creator_grid_cells_return_404(self):
+        no_creator_area = MapArea.objects.create(
+            name="No Creator Area",
+            north=35.8,
+            south=35.7,
+            east=139.9,
+            west=139.8,
+            grid_size_meters=500,
+            created_by=None,
+        )
+        GridCell.objects.create(
+            area=no_creator_area,
+            row_index=0,
+            col_index=0,
+            north=35.8,
+            south=35.79,
+            east=139.9,
+            west=139.89,
+            initial_score=9,
+        )
+        self.client.force_authenticate(user=self.user)
+        url = reverse("grid-cell-list", kwargs={"area_id": no_creator_area.id})
 
         response = self.client.get(url)
 

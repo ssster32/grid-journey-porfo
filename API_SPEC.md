@@ -56,6 +56,90 @@ permission_classes = [IsAuthenticated]
 新しい認証方式はまだ追加していません。
 Token 認証や JWT 認証を使うかどうかは未定です。
 
+## 設計中: MapArea の閲覧権限
+
+現在の MapArea 一覧 API、MapArea 詳細 API、点数付きグリッド一覧 API は、ログイン済みであれば他ユーザーが作成した `MapArea` も取得できる状態です。
+今後は、`MapArea.created_by` を使って、作成者本人だけが自分の `MapArea` と紐づく `GridCell` を閲覧できる方針にします。
+
+対象 API:
+
+| メソッド | パス | 方針 |
+| --- | --- | --- |
+| `GET` | `/api/maps/areas/` | ログイン中ユーザーが作成した `MapArea` だけ返す |
+| `GET` | `/api/maps/areas/{area_id}/` | ログイン中ユーザーが作成した `MapArea` だけ取得できる |
+| `GET` | `/api/maps/areas/{area_id}/grids/` | ログイン中ユーザーが作成した `MapArea` の `GridCell` だけ取得できる |
+
+### 基本方針
+
+`MapArea.created_by` と `request.user` を比較します。
+
+| 状況 | 結果 |
+| --- | --- |
+| 未ログイン | `401 Unauthorized` |
+| `MapArea.created_by == request.user` | 閲覧許可 |
+| `MapArea.created_by != request.user` | `404 Not Found` |
+| `MapArea.created_by is None` | `404 Not Found` |
+
+他ユーザーの `MapArea` や `created_by` が `null` の `MapArea` は、存在しないものとして扱います。
+これは、他ユーザーのデータが存在すること自体をレスポンスから推測しにくくするためです。
+
+GridCell 自動生成 API は「存在するが操作できない」ことを `403 Forbidden` で返します。
+一方、閲覧 API は、一覧や詳細の取得範囲を `created_by=request.user` に絞るため、他ユーザーのデータは `404 Not Found` または一覧に出ない形にします。
+
+### 実装方針
+
+MapArea 一覧 API:
+
+```python
+areas = MapArea.objects.filter(created_by=request.user)
+```
+
+MapArea 詳細 API:
+
+```python
+area = get_object_or_404(MapArea, id=area_id, created_by=request.user)
+```
+
+点数付きグリッド一覧 API:
+
+```python
+area = get_object_or_404(MapArea, id=area_id, created_by=request.user)
+grids = area.grid_cells.order_by("row_index", "col_index")
+```
+
+### レスポンス方針
+
+MapArea 一覧 API:
+
+- 自分が作成した `MapArea` だけ `areas` に含めます。
+- 他ユーザーが作成した `MapArea` は含めません。
+- `created_by is None` の `MapArea` も含めません。
+- 対象が 0 件なら `areas: []` を返します。
+
+MapArea 詳細 API:
+
+- 自分が作成した `MapArea` なら `200 OK` を返します。
+- 他ユーザーが作成した `MapArea` なら `404 Not Found` を返します。
+- `created_by is None` の `MapArea` も `404 Not Found` を返します。
+
+点数付きグリッド一覧 API:
+
+- 自分が作成した `MapArea` なら、その `MapArea` に属する `GridCell` を返します。
+- 他ユーザーが作成した `MapArea` なら `404 Not Found` を返します。
+- `created_by is None` の `MapArea` も `404 Not Found` を返します。
+
+### 今回は実装しないこと
+
+- `maps/views.py` の変更
+- `maps/tests.py` の変更
+- `created_by` を必須にする model 変更
+- migration の作成
+- 管理者だけ全件閲覧できる特別ルール
+- 共有用の MapArea や公開 MapArea の設計
+
+`created_by` は現在 nullable です。
+既存データや管理画面で作成者なしの `MapArea` が作られる可能性があるため、今回は閲覧 API からは見えない扱いにします。
+
 ## 用語
 
 | 用語 | 意味 |
@@ -338,6 +422,24 @@ POST /api/maps/areas/{area_id}/grids/
 
 ログイン必須です。
 
+#### 権限
+
+対象 `MapArea` の作成者本人だけが GridCell を生成できます。
+具体的には、`MapArea.created_by` とログイン中ユーザー `request.user` が同じ場合だけ生成を許可します。
+
+| 状況 | 結果 |
+| --- | --- |
+| `MapArea.created_by == request.user` | 生成許可 |
+| `MapArea.created_by != request.user` | `403 Forbidden` |
+| `MapArea.created_by is None` | `403 Forbidden` |
+
+初心者向け補足:
+
+- 認証は「誰が使っているか」を確認する仕組みです。
+- 権限は「その人が何をしてよいか」を確認する仕組みです。
+- `created_by` は、その `MapArea` を作成したユーザーです。
+- `request.user` は、今 API を使っているログイン中ユーザーです。
+
 #### URL パラメータ
 
 | 名前 | 型 | 内容 |
@@ -393,6 +495,14 @@ POST /api/maps/areas/{area_id}/grids/
 }
 ```
 
+作成者本人ではない場合や、`created_by` が `null` の場合も `detail` に理由を入れます。
+
+```json
+{
+  "detail": "この MapArea の GridCell を生成する権限がありません。"
+}
+```
+
 #### ステータスコード
 
 | 状況 | ステータス |
@@ -400,11 +510,15 @@ POST /api/maps/areas/{area_id}/grids/
 | 生成成功 | `201 Created` |
 | 未ログイン | `401 Unauthorized` |
 | `area_id` が存在しない | `404 Not Found` |
+| `MapArea.created_by != request.user` | `403 Forbidden` |
+| `MapArea.created_by is None` | `403 Forbidden` |
 | 既に `GridCell` がある | `400 Bad Request` |
 | service の入力チェックで不正値 | `400 Bad Request` |
 
 #### 注意点
 
+- 作成者本人ではないユーザーは `GridCell` を生成できません。
+- `created_by` が `null` の `MapArea` でも `GridCell` を生成できません。
 - 既に `GridCell` がある `MapArea` では、新しい `GridCell` を追加しません。
 - 重複生成を防ぎ、既存の採点や集計値を壊さないためです。
 - この API では外部地図 API は使いません。

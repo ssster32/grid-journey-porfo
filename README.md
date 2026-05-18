@@ -269,7 +269,56 @@ curl -i -u testuser:test-password \
 この API は保存済みの集計値を読むだけです。
 新しく採点したい場合は、単体採点 API または一括採点 API を使います。
 
-### 6. エラー確認
+### 6. MapArea 閲覧制限の確認
+
+`MapArea` は作成者本人だけが一覧・詳細・グリッド一覧で閲覧できます。
+別ユーザーで同じ `area_id` を指定すると、詳細とグリッド一覧は `404 Not Found` になります。
+
+まず別ユーザーを作成します。
+
+```bash
+python manage.py shell
+```
+
+`>>>` が表示されたら、次の Python コードを貼り付けます。
+
+```python
+from django.contrib.auth import get_user_model
+
+User = get_user_model()
+other_user, _ = User.objects.get_or_create(username="otheruser")
+other_user.set_password("other-password")
+other_user.save()
+print("user:", other_user.username)
+```
+
+確認が終わったら、`exit()` で shell を終了します。
+
+`<AREA_ID>` は、事前準備で表示された `area_id` に置き換えてください。
+
+```bash
+curl -i -u otheruser:other-password \
+  http://127.0.0.1:8000/api/maps/areas/
+```
+
+`otheruser` が作成した `MapArea` がなければ、`200 OK` で `areas: []` が返ります。
+`testuser` が作成した `MapArea` は含まれません。
+
+```bash
+curl -i -u otheruser:other-password \
+  http://127.0.0.1:8000/api/maps/areas/<AREA_ID>/
+```
+
+`testuser` が作成した `MapArea` を `otheruser` で取得しようとしているため、`404 Not Found` が返ります。
+
+```bash
+curl -i -u otheruser:other-password \
+  http://127.0.0.1:8000/api/maps/areas/<AREA_ID>/grids/
+```
+
+グリッド一覧も同じく、`404 Not Found` が返ります。
+
+### 7. エラー確認
 
 ログイン情報を付けずに送ると、ログイン必須のため `401 Unauthorized` になります。
 

@@ -21,7 +21,7 @@ class MapAreaListCreateView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        areas = MapArea.objects.all()
+        areas = MapArea.objects.filter(created_by=request.user)
 
         return Response(
             {
@@ -46,7 +46,7 @@ class MapAreaDetailView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, area_id):
-        area = get_object_or_404(MapArea, id=area_id)
+        area = get_object_or_404(MapArea, id=area_id, created_by=request.user)
 
         return Response(
             MapAreaSerializer(area).data,
@@ -127,7 +127,7 @@ class GridCellListView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, area_id):
-        area = get_object_or_404(MapArea, id=area_id)
+        area = get_object_or_404(MapArea, id=area_id, created_by=request.user)
         grids = area.grid_cells.order_by("row_index", "col_index")
 
         return Response(
@@ -143,6 +143,12 @@ class GridCellListView(APIView):
 
     def post(self, request, area_id):
         area = get_object_or_404(MapArea, id=area_id)
+
+        if area.created_by != request.user:
+            return Response(
+                {"detail": "この MapArea の GridCell を生成する権限がありません。"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
 
         try:
             grids = generate_grid_cells_for_area(area)
