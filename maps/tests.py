@@ -10,6 +10,7 @@ from .serializers import (
     GridCellScoreSerializer,
     GridRatingCreateSerializer,
     GridRatingResponseSerializer,
+    MapAreaSerializer,
 )
 from .services import update_grid_cell_score
 
@@ -118,6 +119,54 @@ class GridCellScoreSerializerTests(SerializerTestDataMixin, TestCase):
         self.assertIn("score_updated_at", data)
 
 
+class MapAreaSerializerTests(TestCase):
+    def test_valid_map_area_data_is_valid(self):
+        serializer = MapAreaSerializer(
+            data={
+                "name": "Tokyo Station Area",
+                "description": "manual area",
+                "north": 35.7,
+                "south": 35.6,
+                "east": 139.8,
+                "west": 139.7,
+                "grid_size_meters": 500,
+                "source": "manual",
+            }
+        )
+
+        self.assertTrue(serializer.is_valid())
+
+    def test_north_must_be_greater_than_south(self):
+        serializer = MapAreaSerializer(
+            data={
+                "name": "Tokyo Station Area",
+                "north": 35.6,
+                "south": 35.6,
+                "east": 139.8,
+                "west": 139.7,
+                "grid_size_meters": 500,
+            }
+        )
+
+        self.assertFalse(serializer.is_valid())
+        self.assertIn("north", serializer.errors)
+
+    def test_east_must_be_greater_than_west(self):
+        serializer = MapAreaSerializer(
+            data={
+                "name": "Tokyo Station Area",
+                "north": 35.7,
+                "south": 35.6,
+                "east": 139.7,
+                "west": 139.7,
+                "grid_size_meters": 500,
+            }
+        )
+
+        self.assertFalse(serializer.is_valid())
+        self.assertIn("east", serializer.errors)
+
+
 class BulkGridRatingSerializerTests(SerializerTestDataMixin, TestCase):
     def test_existing_grid_ids_and_score_are_valid(self):
         serializer = BulkGridRatingSerializer(
@@ -216,6 +265,176 @@ class UpdateGridCellScoreTests(SerializerTestDataMixin, TestCase):
         self.assertEqual(self.grid.rating_count, 0)
         self.assertEqual(self.grid.calculated_score, self.grid.initial_score)
         self.assertIsNone(self.grid.score_updated_at)
+
+
+class MapAreaCreateViewTests(TestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            username="testuser",
+            password="test-password",
+        )
+        self.client = APIClient()
+        self.url = reverse("map-area-list-create")
+        self.valid_payload = {
+            "name": "Tokyo Station Area",
+            "description": "manual area",
+            "north": 35.7,
+            "south": 35.6,
+            "east": 139.8,
+            "west": 139.7,
+            "grid_size_meters": 500,
+            "source": "manual",
+        }
+
+    def test_authenticated_user_can_create_map_area(self):
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.post(self.url, self.valid_payload, format="json")
+        area = MapArea.objects.get(id=response.data["id"])
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["name"], "Tokyo Station Area")
+        self.assertEqual(response.data["description"], "manual area")
+        self.assertEqual(response.data["north"], 35.7)
+        self.assertEqual(response.data["south"], 35.6)
+        self.assertEqual(response.data["east"], 139.8)
+        self.assertEqual(response.data["west"], 139.7)
+        self.assertEqual(response.data["grid_size_meters"], 500)
+        self.assertEqual(response.data["source"], "manual")
+        self.assertEqual(response.data["created_by"], self.user.id)
+        self.assertIn("created_at", response.data)
+        self.assertIn("updated_at", response.data)
+        self.assertEqual(area.created_by, self.user)
+
+    def test_unauthenticated_user_cannot_create_map_area(self):
+        response = self.client.post(self.url, self.valid_payload, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertEqual(MapArea.objects.count(), 0)
+
+    def test_blank_name_returns_400(self):
+        self.client.force_authenticate(user=self.user)
+        payload = {**self.valid_payload, "name": ""}
+
+        response = self.client.post(self.url, payload, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("name", response.data)
+        self.assertEqual(MapArea.objects.count(), 0)
+
+    def test_north_less_than_or_equal_to_south_returns_400(self):
+        self.client.force_authenticate(user=self.user)
+        payload = {**self.valid_payload, "north": 35.6}
+
+        response = self.client.post(self.url, payload, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("north", response.data)
+        self.assertEqual(MapArea.objects.count(), 0)
+
+    def test_east_less_than_or_equal_to_west_returns_400(self):
+        self.client.force_authenticate(user=self.user)
+        payload = {**self.valid_payload, "east": 139.7}
+
+        response = self.client.post(self.url, payload, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("east", response.data)
+        self.assertEqual(MapArea.objects.count(), 0)
+
+    def test_grid_size_meters_less_than_or_equal_to_zero_returns_400(self):
+        self.client.force_authenticate(user=self.user)
+        payload = {**self.valid_payload, "grid_size_meters": 0}
+
+        response = self.client.post(self.url, payload, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("grid_size_meters", response.data)
+        self.assertEqual(MapArea.objects.count(), 0)
+
+    def test_missing_required_field_returns_400(self):
+        self.client.force_authenticate(user=self.user)
+        payload = self.valid_payload.copy()
+        payload.pop("north")
+
+        response = self.client.post(self.url, payload, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("north", response.data)
+        self.assertEqual(MapArea.objects.count(), 0)
+
+    def test_request_created_by_is_ignored(self):
+        other_user = get_user_model().objects.create_user(
+            username="otheruser",
+            password="test-password",
+        )
+        self.client.force_authenticate(user=self.user)
+        payload = {**self.valid_payload, "created_by": other_user.id}
+
+        response = self.client.post(self.url, payload, format="json")
+        area = MapArea.objects.get(id=response.data["id"])
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["created_by"], self.user.id)
+        self.assertEqual(area.created_by, self.user)
+
+
+class MapAreaListViewTests(TestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            username="testuser",
+            password="test-password",
+        )
+        self.client = APIClient()
+        self.url = reverse("map-area-list-create")
+
+    def test_authenticated_user_can_get_map_area_list(self):
+        area_b = MapArea.objects.create(
+            name="B Area",
+            north=35.7,
+            south=35.6,
+            east=139.8,
+            west=139.7,
+            grid_size_meters=500,
+            source="manual",
+            created_by=self.user,
+        )
+        area_a = MapArea.objects.create(
+            name="A Area",
+            north=36.7,
+            south=36.6,
+            east=140.8,
+            west=140.7,
+            grid_size_meters=1000,
+            source="manual",
+            created_by=self.user,
+        )
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("areas", response.data)
+        self.assertEqual(len(response.data["areas"]), 2)
+        self.assertEqual(response.data["areas"][0]["id"], area_a.id)
+        self.assertEqual(response.data["areas"][1]["id"], area_b.id)
+        self.assertEqual(response.data["areas"][0]["name"], "A Area")
+        self.assertEqual(response.data["areas"][0]["created_by"], self.user.id)
+        self.assertIn("created_at", response.data["areas"][0])
+        self.assertIn("updated_at", response.data["areas"][0])
+
+    def test_area_without_map_areas_returns_empty_list(self):
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["areas"], [])
+
+    def test_unauthenticated_user_cannot_get_map_area_list(self):
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
 
 class GridRatingCreateViewTests(SerializerTestDataMixin, TestCase):

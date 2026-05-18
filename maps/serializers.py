@@ -1,6 +1,47 @@
 from rest_framework import serializers
 
-from .models import GridCell, GridRating
+from .models import GridCell, GridRating, MapArea
+
+
+class MapAreaSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = MapArea
+        fields = [
+            "id",
+            "name",
+            "description",
+            "north",
+            "south",
+            "east",
+            "west",
+            "grid_size_meters",
+            "source",
+            "created_by",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = [
+            "id",
+            "created_by",
+            "created_at",
+            "updated_at",
+        ]
+
+    def validate(self, attrs):
+        if attrs["north"] <= attrs["south"]:
+            raise serializers.ValidationError(
+                {"north": "north は south より大きい値にしてください。"}
+            )
+        if attrs["east"] <= attrs["west"]:
+            raise serializers.ValidationError(
+                {"east": "east は west より大きい値にしてください。"}
+            )
+        if attrs["grid_size_meters"] <= 0:
+            raise serializers.ValidationError(
+                {"grid_size_meters": "grid_size_meters は 0 より大きい値にしてください。"}
+            )
+
+        return attrs
 
 
 class GridRatingCreateSerializer(serializers.Serializer):

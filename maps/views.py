@@ -9,10 +9,36 @@ from .models import GridCell, GridRating, MapArea
 from .serializers import (
     BulkGridRatingSerializer,
     GridCellScoreSerializer,
+    MapAreaSerializer,
     GridRatingCreateSerializer,
     GridRatingResponseSerializer,
 )
 from .services import update_grid_cell_score
+
+
+class MapAreaListCreateView(APIView):
+    authentication_classes = [BasicAuthentication, SessionAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        areas = MapArea.objects.all()
+
+        return Response(
+            {
+                "areas": MapAreaSerializer(areas, many=True).data,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    def post(self, request):
+        serializer = MapAreaSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        area = serializer.save(created_by=request.user)
+
+        return Response(
+            MapAreaSerializer(area).data,
+            status=status.HTTP_201_CREATED,
+        )
 
 
 class GridRatingCreateView(APIView):

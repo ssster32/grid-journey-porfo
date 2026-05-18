@@ -1,8 +1,18 @@
 from django.urls import path
 
-from .views import BulkGridRatingCreateView, GridCellListView, GridRatingCreateView
+from .views import (
+    BulkGridRatingCreateView,
+    GridCellListView,
+    GridRatingCreateView,
+    MapAreaListCreateView,
+)
 
 urlpatterns = [
+    path(
+        "areas/",
+        MapAreaListCreateView.as_view(),
+        name="map-area-list-create",
+    ),
     path(
         "areas/<int:area_id>/grids/",
         GridCellListView.as_view(),
