@@ -437,6 +437,59 @@ class MapAreaListViewTests(TestCase):
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
 
+class MapAreaDetailViewTests(TestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            username="testuser",
+            password="test-password",
+        )
+        self.client = APIClient()
+        self.area = MapArea.objects.create(
+            name="Tokyo Station Area",
+            description="manual area",
+            north=35.7,
+            south=35.6,
+            east=139.8,
+            west=139.7,
+            grid_size_meters=500,
+            source="manual",
+            created_by=self.user,
+        )
+        self.url = reverse("map-area-detail", kwargs={"area_id": self.area.id})
+
+    def test_authenticated_user_can_get_map_area_detail(self):
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["id"], self.area.id)
+        self.assertEqual(response.data["name"], "Tokyo Station Area")
+        self.assertEqual(response.data["description"], "manual area")
+        self.assertEqual(response.data["north"], 35.7)
+        self.assertEqual(response.data["south"], 35.6)
+        self.assertEqual(response.data["east"], 139.8)
+        self.assertEqual(response.data["west"], 139.7)
+        self.assertEqual(response.data["grid_size_meters"], 500)
+        self.assertEqual(response.data["source"], "manual")
+        self.assertEqual(response.data["created_by"], self.user.id)
+        self.assertIn("created_at", response.data)
+        self.assertIn("updated_at", response.data)
+
+    def test_unauthenticated_user_cannot_get_map_area_detail(self):
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_unknown_area_id_returns_404(self):
+        self.client.force_authenticate(user=self.user)
+        url = reverse("map-area-detail", kwargs={"area_id": 999999})
+
+        response = self.client.get(url)
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+
 class GridRatingCreateViewTests(SerializerTestDataMixin, TestCase):
     def setUp(self):
         super().setUp()

@@ -23,6 +23,7 @@
 | --- | --- | --- | --- |
 | `POST` | `/api/maps/areas/` | 地図範囲を登録する | 必要 |
 | `GET` | `/api/maps/areas/` | 地図範囲一覧を取得する | 必要 |
+| `GET` | `/api/maps/areas/{area_id}/` | 地図範囲詳細を取得する | 必要 |
 | `POST` | `/api/maps/grids/{grid_id}/ratings/` | 1 つのグリッドを採点する | 必要 |
 | `POST` | `/api/maps/grids/bulk-ratings/` | 複数グリッドをまとめて採点する | 必要 |
 | `GET` | `/api/maps/areas/{area_id}/grids/` | 点数付きグリッド一覧を取得する | 必要 |
@@ -487,6 +488,55 @@ GET /api/maps/areas/
 | --- | --- |
 | 一覧を取得できた | `200 OK` |
 | 未ログイン | `401 Unauthorized` |
+
+### MapArea 詳細 API
+
+```text
+GET /api/maps/areas/{area_id}/
+```
+
+指定した `MapArea` 1 件の詳細を取得する API です。
+
+#### 認証
+
+ログイン必須です。
+
+#### URL パラメータ
+
+| 名前 | 型 | 内容 |
+| --- | --- | --- |
+| `area_id` | integer | 取得対象の `MapArea` ID |
+
+#### リクエスト
+
+リクエストボディはありません。
+
+#### レスポンス
+
+```json
+{
+  "id": 1,
+  "name": "東京駅周辺",
+  "description": "手動作成した確認用エリア",
+  "north": 35.7,
+  "south": 35.6,
+  "east": 139.8,
+  "west": 139.7,
+  "grid_size_meters": 500,
+  "source": "manual",
+  "created_by": 3,
+  "created_at": "2026-05-18T10:00:00+09:00",
+  "updated_at": "2026-05-18T10:00:00+09:00"
+}
+```
+
+#### ステータスコード
+
+| 状況 | ステータス |
+| --- | --- |
+| 詳細を取得できた | `200 OK` |
+| 未ログイン | `401 Unauthorized` |
+| `area_id` が存在しない | `404 Not Found` |
 
 ## 現在のモデル
 

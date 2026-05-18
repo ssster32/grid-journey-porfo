@@ -41,6 +41,19 @@ class MapAreaListCreateView(APIView):
         )
 
 
+class MapAreaDetailView(APIView):
+    authentication_classes = [BasicAuthentication, SessionAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, area_id):
+        area = get_object_or_404(MapArea, id=area_id)
+
+        return Response(
+            MapAreaSerializer(area).data,
+            status=status.HTTP_200_OK,
+        )
+
+
 class GridRatingCreateView(APIView):
     authentication_classes = [BasicAuthentication, SessionAuthentication]
     permission_classes = [IsAuthenticated]

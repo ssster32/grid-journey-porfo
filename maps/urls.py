@@ -4,6 +4,7 @@ from .views import (
     BulkGridRatingCreateView,
     GridCellListView,
     GridRatingCreateView,
+    MapAreaDetailView,
     MapAreaListCreateView,
 )
 
@@ -12,6 +13,11 @@ urlpatterns = [
         "areas/",
         MapAreaListCreateView.as_view(),
         name="map-area-list-create",
+    ),
+    path(
+        "areas/<int:area_id>/",
+        MapAreaDetailView.as_view(),
+        name="map-area-detail",
     ),
     path(
         "areas/<int:area_id>/grids/",
