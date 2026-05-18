@@ -27,12 +27,12 @@
 | `POST` | `/api/maps/grids/{grid_id}/ratings/` | 1 つのグリッドを採点する | 必要 |
 | `POST` | `/api/maps/grids/bulk-ratings/` | 複数グリッドをまとめて採点する | 必要 |
 | `GET` | `/api/maps/areas/{area_id}/grids/` | 点数付きグリッド一覧を取得する | 必要 |
+| `POST` | `/api/maps/areas/{area_id}/grids/` | 地図範囲からグリッドを自動生成する | 必要 |
 
 未実装 API 候補:
 
 | メソッド | パス | 目的 | 認証 | 状態 |
 | --- | --- | --- | --- | --- |
-| `POST` | `/api/maps/areas/{area_id}/grids/` | 地図範囲をグリッドに分割する | 必要 | 未実装 |
 | `GET` | `/api/maps/grids/search/` | 周辺の高得点グリッドを検索する | 必要 | 未実装 |
 
 ## 認証
@@ -325,6 +325,92 @@ GET /api/maps/areas/{area_id}/grids/
 - ページネーションはまだ入れていません。
 - 地図表示範囲による絞り込みはまだ入れていません。
 
+### GridCell 自動生成 API
+
+```text
+POST /api/maps/areas/{area_id}/grids/
+```
+
+指定した `MapArea` から `GridCell` を自動生成する API です。
+`MapArea.north`, `south`, `east`, `west`, `grid_size_meters` をもとに、`generate_grid_cells_for_area(area)` service を呼び出します。
+
+#### 認証
+
+ログイン必須です。
+
+#### URL パラメータ
+
+| 名前 | 型 | 内容 |
+| --- | --- | --- |
+| `area_id` | integer | グリッドを生成する対象の `MapArea` ID |
+
+#### リクエスト
+
+リクエストボディはありません。
+
+#### レスポンス
+
+生成に成功した場合は、対象エリアと生成されたグリッド一覧を返します。
+
+```json
+{
+  "area": {
+    "id": 1,
+    "name": "東京駅周辺"
+  },
+  "grids": [
+    {
+      "id": 10,
+      "area": 1,
+      "row_index": 0,
+      "col_index": 0,
+      "north": 35.7,
+      "south": 35.6954954954955,
+      "east": 139.7045045045045,
+      "west": 139.7,
+      "initial_score": 0.0,
+      "average_user_score": 0.0,
+      "rating_count": 0,
+      "calculated_score": 0.0,
+      "score_updated_at": null
+    }
+  ]
+}
+```
+
+`grids` は次の順に並びます。
+
+1. `row_index`
+2. `col_index`
+
+#### エラーレスポンス
+
+既に対象 `MapArea` に `GridCell` がある場合など、service が `ValueError` を返した場合は `detail` に理由を入れます。
+
+```json
+{
+  "detail": "この MapArea には既に GridCell があります。"
+}
+```
+
+#### ステータスコード
+
+| 状況 | ステータス |
+| --- | --- |
+| 生成成功 | `201 Created` |
+| 未ログイン | `401 Unauthorized` |
+| `area_id` が存在しない | `404 Not Found` |
+| 既に `GridCell` がある | `400 Bad Request` |
+| service の入力チェックで不正値 | `400 Bad Request` |
+
+#### 注意点
+
+- 既に `GridCell` がある `MapArea` では、新しい `GridCell` を追加しません。
+- 重複生成を防ぎ、既存の採点や集計値を壊さないためです。
+- この API では外部地図 API は使いません。
+- `initial_score` はまず `0` で生成します。
+- 正確な地球測地計算はまだ行いません。
+
 ### MapArea 作成 API
 
 ```text
@@ -613,12 +699,12 @@ model は DB のテーブル設計に対応します。
 - `score` は 1 から 10 の整数です。
 - 同じ `grid` と `user` の組み合わせは重複できません。
 
-## 設計中: GridCell 自動生成 service
+## 実装済み service: GridCell 自動生成
 
 ### 目的
 
-`MapArea` の緯度経度範囲と `grid_size_meters` をもとに、`GridCell` を自動生成するための service を設計します。
-この service は、後続タスクで `POST /api/maps/areas/{area_id}/grids/` から呼び出す想定です。
+`MapArea` の緯度経度範囲と `grid_size_meters` をもとに、`GridCell` を自動生成するための service です。
+`POST /api/maps/areas/{area_id}/grids/` から呼び出します。
 
 初心者向け補足:
 
@@ -651,7 +737,7 @@ generate_grid_cells_for_area(map_area)
 [grid_cell_1, grid_cell_2, grid_cell_3]
 ```
 
-後続 API では、この一覧を serializer で JSON に変換して返す想定です。
+GridCell 自動生成 API では、この一覧を serializer で JSON に変換して返します。
 serializer は、Python のデータと JSON の変換を担当する部品です。
 
 ### 使用する MapArea の値
@@ -744,7 +830,7 @@ cell_east = min(map_area.east, cell_west + lng_step)
 
 ### 既存 GridCell がある場合の扱い
 
-最初の実装では安全のため、対象の `MapArea` に `GridCell` が 1 件以上ある場合は新規生成しません。
+安全のため、対象の `MapArea` に `GridCell` が 1 件以上ある場合は新規生成しません。
 service 側でエラーにする方針です。
 
 理由:
@@ -760,7 +846,7 @@ if map_area.grid_cells.exists():
     raise ValueError("この MapArea には既に GridCell があります。")
 ```
 
-実装時のエラー型やメッセージは、後続タスクで view から扱いやすい形に調整します。
+API 側では、この `ValueError` を `400 Bad Request` として扱います。
 
 ### 想定エラー
 
@@ -776,14 +862,10 @@ model は DB のテーブル設計に対応します。
 現在の `MapArea` model には `north > south`、`east > west`、`grid_size_meters > 0` の制約があります。
 ただし service を安全に使うため、実装時には service 側でも入力チェックを検討します。
 
-### 今回は実装しないこと
+### この service ではやらないこと
 
 - `models.py` の変更
 - migration の作成
-- `maps/services.py` への実装
-- `maps/views.py` への実装
-- `maps/urls.py` への URL 追加
-- `maps/tests.py` へのテスト追加
 - 外部地図 API の利用
 - 正確な地球測地計算
 - 地形情報や観光情報からの `initial_score` 計算
@@ -791,60 +873,7 @@ model は DB のテーブル設計に対応します。
 - 依存関係の追加
 
 migration は、model の変更を DB に反映するための履歴です。
-今回は model を変えないため、migration も作りません。
-
-### 後続 API 候補
-
-```text
-POST /api/maps/areas/{area_id}/grids/
-```
-
-目的:
-
-- 指定した `MapArea` から `GridCell` を自動生成する
-
-認証:
-
-- ログイン必須
-
-想定レスポンス:
-
-```json
-{
-  "area": {
-    "id": 1,
-    "name": "東京駅周辺"
-  },
-  "grids": [
-    {
-      "id": 10,
-      "area": 1,
-      "row_index": 0,
-      "col_index": 0,
-      "north": 35.7,
-      "south": 35.6954954954955,
-      "east": 139.7045045045045,
-      "west": 139.7,
-      "initial_score": 0.0,
-      "average_user_score": 0.0,
-      "rating_count": 0,
-      "calculated_score": 0.0,
-      "score_updated_at": null
-    }
-  ]
-}
-```
-
-想定ステータス:
-
-| 状況 | ステータス |
-| --- | --- |
-| 生成成功 | `201 Created` |
-| 未ログイン | `401 Unauthorized` |
-| `area_id` が存在しない | `404 Not Found` |
-| 既に `GridCell` がある | `400 Bad Request` |
-
-今回は API 実装は行いません。
+この service では model を変えないため、migration も作りません。
 
 ## 現在の serializer
 

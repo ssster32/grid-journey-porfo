@@ -181,7 +181,51 @@ curl -i -u testuser:test-password \
 
 レスポンスには、再集計後の `grids` 一覧が含まれます。
 
-### 4. 点数付きグリッド一覧 API
+### 4. GridCell 自動生成 API
+
+指定した地図範囲から、グリッドを自動生成します。
+
+事前準備で作った `Manual Test Area` には確認用グリッドがすでにあるため、自動生成 API の確認用にグリッドが 0 件の `MapArea` を別に作ります。
+
+```bash
+python manage.py shell
+```
+
+`>>>` が表示されたら、次の Python コードを貼り付けます。
+
+```python
+from django.contrib.auth import get_user_model
+from maps.models import MapArea
+
+User = get_user_model()
+user = User.objects.get(username="testuser")
+area = MapArea.objects.create(
+    name="Auto Grid Test Area",
+    north=35.7,
+    south=35.69,
+    east=139.8,
+    west=139.79,
+    grid_size_meters=500,
+    created_by=user,
+)
+print("auto_area_id:", area.id)
+```
+
+表示された `auto_area_id` を、次の `<AUTO_AREA_ID>` に置き換えてください。
+確認が終わったら、`exit()` で shell を終了します。
+
+```bash
+curl -i -u testuser:test-password \
+  -X POST http://127.0.0.1:8000/api/maps/areas/<AUTO_AREA_ID>/grids/
+```
+
+正常に生成できた場合は `201 Created` が返ります。
+レスポンスには `area` と、生成された `grids` 一覧が含まれます。
+
+同じコマンドをもう一度実行すると、既に `GridCell` があるため `400 Bad Request` になります。
+これは、重複生成で既存の採点や集計値を壊さないための動きです。
+
+### 5. 点数付きグリッド一覧 API
 
 指定した地図範囲に属するグリッド一覧を、点数付きで取得します。
 
@@ -225,7 +269,7 @@ curl -i -u testuser:test-password \
 この API は保存済みの集計値を読むだけです。
 新しく採点したい場合は、単体採点 API または一括採点 API を使います。
 
-### 5. エラー確認
+### 6. エラー確認
 
 ログイン情報を付けずに送ると、ログイン必須のため `401 Unauthorized` になります。
 

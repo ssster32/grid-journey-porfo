@@ -815,6 +815,104 @@ class BulkGridRatingCreateViewTests(SerializerTestDataMixin, TestCase):
         self.assertEqual(GridRating.objects.count(), 0)
 
 
+class GridCellGenerateViewTests(TestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            username="testuser",
+            password="test-password",
+        )
+        self.client = APIClient()
+        self.area = MapArea.objects.create(
+            name="Generate Area",
+            north=1.0,
+            south=0.85,
+            east=1.0,
+            west=0.85,
+            grid_size_meters=11100,
+            created_by=self.user,
+        )
+        self.url = reverse("grid-cell-generate", kwargs={"area_id": self.area.id})
+
+    def test_authenticated_user_can_generate_grid_cells_for_area(self):
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.post(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(GridCell.objects.filter(area=self.area).count(), 4)
+
+    def test_generate_response_contains_area_and_grids(self):
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.post(self.url)
+
+        self.assertIn("area", response.data)
+        self.assertIn("grids", response.data)
+        self.assertEqual(response.data["area"]["id"], self.area.id)
+        self.assertEqual(response.data["area"]["name"], self.area.name)
+        self.assertEqual(len(response.data["grids"]), 4)
+
+    def test_generated_grids_are_returned_by_row_index_and_col_index(self):
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.post(self.url)
+        positions = [
+            (grid["row_index"], grid["col_index"]) for grid in response.data["grids"]
+        ]
+
+        self.assertEqual(positions, [(0, 0), (0, 1), (1, 0), (1, 1)])
+
+    def test_unauthenticated_user_cannot_generate_grid_cells(self):
+        response = self.client.post(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertEqual(GridCell.objects.filter(area=self.area).count(), 0)
+
+    def test_unknown_area_id_returns_404(self):
+        self.client.force_authenticate(user=self.user)
+        url = reverse("grid-cell-generate", kwargs={"area_id": 999999})
+
+        response = self.client.post(url)
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_area_with_existing_grid_cells_returns_400(self):
+        GridCell.objects.create(
+            area=self.area,
+            row_index=0,
+            col_index=0,
+            north=1.0,
+            south=0.9,
+            east=0.95,
+            west=0.85,
+        )
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.post(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(
+            response.data["detail"],
+            "この MapArea には既に GridCell があります。",
+        )
+
+    def test_area_with_existing_grid_cells_does_not_create_more_cells(self):
+        GridCell.objects.create(
+            area=self.area,
+            row_index=0,
+            col_index=0,
+            north=1.0,
+            south=0.9,
+            east=0.95,
+            west=0.85,
+        )
+        self.client.force_authenticate(user=self.user)
+
+        self.client.post(self.url)
+
+        self.assertEqual(GridCell.objects.filter(area=self.area).count(), 1)
+
+
 class GridCellListViewTests(SerializerTestDataMixin, TestCase):
     def setUp(self):
         super().setUp()

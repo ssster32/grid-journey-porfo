@@ -13,7 +13,7 @@ from .serializers import (
     GridRatingCreateSerializer,
     GridRatingResponseSerializer,
 )
-from .services import update_grid_cell_score
+from .services import generate_grid_cells_for_area, update_grid_cell_score
 
 
 class MapAreaListCreateView(APIView):
@@ -139,4 +139,26 @@ class GridCellListView(APIView):
                 "grids": GridCellScoreSerializer(grids, many=True).data,
             },
             status=status.HTTP_200_OK,
+        )
+
+    def post(self, request, area_id):
+        area = get_object_or_404(MapArea, id=area_id)
+
+        try:
+            grids = generate_grid_cells_for_area(area)
+        except ValueError as error:
+            return Response(
+                {"detail": str(error)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        return Response(
+            {
+                "area": {
+                    "id": area.id,
+                    "name": area.name,
+                },
+                "grids": GridCellScoreSerializer(grids, many=True).data,
+            },
+            status=status.HTTP_201_CREATED,
         )

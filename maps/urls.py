@@ -25,6 +25,11 @@ urlpatterns = [
         name="grid-cell-list",
     ),
     path(
+        "areas/<int:area_id>/grids/",
+        GridCellListView.as_view(),
+        name="grid-cell-generate",
+    ),
+    path(
         "grids/bulk-ratings/",
         BulkGridRatingCreateView.as_view(),
         name="bulk-grid-rating-create",

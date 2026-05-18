@@ -1,17 +1,17 @@
 # 現在のタスク
 
-GridCell 自動生成 service を実装し、service テストを追加してください。
+GridCell 自動生成 API を設計・実装してください。
 
 # 目的
 
-`MapArea` の緯度経度範囲と `grid_size_meters` をもとに、`GridCell` を自動生成できるようにします。
+実装済みの `generate_grid_cells_for_area(map_area)` service を使って、指定した `MapArea` から `GridCell` を自動生成できる API を追加します。
 
-今回は service 実装と service テスト追加まで行います。
-API view / URL 追加はまだ行いません。
+今回は API 設計、view 実装、URL 追加、テスト追加、`API_SPEC.md` 更新まで行います。
+`models.py` と migration は変更しません。
 
 # 担当役割
 
-Backend Developer / Tester
+API Designer / Backend Developer / Tester
 
 # 作業前に確認するファイル
 
@@ -26,16 +26,22 @@ Backend Developer / Tester
 - `config/urls.py`
 - `maps/models.py`
 - `maps/services.py`
+- `maps/serializers.py`
+- `maps/views.py`
+- `maps/urls.py`
 - `maps/tests.py`
 
 # 編集してよいファイル
 
-- `maps/services.py`
+- `API_SPEC.md`
+- `maps/views.py`
+- `maps/urls.py`
 - `maps/tests.py`
 
 必要な場合のみ:
 
-- `API_SPEC.md`
+- `maps/serializers.py`
+- `README.md`
 - `TASK.md`
 
 # 変更しないファイル
@@ -44,143 +50,142 @@ Backend Developer / Tester
 
 - `maps/models.py`
 - `maps/migrations/`
-- `maps/views.py`
-- `maps/urls.py`
-- `maps/serializers.py`
+- `maps/services.py`
 - `config/settings.py`
 - `config/urls.py`
 - `requirements.txt`
 
-# 実装する service
+# 追加する API
 
-```python
-generate_grid_cells_for_area(map_area)
+```text
+POST /api/maps/areas/{area_id}/grids/
 ```
 
-## 入力
+# 目的
 
-| 項目 | 内容 |
+指定した `MapArea` から `GridCell` を自動生成します。
+
+# 認証
+
+既存 API と同じくログイン必須にしてください。
+
+```python
+authentication_classes = [BasicAuthentication, SessionAuthentication]
+permission_classes = [IsAuthenticated]
+```
+
+# 処理の流れ
+
+1. URL の `area_id` から `MapArea` を取得する
+2. `area_id` が存在しない場合は `404 Not Found`
+3. `generate_grid_cells_for_area(area)` を呼び出す
+4. 生成した `GridCell` 一覧を返す
+5. 既に `GridCell` がある場合など service が `ValueError` を出した場合は `400 Bad Request`
+
+# リクエスト
+
+リクエストボディはありません。
+
+# レスポンス
+
+成功時は次の形にしてください。
+
+```json
+{
+  "area": {
+    "id": 1,
+    "name": "東京駅周辺"
+  },
+  "grids": [
+    {
+      "id": 10,
+      "area": 1,
+      "row_index": 0,
+      "col_index": 0,
+      "north": 35.7,
+      "south": 35.6954954954955,
+      "east": 139.7045045045045,
+      "west": 139.7,
+      "initial_score": 0.0,
+      "average_user_score": 0.0,
+      "rating_count": 0,
+      "calculated_score": 0.0,
+      "score_updated_at": null
+    }
+  ]
+}
+```
+
+`GridCell` の出力には、既存の `GridCellScoreSerializer` を使ってください。
+
+# ステータスコード
+
+| 状況 | ステータス |
 | --- | --- |
-| `map_area` | `MapArea` instance |
+| 生成成功 | `201 Created` |
+| 未ログイン | `401 Unauthorized` |
+| `area_id` が存在しない | `404 Not Found` |
+| 既に `GridCell` がある | `400 Bad Request` |
+| service の入力チェックで不正値 | `400 Bad Request` |
 
-## 出力
+# エラー形式
 
-生成して DB に保存した `GridCell` の一覧。
+`ValueError` の場合は、まずは次のようなシンプルな形式で返してください。
 
-```python
-[grid_cell_1, grid_cell_2, grid_cell_3]
+```json
+{
+  "detail": "この MapArea には既に GridCell があります。"
+}
 ```
 
-# 実装方針
+# URL 名
 
-## 緯度経度の簡易計算
-
-最初の学習用実装では、厳密な測地計算ではなく簡易計算にしてください。
+URL 名は次のようにしてください。
 
 ```python
-lat_step = map_area.grid_size_meters / 111000
-lng_step = map_area.grid_size_meters / 111000
+name="grid-cell-generate"
 ```
-
-注意:
-
-- 経度 1 度あたりの距離は本来緯度によって変わります。
-- 今回は学習用の簡易実装として、緯度方向と同じ近似値を使います。
-- 外部ライブラリや外部地図 API は使わないでください。
-
-## 行数・列数
-
-```python
-row_count = ceil((map_area.north - map_area.south) / lat_step)
-col_count = ceil((map_area.east - map_area.west) / lng_step)
-```
-
-`math.ceil` を使ってください。
-
-## 端のグリッド
-
-範囲がぴったり割り切れない場合、最後の行・列は `MapArea` の境界に合わせて小さめにしてください。
-
-```python
-cell_north = map_area.north - row_index * lat_step
-cell_south = max(map_area.south, cell_north - lat_step)
-
-cell_west = map_area.west + col_index * lng_step
-cell_east = min(map_area.east, cell_west + lng_step)
-```
-
-## 生成する GridCell の値
-
-| フィールド | 値 |
-| --- | --- |
-| `area` | 対象の `MapArea` |
-| `row_index` | 上から何行目か。0 始まり |
-| `col_index` | 左から何列目か。0 始まり |
-| `north` | そのマスの北端 |
-| `south` | そのマスの南端 |
-| `east` | そのマスの東端 |
-| `west` | そのマスの西端 |
-| `initial_score` | `0` |
-| `average_user_score` | `0` |
-| `rating_count` | `0` |
-| `calculated_score` | `0` |
-| `score_updated_at` | `None` |
-
-# 既存 GridCell がある場合
-
-対象の `MapArea` に `GridCell` が 1 件以上ある場合は、新規生成しないでください。
-
-方針:
-
-```python
-raise ValueError("この MapArea には既に GridCell があります。")
-```
-
-理由:
-
-- 重複生成を防ぐため
-- 既存の採点や集計値を壊さないため
-- 削除して再生成する処理は影響が大きいため
-
-# 入力チェック
-
-`MapArea` model には制約がありますが、service 側でも念のため次をチェックしてください。
-
-| 条件 | 方針 |
-| --- | --- |
-| `grid_size_meters <= 0` | `ValueError` |
-| `north <= south` | `ValueError` |
-| `east <= west` | `ValueError` |
 
 # テスト追加
 
-`maps/tests.py` に service テストを追加してください。
+`maps/tests.py` に API テストを追加してください。
 
 最低限ほしいテスト:
 
-1. `MapArea` から `GridCell` が生成される
-2. 生成された `GridCell` の `row_index` / `col_index` が 0 始まりになる
-3. `initial_score`, `average_user_score`, `rating_count`, `calculated_score`, `score_updated_at` が初期値になる
-4. 端のグリッドが `MapArea` の境界を超えない
-5. 既に `GridCell` がある場合は `ValueError` になり、新規生成されない
-6. `grid_size_meters <= 0` 相当の不正値では `ValueError`
-7. `north <= south` 相当の不正値では `ValueError`
-8. `east <= west` 相当の不正値では `ValueError`
+1. ログイン済みユーザーは `MapArea` から `GridCell` を生成できる
+2. 成功時は `201 Created`
+3. レスポンスに `area` と `grids` が含まれる
+4. 生成された `grids` は `row_index`, `col_index` 順に返る
+5. 未ログインでは `401 Unauthorized`
+6. 存在しない `area_id` では `404 Not Found`
+7. 既に `GridCell` がある場合は `400 Bad Request`
+8. 既に `GridCell` がある場合、新しい `GridCell` は増えない
 
-不正値テストで model 制約に引っかかる場合は、DB に保存済みの `MapArea` instance の属性を一時的に変更して service に渡す形を検討してください。
+# API_SPEC.md 更新
+
+`API_SPEC.md` に GridCell 自動生成 API を実装済み API として追記してください。
+
+更新内容:
+
+- 「現在の実装状況」の実装済み API に追加
+- 未実装 API 候補から削除または状態を更新
+- `POST /api/maps/areas/{area_id}/grids/` の仕様を追加
+- 認証、リクエスト、レスポンス、ステータスコード、エラー形式を書く
+- 「設計中: GridCell 自動生成 service」は、必要なら「実装済み service」に表現を調整する
 
 # 今回やらないこと
 
 - `models.py` の変更
 - migration の作成
-- API view の追加
-- URL の追加
-- serializer の追加
+- `generate_grid_cells_for_area` service の大きな変更
+- serializer の大きな再設計
 - 認証方式の変更
+- 権限設計の変更
 - 依存関係の追加
 - 外部地図 API の利用
 - 正確な地球測地計算
 - 地形情報や観光情報からの `initial_score` 計算
+- README の長い手動確認手順追加
 
 # 確認方法
 
@@ -189,8 +194,8 @@ raise ValueError("この MapArea には既に GridCell があります。")
 ```bash
 .venv/bin/python manage.py test maps
 .venv/bin/python manage.py check
-git diff -- maps/services.py maps/tests.py
-git diff --check -- maps/services.py maps/tests.py
+git diff -- API_SPEC.md maps/views.py maps/urls.py maps/tests.py
+git diff --check -- API_SPEC.md maps/views.py maps/urls.py maps/tests.py
 ```
 
 # 完了報告
