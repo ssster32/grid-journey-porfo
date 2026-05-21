@@ -1,3 +1,5 @@
+from django.contrib.staticfiles import finders
+from django.http import Http404, HttpResponse
 from rest_framework import status
 from rest_framework.authentication import BasicAuthentication, SessionAuthentication
 from rest_framework.generics import get_object_or_404
@@ -14,6 +16,16 @@ from .serializers import (
     GridRatingResponseSerializer,
 )
 from .services import generate_grid_cells_for_area, update_grid_cell_score
+
+
+class MapDemoView(APIView):
+    def get(self, request):
+        demo_path = finders.find("maps/demo.html")
+        if demo_path is None:
+            raise Http404("demo page not found")
+
+        with open(demo_path, encoding="utf-8") as demo_file:
+            return HttpResponse(demo_file.read(), content_type="text/html")
 
 
 class MapAreaListCreateView(APIView):

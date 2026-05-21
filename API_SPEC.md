@@ -85,7 +85,7 @@ grid = get_object_or_404(GridCell, id=grid_id, area__created_by=request.user)
 
 一括採点 API は、指定された `grid_ids` を `area__created_by=request.user` で絞り、取得できた件数が入力 ID 数と一致する場合だけ処理します。
 
-## 設計中: MapArea の閲覧権限
+## 実装済み: MapArea の閲覧権限
 
 現在の MapArea 一覧 API、MapArea 詳細 API、点数付きグリッド一覧 API は、ログイン済みであれば他ユーザーが作成した `MapArea` も取得できる状態です。
 今後は、`MapArea.created_by` を使って、作成者本人だけが自分の `MapArea` と紐づく `GridCell` を閲覧できる方針にします。
@@ -168,6 +168,73 @@ MapArea 詳細 API:
 
 `created_by` は現在 nullable です。
 既存データや管理画面で作成者なしの `MapArea` が作られる可能性があるため、今回は閲覧 API からは見えない扱いにします。
+
+## 設計メモ: 共有 MapArea
+
+将来的に、全ユーザー間で共有できる `MapArea` を実装する想定です。
+この時点では設計メモのみで、model 変更や migration 作成はまだ行いません。
+
+### 想定する model 変更
+
+将来的に `MapArea` に次のようなフィールドを追加する想定です。
+
+```python
+is_public = models.BooleanField(default=False)
+```
+
+`is_public` は、その `MapArea` を他ユーザーにも共有するかどうかを表します。
+
+### 権限方針
+
+| 状況 | 閲覧 | 採点 |
+| --- | --- | --- |
+| `is_public=False` | 作成者本人だけ可 | 作成者本人だけ可 |
+| `is_public=True` | ログインユーザー全員可 | ログインユーザー全員可 |
+
+`is_public=False` は、現在の仕様と同じく `created_by == request.user` の場合だけ閲覧・採点できます。
+`is_public=True` は、ログインユーザー全員が閲覧・採点できます。
+
+### API ごとの方針
+
+MapArea 一覧 API:
+
+- 自分が作成した `MapArea` を返します。
+- `is_public=True` の `MapArea` も返します。
+- つまり、一覧 API は「自分の `MapArea` + public `MapArea`」を返します。
+
+MapArea 詳細 API:
+
+- 自分が作成した `MapArea` は取得できます。
+- `is_public=True` の `MapArea` も取得できます。
+- どちらにも当てはまらない `MapArea` は `404 Not Found` として扱います。
+
+点数付きグリッド一覧 API:
+
+- 自分が作成した `MapArea` の `GridCell` は取得できます。
+- `is_public=True` の `MapArea` の `GridCell` も取得できます。
+
+単体採点 API / 一括採点 API:
+
+- 自分が作成した `MapArea` に属する `GridCell` は採点できます。
+- `is_public=True` の `MapArea` に属する `GridCell` もログインユーザー全員が採点できます。
+- `GridRating` は現在どおり、1 ユーザーにつき 1 `GridCell` 1 採点の制約を使います。
+
+GridCell 自動生成 API:
+
+- `is_public` の値に関係なく、作成者本人だけ実行できます。
+- 共有 MapArea であっても、他ユーザーは GridCell 自動生成を実行できません。
+- 理由は、GridCell 自動生成は既存のグリッド構成や採点結果に影響し得る操作だからです。
+
+### `created_by=None` の扱い
+
+`created_by=None` の `MapArea` は public 扱いしません。
+
+理由:
+
+- 管理画面や古いデータで作成者なしの `MapArea` ができる可能性があるため。
+- `created_by=None` を共有扱いにすると、意図せず全ユーザーに公開される危険があるため。
+
+そのため、`created_by=None` かつ `is_public=False` の `MapArea` は、通常ユーザーからは見えない扱いにします。
 
 ## 用語
 

@@ -366,6 +366,14 @@ class GenerateGridCellsForAreaTests(TestCase):
         self.assertEqual(GridCell.objects.filter(area=self.area).count(), 0)
 
 
+class MapDemoViewTests(TestCase):
+    def test_demo_page_returns_200(self):
+        response = self.client.get(reverse("map-demo"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertContains(response, "Map Demo")
+
+
 class MapAreaCreateViewTests(TestCase):
     def setUp(self):
         self.user = get_user_model().objects.create_user(

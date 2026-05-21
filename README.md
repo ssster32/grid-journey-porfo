@@ -377,6 +377,40 @@ curl -i -u testuser:test-password \
   http://127.0.0.1:8000/api/maps/areas/999999/grids/
 ```
 
+## 確認用 demo ページ
+
+curl ではなくブラウザで簡単に確認したい場合は、確認用 demo ページを使えます。
+このページは開発確認用です。JavaScript で Basic 認証情報を扱うため、本番向けのログイン画面ではありません。
+
+まず、事前準備の手順で確認用ユーザー、`MapArea`、`GridCell` を作成しておきます。
+その後、開発サーバーを起動します。
+
+```bash
+source .venv/bin/activate
+python manage.py runserver
+```
+
+ブラウザで次を開きます。
+
+```text
+http://127.0.0.1:8000/api/maps/demo/
+```
+
+画面の username/password には、事前準備で作成した次の値を入力します。
+
+```text
+username: testuser
+password: test-password
+```
+
+確認する流れ:
+
+1. `MapArea 一覧を取得` を押す。
+2. 表示された `MapArea` を選択する。
+3. `GridCell` 一覧が表示されることを確認する。
+4. 任意の `GridCell` に 1 から 10 の score を入力して `採点` を押す。
+5. 採点後に `average_user_score`、`rating_count`、`calculated_score` が更新されることを確認する。
+
 ## 依存関係を追加したいとき
 
 必ず `.venv` を有効化してからインストールします。

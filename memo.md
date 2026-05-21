@@ -222,6 +222,7 @@ POST /api/maps/grids/bulk-ratings/
 - 同じ `MapArea` に再度自動生成すると `400 Bad Request` になる確認。
 - MapArea 閲覧制限の確認。
 - `otheruser` で `testuser` の `MapArea` を見ようとすると、一覧では出ず、詳細とグリッド一覧は `404 Not Found` になる確認。
+- 他ユーザーでは単体採点 API と一括採点 API を実行できないことの確認。
 
 ## テスト
 
@@ -249,7 +250,7 @@ POST /api/maps/grids/bulk-ratings/
 結果:
 
 ```text
-Ran 81 tests
+Ran 88 tests
 OK
 ```
 
@@ -266,7 +267,7 @@ System check identified no issues
 直近で確認した差分チェック:
 
 ```bash
-git diff --check -- maps/views.py maps/tests.py
+git diff --check -- API_SPEC.md maps/views.py maps/tests.py
 ```
 
 結果:
@@ -275,10 +276,34 @@ git diff --check -- maps/views.py maps/tests.py
 問題なし
 ```
 
+## 2026-05-21 手動確認結果
+
+README の手順に沿って、主要 API の一連の流れを手動確認済み。
+ユーザー確認では、期待通りの結果が返っている。
+
+確認済みの流れ:
+
+1. `runserver` を起動したまま、別ターミナルで確認用データを作成。
+2. `testuser` で単体採点 API を実行し、初回採点と再採点ができることを確認。
+3. `testuser` で一括採点 API を実行し、複数 GridCell の採点と再集計ができることを確認。
+4. 点数付きグリッド一覧 API で、採点後の `average_user_score`、`rating_count`、`calculated_score` が返ることを確認。
+5. `otheruser` で MapArea 一覧、詳細、点数付きグリッド一覧の閲覧制限を確認。
+6. `otheruser` で単体採点 API が `404 Not Found` になることを確認。
+7. `otheruser` で一括採点 API が `400 Bad Request` になることを確認。
+
+この確認により、簡易的には次の最小フローが動く状態になっている。
+
+```text
+MapArea 作成
+→ GridCell 用意または自動生成
+→ 点数付きグリッド一覧取得
+→ 採点
+→ 点数再集計
+→ 他ユーザーの閲覧・採点拒否
+```
+
 ## 現在未対応
 
-- 採点 API の `created_by` ベース権限チェック。
-- 一括採点 API の `created_by` ベース権限チェック。
 - `API_SPEC.md` の MapArea 閲覧権限セクションを「実装済み」扱いに整理すること。
 - `TASK.md` を完了済みとして整理すること。
 - `MapArea` 更新 API。
@@ -293,28 +318,11 @@ git diff --check -- maps/views.py maps/tests.py
 
 優先度が高い順:
 
-1. 採点 API と一括採点 API に `created_by` ベースの権限チェックを設計する。
-2. `API_SPEC.md` に採点 API の権限仕様を書く。
-3. `TASK.md` に「採点 API の権限チェック実装 + テスト追加」の小さいタスクを作る。
-4. 実装する場合は `maps/views.py` と `maps/tests.py` を中心に進める。
-5. README に採点 API の権限手動確認手順を短く追加する。
-
-採点 API の権限方針案:
-
-- 未ログインは `401 Unauthorized`。
-- 自分の `MapArea` に属する `GridCell` なら採点可能。
-- 他ユーザーの `MapArea` に属する `GridCell` は採点不可。
-- `created_by is None` の `MapArea` に属する `GridCell` も採点不可。
-- エラーを `403` にするか `404` にするかは、API_SPEC で先に決める。
-
-実装候補:
-
-```python
-grid = get_object_or_404(GridCell, id=grid_id, area__created_by=request.user)
-```
-
-一括採点 API では、`grid_ids` の全件がログイン中ユーザーの `MapArea` に属するかを検証する必要がある。
-存在しない ID と権限なし ID を同じ扱いにするなら、取得件数と入力 ID 件数を比較する方針が分かりやすい。
+1. `API_SPEC.md` の MapArea 閲覧権限セクションを「実装済み」扱いに整理する。
+2. `TASK.md` を今日の完了状態に整理する。
+3. 現在の差分を確認して、必要ならコミットする。
+4. 次の機能候補を決める。候補は `MapArea` 更新 API、`MapArea` 削除 API、周辺の高得点グリッド検索 API、または簡易 UI。
+5. 簡易的に見える形を優先するなら、curl ではなくブラウザで確認しやすい表示方法を検討する。
 
 ## 作業時の注意
 
