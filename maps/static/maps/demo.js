@@ -19,7 +19,6 @@ const elements = {
   areaSource: document.querySelector("#area-source"),
   areasList: document.querySelector("#areas-list"),
   selectedAreaLabel: document.querySelector("#selected-area-label"),
-  generateGridsButton: document.querySelector("#generate-grids-button"),
   reloadGridsButton: document.querySelector("#reload-grids-button"),
   message: document.querySelector("#message"),
   scoreMap: document.querySelector("#score-map"),
@@ -154,6 +153,8 @@ function readAreaForm() {
 function renderEmptyGrids(message) {
   elements.scoreMap.textContent = message;
   elements.scoreMap.style.setProperty("--score-map-cols", 1);
+  elements.scoreMap.style.setProperty("--score-map-rows", 1);
+  elements.scoreMap.parentElement.style.setProperty("--score-map-cols", 1);
   elements.gridsBody.innerHTML = `
     <tr>
       <td colspan="9">${escapeHtml(message)}</td>
@@ -169,11 +170,16 @@ function renderScoreMap(grids) {
   if (!positionedGrids.length) {
     elements.scoreMap.textContent = "row_index / col_index を持つ GridCell がありません。";
     elements.scoreMap.style.setProperty("--score-map-cols", 1);
+    elements.scoreMap.style.setProperty("--score-map-rows", 1);
+    elements.scoreMap.parentElement.style.setProperty("--score-map-cols", 1);
     return;
   }
 
+  const maxRow = Math.max(...positionedGrids.map((grid) => Number(grid.row_index)));
   const maxCol = Math.max(...positionedGrids.map((grid) => Number(grid.col_index)));
+  elements.scoreMap.style.setProperty("--score-map-rows", maxRow + 1);
   elements.scoreMap.style.setProperty("--score-map-cols", maxCol + 1);
+  elements.scoreMap.parentElement.style.setProperty("--score-map-cols", maxCol + 1);
   elements.scoreMap.innerHTML = positionedGrids
     .map((grid) => {
       const row = Number(grid.row_index) + 1;
@@ -187,9 +193,9 @@ function renderScoreMap(grids) {
           style="grid-row: ${row}; grid-column: ${col};"
           title="GridCell #${grid.id}: calculated_score ${escapeHtml(score)}"
         >
-          <strong>#${grid.id}</strong>
-          <span>row ${escapeHtml(grid.row_index)} / col ${escapeHtml(grid.col_index)}</span>
-          <span>score ${escapeHtml(score)}</span>
+          <strong class="score-value">${escapeHtml(score)}</strong>
+          <span class="score-meta">#${grid.id}</span>
+          <span class="score-meta">row ${escapeHtml(grid.row_index)} / col ${escapeHtml(grid.col_index)}</span>
         </div>
       `;
     })
@@ -292,7 +298,6 @@ async function selectArea(areaId, areaName) {
   state.selectedAreaId = Number(areaId);
   state.selectedAreaName = areaName;
   elements.selectedAreaLabel.textContent = `選択中: #${areaId} ${areaName}`;
-  elements.generateGridsButton.disabled = false;
   elements.reloadGridsButton.disabled = false;
 
   document.querySelectorAll(".area-button").forEach((button) => {
@@ -321,30 +326,6 @@ async function loadGrids() {
   } catch (error) {
     setMessage(error.message, "error");
   } finally {
-    elements.reloadGridsButton.disabled = false;
-  }
-}
-
-async function generateGrids() {
-  if (!state.selectedAreaId) {
-    setMessage("MapArea を選択してください。", "error");
-    return;
-  }
-
-  setMessage("GridCell を自動生成しています。");
-  elements.generateGridsButton.disabled = true;
-  elements.reloadGridsButton.disabled = true;
-
-  try {
-    const data = await apiFetch(`/api/maps/areas/${state.selectedAreaId}/grids/`, {
-      method: "POST",
-    });
-    renderGrids(data.grids || []);
-    setMessage("GridCell を自動生成しました。", "success");
-  } catch (error) {
-    setMessage(error.message, "error");
-  } finally {
-    elements.generateGridsButton.disabled = false;
     elements.reloadGridsButton.disabled = false;
   }
 }
@@ -380,7 +361,6 @@ async function rateGrid(gridId) {
 
 elements.createAreaForm.addEventListener("submit", createArea);
 elements.loadAreasButton.addEventListener("click", loadAreas);
-elements.generateGridsButton.addEventListener("click", generateGrids);
 elements.reloadGridsButton.addEventListener("click", loadGrids);
 
 elements.areasList.addEventListener("click", (event) => {

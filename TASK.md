@@ -1,267 +1,170 @@
-# 現在のタスク
+# TASK.md 用プロンプト
 
-GridCell を表形式または簡易グリッド状に表示し、`calculated_score` に応じて色を変えてください。
+## 現在のタスク
 
-# 目的
+Score Map をより地図らしく改善する
 
-現在の demo ページでは、GridCell 一覧をテーブルで確認できます。
+## 目的
 
-今回は、`calculated_score` を視覚的に確認しやすくするため、GridCell の表示を改善します。
+demo ページの Score Map 表示を、現在の「マスが分離した確認用グリッド」から、将来の地図表示に近い見た目へ改善する。
 
-本格的な地図表示ではなく、確認用 demo ページ上で次のことが分かれば十分です。
+今回は外部地図の取得・表示は行わない。  
+将来的に地図画像や地図タイルを背景として表示することを想定し、その上に Score Map を重ねやすい構造にする。
 
-```text
-どの GridCell がどの位置にあるか
-どの GridCell の calculated_score が高いか低いか
-採点後に色が変わるか
-```
+## 作業範囲
 
-# 担当役割
+- demo ページの Score Map 表示改善
+- Score Map 用 HTML/CSS/JavaScript の必要最小限の更新
+- demo ページ表示テストの必要最小限の更新
+- README.md の demo ページ説明の必要最小限の更新
+- API_SPEC.md は必要があれば表示方針メモのみ更新
 
-Backend Developer / Documentation Writer / Tester
+## 変更してよいファイル
 
-# 作業前に確認するファイル
-
-- `memo.md`
-- `AGENTS.md`
+- `maps/static/maps/demo.html`
+- `maps/static/maps/demo.css`
+- `maps/static/maps/demo.js`
+- `maps/tests.py`
 - `README.md`
-- `RULES.md`
-- `TASK.md`
 - `API_SPEC.md`
-- `requirements.txt`
-- `config/settings.py`
-- `config/urls.py`
-- `maps/models.py`
-- `maps/services.py`
-- `maps/serializers.py`
-- `maps/views.py`
-- `maps/urls.py`
-- `maps/tests.py`
-- `maps/static/maps/demo.html`
-- `maps/static/maps/demo.css`
-- `maps/static/maps/demo.js`
-
-# 編集してよいファイル
-
-- `maps/static/maps/demo.html`
-- `maps/static/maps/demo.css`
-- `maps/static/maps/demo.js`
-- `README.md`
-
-必要な場合のみ:
-
-- `maps/tests.py`
 - `TASK.md`
 
-# 変更しないファイル
-
-指示がない限り、次は変更しないでください。
+## 変更しないファイル
 
 - `maps/models.py`
 - `maps/migrations/`
-- `maps/services.py`
-- `maps/serializers.py`
 - `maps/views.py`
+- `maps/serializers.py`
+- `maps/services.py`
 - `maps/urls.py`
 - `config/settings.py`
 - `config/urls.py`
 - `requirements.txt`
-- `API_SPEC.md`
 
-# 対象画面
+## 実装方針
 
-```text
-GET /api/maps/demo/
-```
+### Score Map の見た目
 
-既存の確認用 demo ページに表示改善を追加してください。
+- GridCell を線や余白で分離したカード状に表示しない。
+- Score Map 全体を、一つの大きな四角い地図表示領域として見せる。
+- 各 GridCell は、その大きな四角の中を区切る領域として表示する。
+- マス同士の `gap` はなくす。
+- 必要であれば細い境界線は使ってよいが、見た目の主役は「分離したカード」ではなく「一枚の地図状の面」にする。
 
-# 実装方針
+### 表示内容
 
-GridCell 一覧について、次のどちらかの方針で実装してください。
-
-## 推奨: 簡易グリッド状表示を追加する
-
-現在のテーブル表示は残したまま、上部または下部に簡易グリッド状の表示を追加してください。
-
-GridCell の `row_index` と `col_index` を使って、CSS Grid でマス目状に表示します。
-
-期待する表示:
+- 各 GridCell では `calculated_score` をメインで大きく表示する。
+- `GridCell ID`、`row_index`、`col_index` は将来的に非表示にする想定。
+- ただし現在は確認用として、小さく表示しておく。
+- 表示の優先度は次の順にする。
 
 ```text
-row_index / col_index に対応したマス目
-各マスに GridCell ID と calculated_score を表示
-calculated_score に応じて背景色が変わる
+1. calculated_score
+2. GridCell ID
+3. row_index / col_index
 ```
 
-## 代替: 表形式のまま色を付ける
+### 将来の地図背景を想定した構造
 
-簡易グリッド状表示が大きくなりすぎる場合は、既存テーブルの行または `calculated_score` セルに色を付けても構いません。
+- 将来的に地図を表示するときは、Score Map の背景として地図を表示する想定にする。
+- 今回は地図の取得・表示は行わない。
+- CSS または HTML 構造として、将来 `map background` を入れやすい形にする。
+- 例:
+  - Score Map 外側に背景用レイヤーを置ける構造にする
+  - Score Map のセルを半透明にしやすい CSS にする
+  - 背景なしでも現在の Score Map が見やすい状態にする
 
-ただし、できれば簡易グリッド状表示を優先してください。
+### 今回やらないこと
 
-# 色分けルール
+- 外部地図 API の利用
+- 地図画像の取得
+- Leaflet / Google Maps / Mapbox などの導入
+- 緯度経度に基づく正確な地図投影
+- `models.py` の変更
+- migration の作成
+- API レスポンス形式の変更
 
-`calculated_score` に応じて、分かりやすく色を変えてください。
+## JavaScript 方針
 
-例:
+- 既存の `renderScoreMap(grids)` を中心に更新する。
+- `row_index` / `col_index` による CSS Grid 表示は維持してよい。
+- `gap` 前提の見た目から、連続した面として見える表示に変える。
+- `calculated_score` を大きく表示するための HTML 構造にする。
+- ID や row/col は補助情報として小さく表示する。
 
-| calculated_score | 表示イメージ |
-| --- | --- |
-| 0 以上 3 未満 | 低スコア色 |
-| 3 以上 6 未満 | 中スコア色 |
-| 6 以上 8 未満 | 高スコア色 |
-| 8 以上 | 最高スコア色 |
+## CSS 方針
 
-具体的な色は任せます。
-ただし、文字が読みにくくならないようにしてください。
+- `.score-map` は一つの大きな表示領域として見えるようにする。
+- `.score-cell` の余白や角丸を調整し、セル同士が分離したカードに見えないようにする。
+- `gap` は `0` にする。
+- Score Map 全体には固定または安定した最小高さを持たせる。
+- 将来の地図背景を想定し、背景レイヤーや半透明セルにしやすい構造にする。
+- `calculated_score` はセル内で最も目立つサイズにする。
+- `GridCell ID` と `row/col` は小さく控えめに表示する。
+- モバイル幅でも文字がはみ出さないようにする。
 
-色分けは JavaScript の関数にまとめてください。
+## テスト方針
 
-例:
+以下を確認するテストを追加・更新する。
 
-```javascript
-function scoreClass(score) {
-  if (score >= 8) {
-    return "score-very-high";
-  }
-  if (score >= 6) {
-    return "score-high";
-  }
-  if (score >= 3) {
-    return "score-middle";
-  }
-  return "score-low";
-}
-```
+- demo ページが `200 OK` で表示される
+- demo ページに `Score Map` が表示される
+- demo ページに将来の地図背景を想定した要素または class が存在する
+- demo ページに `GridCell を再取得` が表示される
+- demo ページに `GridCell を自動生成` が表示されない
 
-# demo ページの機能要件
-
-既存の次の機能は壊さないでください。
-
-- username/password 入力
-- MapArea 作成
-- MapArea 一覧取得
-- MapArea 選択
-- GridCell 自動生成
-- GridCell 一覧取得
-- 単体採点
-- 採点後の GridCell 一覧再取得
-- エラーや成功メッセージ表示
-
-採点後に GridCell 一覧を再取得したとき、色分け表示も更新されるようにしてください。
-
-# UI の見た目
-
-本格的な地図 UI は不要です。
-ただし、確認しやすいように最低限整えてください。
-
-方針:
-
-- 既存の 1 ページ構成を維持
-- 簡易グリッドはテーブルの前に置くのがおすすめ
-- 各マスは小さくてもよいが、`id` と `calculated_score` は見えるようにする
-- マスが多い場合は横スクロールしてよい
-- 外部ライブラリは追加しない
-- Leaflet / Google Maps は使わない
-
-# README.md に追記・修正する内容
-
-README の demo ページ確認手順を短く更新してください。
-
-最低限、次を含めてください。
-
-- GridCell が簡易グリッド状または色付き表示で確認できること
-- `calculated_score` に応じて色が変わること
-- 採点後に再取得され、色も更新されること
-
-# テスト
-
-基本的には既存の demo ページ表示テストを壊さなければ十分です。
-
-ただし、HTML に追加した主要文言を確認したい場合は、`maps/tests.py` の demo ページテストに次のような確認を追加しても構いません。
-
-例:
-
-```python
-self.assertContains(response, "Score Map")
-```
-
-JavaScript の詳細な表示ロジックは、Django の通常テストでは確認しにくいため、次の確認を行ってください。
+JavaScript の構文チェックも行う。
 
 ```bash
 node --check maps/static/maps/demo.js
 ```
 
-# 今回やらないこと
+## README 更新方針
 
-- `models.py` の変更
-- migration の作成
-- 認証方式の変更
-- Token 認証 / JWT 認証
-- ユーザー登録 UI
-- 本格ログイン UI
-- MapArea 更新フォーム
-- MapArea 削除ボタン
-- 一括採点 UI
-- Leaflet / Google Maps などの地図ライブラリ導入
-- React / Vue などのフロントエンドフレームワーク導入
-- 外部 API 連携
-- 地図画像表示
-- 実際の地図座標に合わせた正確な描画
-- 共有 MapArea の `is_public` 実装
+README.md の demo ページ説明に、以下を短く反映する。
 
-# 注意点
+- Score Map は一枚の地図状の四角として表示する
+- 現時点では地図背景は表示しない
+- 将来的には地図背景の上に Score Map を重ねる想定
+- 現在は確認用に score 以外の情報も小さく表示している
 
-- 既存 API の挙動を変えないでください。
-- 既存テストを壊さないでください。
-- 外部ライブラリは追加しないでください。
-- 共用 PC 前提なので、グローバル環境に依存しないでください。
-- demo ページは確認用であることが分かるようにしてください。
-- calculated_score が 0 の GridCell も見えるようにしてください。
-- score が数値でない場合や null の場合でも表示が崩れないようにしてください。
-- row_index / col_index が欠けている場合でも、ページ全体が壊れないようにしてください。
+## API_SPEC 更新方針
 
-# 確認方法
+API 仕様自体は変えない。  
+必要であれば、表示方針メモとして以下だけ追記する。
 
-作業後に次を実行してください。
+- `calculated_score` は Score Map 上でメイン表示に使う
+- 地図背景の取得・表示は今後の別タスク
+- 今回は API レスポンス形式を変更しない
+
+## 確認方法
+
+作業後に以下を実行する。
 
 ```bash
 .venv/bin/python manage.py test maps
 .venv/bin/python manage.py check
 node --check maps/static/maps/demo.js
-git diff -- maps/static/maps/demo.html maps/static/maps/demo.css maps/static/maps/demo.js README.md
-git diff --check -- maps/static/maps/demo.html maps/static/maps/demo.css maps/static/maps/demo.js README.md
+git diff --check -- maps/static/maps/demo.html maps/static/maps/demo.css maps/static/maps/demo.js maps/tests.py README.md API_SPEC.md
 ```
 
-`maps/tests.py` を変更した場合は、次も確認してください。
-
-```bash
-git diff -- maps/tests.py
-git diff --check -- maps/tests.py
-```
-
-可能であれば、開発サーバーを起動してブラウザでも確認してください。
+可能であれば、開発サーバーを起動して demo ページも確認する。
 
 ```bash
 .venv/bin/python manage.py runserver
 ```
 
-ブラウザで開く URL:
+ブラウザで確認する URL:
 
 ```text
 http://127.0.0.1:8000/api/maps/demo/
 ```
 
-# 完了報告
+## 注意事項
 
-短めでよいので、次を報告してください。
-
-- 担当した役割
-- 変更したファイル
-- demo ページに追加した表示
-- 色分けルール
-- 実行した確認コマンド
-- 確認結果
-- 未対応のこと
-- 次にやるとよい作業
+- `models.py` と migration は変更しないでください。
+- API レスポンス形式は変更しないでください。
+- 外部地図 API や新しいライブラリは追加しないでください。
+- 今回は地図の取得・表示を実装しないでください。
+- GridCell の生成・採点ロジックは変更しないでください。
+- 既存テストを削除して通す対応はしないでください。

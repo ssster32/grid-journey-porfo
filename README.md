@@ -185,6 +185,9 @@ curl -i -u testuser:test-password \
 
 指定した地図範囲から、グリッドを自動生成します。
 
+通常の MapArea 作成 API では、MapArea 作成後に GridCell も自動生成されます。
+この確認手順では、既に GridCell がある場合に自動生成 API が `400 Bad Request` を返すことを確認できます。
+
 事前準備で作った `Manual Test Area` には確認用グリッドがすでにあるため、自動生成 API の確認用にグリッドが 0 件の `MapArea` を別に作ります。
 
 ```bash
@@ -407,14 +410,18 @@ password: test-password
 確認する流れ:
 
 1. 必要に応じて `MapArea 作成` フォームの値を調整し、`MapArea を作成` を押す。
-2. 作成した `MapArea` が一覧に表示され、選択できることを確認する。
-3. `GridCell を自動生成` を押す。
-4. 生成後に `Score Map` と `GridCell` 一覧が表示されることを確認する。
+2. 作成した `MapArea` が一覧に表示され、選択状態になることを確認する。
+3. MapArea 作成後に自動生成された `GridCell` が、`Score Map` と一覧に表示されることを確認する。
+4. 必要に応じて `GridCell を再取得` を押し、表示を更新できることを確認する。
 5. 任意の `GridCell` に 1 から 10 の score を入力して `採点` を押す。
 6. 採点後に `average_user_score`、`rating_count`、`calculated_score` が更新されることを確認する。
 7. `calculated_score` に応じて `Score Map` のマス色も更新されることを確認する。
 
-既に `GridCell` がある `MapArea` で `GridCell を自動生成` をもう一度押すと、`400 Bad Request` のエラーが画面に表示されます。
+`Score Map` は、将来の地図背景に重ねる想定で、一枚の地図状の四角として表示します。
+現時点では地図背景は表示せず、`calculated_score` を大きく表示します。
+`GridCell ID` と `row_index` / `col_index` は、現在は確認用に小さく表示しています。
+
+demo ページでは、MapArea 作成時に GridCell が自動生成される前提のため、GridCell 自動生成 API を直接実行するボタンは表示していません。
 
 ## 依存関係を追加したいとき
 

@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.urls import reverse
@@ -373,8 +375,11 @@ class MapDemoViewTests(TestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertContains(response, "Map Demo")
         self.assertContains(response, "MapArea を作成")
-        self.assertContains(response, "GridCell を自動生成")
+        self.assertNotContains(response, "GridCell を自動生成")
+        self.assertContains(response, "GridCell を再取得")
         self.assertContains(response, "Score Map")
+        self.assertContains(response, "score-map-stage")
+        self.assertContains(response, "score-map-background")
 
 
 class MapAreaCreateViewTests(TestCase):
@@ -415,12 +420,83 @@ class MapAreaCreateViewTests(TestCase):
         self.assertIn("created_at", response.data)
         self.assertIn("updated_at", response.data)
         self.assertEqual(area.created_by, self.user)
+        self.assertGreater(GridCell.objects.filter(area=area).count(), 0)
+
+    def test_authenticated_user_create_map_area_generates_grid_cells(self):
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.post(self.url, self.valid_payload, format="json")
+        area = MapArea.objects.get(id=response.data["id"])
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertGreater(GridCell.objects.filter(area=area).count(), 0)
+
+    def test_generated_grid_cells_are_linked_to_created_map_area(self):
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.post(self.url, self.valid_payload, format="json")
+        area = MapArea.objects.get(id=response.data["id"])
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertTrue(GridCell.objects.filter(area=area).exists())
+        self.assertEqual(
+            GridCell.objects.exclude(area=area).count(),
+            0,
+        )
+
+    def test_created_map_area_grid_cells_can_be_listed_immediately(self):
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.post(self.url, self.valid_payload, format="json")
+        area = MapArea.objects.get(id=response.data["id"])
+        grid_list_url = reverse("grid-cell-list", kwargs={"area_id": area.id})
+        grid_response = self.client.get(grid_list_url)
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(grid_response.status_code, status.HTTP_200_OK)
+        self.assertGreater(len(grid_response.data["grids"]), 0)
+
+    def test_create_map_area_then_generate_grid_cells_again_returns_400(self):
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.post(self.url, self.valid_payload, format="json")
+        area = MapArea.objects.get(id=response.data["id"])
+        generate_url = reverse("grid-cell-generate", kwargs={"area_id": area.id})
+        generate_response = self.client.post(generate_url)
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(
+            generate_response.status_code,
+            status.HTTP_400_BAD_REQUEST,
+        )
+        self.assertEqual(
+            generate_response.data["detail"],
+            "この MapArea には既に GridCell があります。",
+        )
+
+    def test_grid_generation_failure_rolls_back_map_area_creation(self):
+        self.client.force_authenticate(user=self.user)
+
+        with patch(
+            "maps.views.generate_grid_cells_for_area",
+            side_effect=ValueError("GridCell 生成に失敗しました。"),
+        ):
+            response = self.client.post(self.url, self.valid_payload, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(
+            response.data["detail"],
+            "GridCell 生成に失敗しました。",
+        )
+        self.assertEqual(MapArea.objects.count(), 0)
+        self.assertEqual(GridCell.objects.count(), 0)
 
     def test_unauthenticated_user_cannot_create_map_area(self):
         response = self.client.post(self.url, self.valid_payload, format="json")
 
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
         self.assertEqual(MapArea.objects.count(), 0)
+        self.assertEqual(GridCell.objects.count(), 0)
 
     def test_blank_name_returns_400(self):
         self.client.force_authenticate(user=self.user)
@@ -431,6 +507,7 @@ class MapAreaCreateViewTests(TestCase):
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("name", response.data)
         self.assertEqual(MapArea.objects.count(), 0)
+        self.assertEqual(GridCell.objects.count(), 0)
 
     def test_north_less_than_or_equal_to_south_returns_400(self):
         self.client.force_authenticate(user=self.user)
@@ -441,6 +518,7 @@ class MapAreaCreateViewTests(TestCase):
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("north", response.data)
         self.assertEqual(MapArea.objects.count(), 0)
+        self.assertEqual(GridCell.objects.count(), 0)
 
     def test_east_less_than_or_equal_to_west_returns_400(self):
         self.client.force_authenticate(user=self.user)
@@ -451,6 +529,7 @@ class MapAreaCreateViewTests(TestCase):
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("east", response.data)
         self.assertEqual(MapArea.objects.count(), 0)
+        self.assertEqual(GridCell.objects.count(), 0)
 
     def test_grid_size_meters_less_than_or_equal_to_zero_returns_400(self):
         self.client.force_authenticate(user=self.user)
@@ -461,6 +540,7 @@ class MapAreaCreateViewTests(TestCase):
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("grid_size_meters", response.data)
         self.assertEqual(MapArea.objects.count(), 0)
+        self.assertEqual(GridCell.objects.count(), 0)
 
     def test_missing_required_field_returns_400(self):
         self.client.force_authenticate(user=self.user)
@@ -472,6 +552,7 @@ class MapAreaCreateViewTests(TestCase):
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("north", response.data)
         self.assertEqual(MapArea.objects.count(), 0)
+        self.assertEqual(GridCell.objects.count(), 0)
 
     def test_request_created_by_is_ignored(self):
         other_user = get_user_model().objects.create_user(

@@ -524,6 +524,14 @@ GET /api/maps/areas/{area_id}/grids/
 - ページネーションはまだ入れていません。
 - 地図表示範囲による絞り込みはまだ入れていません。
 
+#### 表示方針メモ
+
+- demo ページの Score Map では、`calculated_score` を各マスのメイン表示に使います。
+- `GridCell ID` と `row_index` / `col_index` は、現在は確認用に小さく表示します。
+- 将来的には地図背景の上に Score Map を重ねる想定です。
+- 現時点では地図背景の取得・表示は行いません。
+- この表示改善では API レスポンス形式は変更しません。
+
 ### GridCell 自動生成 API
 
 ```text
@@ -648,9 +656,8 @@ POST /api/maps/areas/
 
 ログイン中ユーザーが、新しい `MapArea` を作成する API です。
 
-この API では地図範囲だけを保存します。
-`GridCell` の自動生成は行いません。
-グリッド生成は処理が大きくなりやすいため、別の API または service として後続タスクで設計します。
+この API では地図範囲を保存したあと、同じリクエスト処理内で `GridCell` も自動生成します。
+GridCell 生成には既存の `generate_grid_cells_for_area(area)` service を使います。
 
 #### 認証
 
@@ -712,6 +719,7 @@ POST /api/maps/areas/
 #### レスポンス
 
 作成に成功した場合は、作成された `MapArea` を返します。
+生成された GridCell はレスポンスに含めず、点数付きグリッド一覧 API で取得します。
 
 ```json
 {
@@ -737,12 +745,26 @@ POST /api/maps/areas/
 | 作成成功 | `201 Created` |
 | 未ログイン | `401 Unauthorized` |
 | 入力不正 | `400 Bad Request` |
+| GridCell 生成に失敗した | `400 Bad Request` |
+
+#### GridCell 自動生成の扱い
+
+- `MapArea.created_by` はログイン中ユーザーをサーバー側で設定します。
+- GridCell は、作成された `MapArea` に紐づけて自動生成します。
+- MapArea 作成と GridCell 生成は 1 つの transaction でまとめます。
+- GridCell 生成に失敗した場合、MapArea だけが保存される状態にはしません。
+- 作成後の GridCell は `GET /api/maps/areas/{area_id}/grids/` で確認できます。
+- 既存の `POST /api/maps/areas/{area_id}/grids/` は残します。
+- 既に GridCell がある MapArea に対して自動生成 API を実行した場合は `400 Bad Request` を返します。
+
+初心者向け補足:
+
+- transaction は、複数の DB 操作をひとまとまりとして扱う仕組みです。
+- 今回は「MapArea は作れたが GridCell は作れなかった」という中途半端な状態を避けるために使います。
 
 #### 今回は実装しないこと
 
-- 作成と同時に `GridCell` を自動生成するかどうか
 - 同じ名前の `MapArea` を許可するかどうか
-- ユーザーごとに `MapArea` の閲覧範囲を制限するかどうか
 - 外部地図 API から座標を自動取得するかどうか
 - `source` の選択肢を固定するかどうか
 
@@ -933,7 +955,7 @@ model は DB のテーブル設計に対応します。
 ### 目的
 
 `MapArea` の緯度経度範囲と `grid_size_meters` をもとに、`GridCell` を自動生成するための service です。
-`POST /api/maps/areas/{area_id}/grids/` から呼び出します。
+`POST /api/maps/areas/` と `POST /api/maps/areas/{area_id}/grids/` から呼び出します。
 
 初心者向け補足:
 

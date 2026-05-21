@@ -1,4 +1,5 @@
 from django.contrib.staticfiles import finders
+from django.db import transaction
 from django.http import Http404, HttpResponse
 from rest_framework import status
 from rest_framework.authentication import BasicAuthentication, SessionAuthentication
@@ -45,7 +46,16 @@ class MapAreaListCreateView(APIView):
     def post(self, request):
         serializer = MapAreaSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        area = serializer.save(created_by=request.user)
+
+        try:
+            with transaction.atomic():
+                area = serializer.save(created_by=request.user)
+                generate_grid_cells_for_area(area)
+        except ValueError as error:
+            return Response(
+                {"detail": str(error)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         return Response(
             MapAreaSerializer(area).data,

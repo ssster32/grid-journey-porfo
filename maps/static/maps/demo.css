@@ -14,6 +14,7 @@
   --score-middle: #fff1b8;
   --score-high: #bfe7c4;
   --score-very-high: #176f5c;
+  --map-line: rgba(31, 41, 51, 0.22);
 }
 
 * {
@@ -254,31 +255,65 @@ label {
   padding-bottom: 4px;
 }
 
+.score-map-stage {
+  position: relative;
+  min-width: min(100%, calc(var(--score-map-cols, 1) * 104px));
+  min-height: 320px;
+  overflow: hidden;
+  border: 1px solid var(--map-line);
+  border-radius: 8px;
+  background: #edf3ef;
+}
+
+.score-map-background {
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.4), rgba(255, 255, 255, 0)),
+    linear-gradient(90deg, rgba(23, 111, 92, 0.08) 1px, transparent 1px),
+    linear-gradient(0deg, rgba(23, 111, 92, 0.08) 1px, transparent 1px);
+  background-size: auto, 32px 32px, 32px 32px;
+}
+
 .score-map {
+  position: relative;
   display: grid;
   grid-template-columns: repeat(var(--score-map-cols, 1), minmax(96px, 1fr));
-  gap: 6px;
-  min-width: min(100%, calc(var(--score-map-cols, 1) * 104px));
+  grid-template-rows: repeat(var(--score-map-rows, 1), minmax(92px, 1fr));
+  min-height: 320px;
+  gap: 0;
   color: var(--muted);
 }
 
 .score-cell {
-  min-height: 76px;
-  border: 1px solid rgba(31, 41, 51, 0.16);
-  border-radius: 6px;
-  padding: 8px;
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  min-height: 92px;
+  border: 0;
+  border-right: 1px solid var(--map-line);
+  border-bottom: 1px solid var(--map-line);
+  padding: 10px 8px;
   color: var(--text);
   font-size: 0.86rem;
+  text-align: center;
+  opacity: 0.88;
 }
 
-.score-cell strong {
+.score-value {
   display: block;
-  margin-bottom: 4px;
+  font-size: clamp(1.35rem, 4vw, 2.35rem);
+  line-height: 1;
+  font-weight: 900;
+  letter-spacing: 0;
 }
 
-.score-cell span {
+.score-meta {
   display: block;
-  font-size: 0.78rem;
+  margin-top: 4px;
+  color: rgba(31, 41, 51, 0.68);
+  font-size: 0.72rem;
+  line-height: 1.2;
 }
 
 .score-low {
@@ -296,6 +331,10 @@ label {
 .score-very-high {
   background: var(--score-very-high);
   color: #ffffff;
+}
+
+.score-very-high .score-meta {
+  color: rgba(255, 255, 255, 0.78);
 }
 
 .score-badge {

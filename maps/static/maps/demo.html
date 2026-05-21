@@ -88,10 +88,9 @@
           <div class="content-header">
             <div>
               <h2 id="grids-heading">GridCell</h2>
-              <p id="selected-area-label">MapArea を選択してください。</p>
+              <p id="selected-area-label">MapArea を選択すると、自動生成済みの GridCell を表示します。</p>
             </div>
             <div class="action-row">
-              <button id="generate-grids-button" type="button" disabled>GridCell を自動生成</button>
               <button id="reload-grids-button" type="button" disabled>GridCell を再取得</button>
             </div>
           </div>
@@ -102,7 +101,7 @@
             <div class="score-map-header">
               <div>
                 <h3 id="score-map-heading">Score Map</h3>
-                <p>row_index / col_index に合わせた確認用の簡易グリッドです。</p>
+                <p>将来の地図背景に重ねる想定の、確認用スコア面です。</p>
               </div>
               <div class="score-legend" aria-label="score legend">
                 <span><i class="legend-box score-low"></i>0-2.99</span>
@@ -112,8 +111,11 @@
               </div>
             </div>
             <div class="score-map-wrap">
-              <div id="score-map" class="score-map" aria-live="polite">
-                GridCell はまだ表示されていません。
+              <div class="score-map-stage">
+                <div class="score-map-background" aria-hidden="true"></div>
+                <div id="score-map" class="score-map" aria-live="polite">
+                  GridCell はまだ表示されていません。
+                </div>
               </div>
             </div>
           </section>
