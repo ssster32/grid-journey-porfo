@@ -35,6 +35,47 @@
             <button id="load-areas-button" type="button">MapArea 一覧を取得</button>
           </section>
 
+          <section class="panel" aria-labelledby="create-area-heading">
+            <h2 id="create-area-heading">MapArea 作成</h2>
+            <form id="create-area-form" class="area-form">
+              <label>
+                Name
+                <input id="area-name" type="text" value="Demo Area">
+              </label>
+              <label>
+                Description
+                <input id="area-description" type="text" value="created from demo page">
+              </label>
+              <div class="field-grid">
+                <label>
+                  North
+                  <input id="area-north" type="number" step="0.000001" value="35.7">
+                </label>
+                <label>
+                  South
+                  <input id="area-south" type="number" step="0.000001" value="35.69">
+                </label>
+                <label>
+                  East
+                  <input id="area-east" type="number" step="0.000001" value="139.8">
+                </label>
+                <label>
+                  West
+                  <input id="area-west" type="number" step="0.000001" value="139.79">
+                </label>
+              </div>
+              <label>
+                Grid size meters
+                <input id="area-grid-size" type="number" min="1" value="500">
+              </label>
+              <label>
+                Source
+                <input id="area-source" type="text" value="demo">
+              </label>
+              <button id="create-area-button" type="submit">MapArea を作成</button>
+            </form>
+          </section>
+
           <section class="panel" aria-labelledby="areas-heading">
             <h2 id="areas-heading">MapArea</h2>
             <div id="areas-list" class="areas-list" aria-live="polite">
@@ -49,10 +90,33 @@
               <h2 id="grids-heading">GridCell</h2>
               <p id="selected-area-label">MapArea を選択してください。</p>
             </div>
-            <button id="reload-grids-button" type="button" disabled>GridCell を再取得</button>
+            <div class="action-row">
+              <button id="generate-grids-button" type="button" disabled>GridCell を自動生成</button>
+              <button id="reload-grids-button" type="button" disabled>GridCell を再取得</button>
+            </div>
           </div>
 
           <div id="message" class="message" aria-live="polite"></div>
+
+          <section class="score-map-section" aria-labelledby="score-map-heading">
+            <div class="score-map-header">
+              <div>
+                <h3 id="score-map-heading">Score Map</h3>
+                <p>row_index / col_index に合わせた確認用の簡易グリッドです。</p>
+              </div>
+              <div class="score-legend" aria-label="score legend">
+                <span><i class="legend-box score-low"></i>0-2.99</span>
+                <span><i class="legend-box score-middle"></i>3-5.99</span>
+                <span><i class="legend-box score-high"></i>6-7.99</span>
+                <span><i class="legend-box score-very-high"></i>8+</span>
+              </div>
+            </div>
+            <div class="score-map-wrap">
+              <div id="score-map" class="score-map" aria-live="polite">
+                GridCell はまだ表示されていません。
+              </div>
+            </div>
+          </section>
 
           <div class="table-wrap">
             <table>

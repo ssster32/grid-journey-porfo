@@ -29,7 +29,7 @@
 ## 現在の主要ファイル
 
 - `README.md`: セットアップ、起動、手動確認手順。
-- `TASK.md`: 現在の作業指示。直近では MapArea 閲覧制限の実装タスクが書かれている。
+- `TASK.md`: 現在の作業指示。直近では demo ページの Score Map 表示改善タスクが書かれている。
 - `API_SPEC.md`: API 仕様と権限方針。
 - `maps/models.py`: `MapArea`, `GridCell`, `GridRating`。
 - `maps/serializers.py`: MapArea、採点、点数付きグリッド、一括採点の serializer。
@@ -37,10 +37,22 @@
 - `maps/views.py`: 実装済み API の view。
 - `maps/urls.py`: `api/maps/` 以下の URL。
 - `maps/tests.py`: serializer、service、view のテスト。
+- `maps/static/maps/demo.html`: 確認用 demo ページ。
+- `maps/static/maps/demo.css`: demo ページのスタイル。
+- `maps/static/maps/demo.js`: demo ページから既存 API を呼ぶ処理。
 
 ## 現在の Git 状態
 
-直近確認時点では、ワークツリーはクリーン。
+直近確認時点では、未コミット差分がある。
+
+主な未コミット差分:
+
+- `README.md`
+- `TASK.md`
+- `maps/tests.py`
+- `maps/static/maps/demo.html`
+- `maps/static/maps/demo.css`
+- `maps/static/maps/demo.js`
 
 直近の主なコミット:
 
@@ -178,12 +190,8 @@ POST /api/maps/grids/{grid_id}/ratings/
 - ログイン中ユーザーが 1 つの `GridCell` に採点する。
 - 初回なら `GridRating` を作成し、同じユーザーの再採点なら更新する。
 - 採点後に `update_grid_cell_score(grid)` を呼ぶ。
-
-現在の注意点:
-
-- `grid.area.created_by == request.user` の権限チェックはまだ入っていない。
-- そのため、ID が分かれば他ユーザーの `GridCell` に採点できる可能性がある。
-- 次に優先度が高い実装候補。
+- `GridCell.area.created_by == request.user` の場合だけ採点できる。
+- 他ユーザーの `MapArea` に属する `GridCell` や `created_by is None` の `MapArea` に属する `GridCell` は `404 Not Found`。
 
 ### 一括採点 API
 
@@ -194,11 +202,56 @@ POST /api/maps/grids/bulk-ratings/
 - 複数の `GridCell` に同じ点数をまとめて付ける。
 - 各グリッドで初回採点なら作成、既存採点なら更新する。
 - 各グリッドで `update_grid_cell_score(grid)` を呼ぶ。
+- すべての `GridCell` がログイン中ユーザーの `MapArea` に属する場合だけ採点できる。
+- 他ユーザーの `GridCell` や `created_by is None` の `GridCell` が 1 件でも含まれる場合は `400 Bad Request`。
+- 一部だけ採点して成功、という動きにはしない。
 
-現在の注意点:
+## 確認用 demo ページ
 
-- 単体採点 API と同じく、`grid.area.created_by == request.user` の権限チェックはまだ入っていない。
-- 一括採点では、複数 ID の中に他ユーザーの `GridCell` が混ざるケースも考える必要がある。
+```text
+GET /api/maps/demo/
+```
+
+ブラウザで既存 API を確認するための簡易 UI を追加済み。
+本格的な地図 UI ではなく、API 動作確認用。
+
+demo ページ自体は認証なしで表示できる。
+実際の API 呼び出しでは、画面に入力した username/password から JavaScript が Basic 認証ヘッダーを作る。
+本番向けのログイン UI ではない。
+
+現在できること:
+
+- username/password 入力。
+- MapArea 作成。
+- MapArea 一覧取得。
+- MapArea 選択。
+- GridCell 自動生成。
+- GridCell 一覧取得。
+- 単体採点。
+- 採点後の GridCell 一覧再取得。
+- `calculated_score` に応じた Score Map の色分け表示。
+
+Score Map:
+
+- `row_index` / `col_index` に対応した簡易グリッド表示。
+- 各マスに `GridCell ID`、`row/col`、`calculated_score` を表示。
+- テーブルの `calculated_score` にも色付きバッジを表示。
+
+色分け:
+
+| calculated_score | 表示 |
+| --- | --- |
+| `0 <= score < 3` | 低スコア |
+| `3 <= score < 6` | 中スコア |
+| `6 <= score < 8` | 高スコア |
+| `8 <= score` | 最高スコア |
+
+注意:
+
+- MapArea 作成 API 自体は、現在も `MapArea` だけを作成する。
+- demo ページでは、作成後に必要に応じて `GridCell を自動生成` ボタンを押す。
+- API 本体は「MapArea 作成時に GridCell も自動生成する」仕様にはしていない。
+- 外部ライブラリ、React、Vue、Leaflet、Google Maps は使っていない。
 
 ## API_SPEC.md の状態
 
@@ -208,11 +261,17 @@ POST /api/maps/grids/bulk-ratings/
 - GridCell 自動生成 API の仕様。
 - GridCell 自動生成 API の `created_by` ベース権限。
 - MapArea 一覧、詳細、点数付きグリッド一覧の閲覧権限方針。
+- 採点 API / 一括採点 API の `created_by` ベース権限。
+- 設計メモ: 共有 MapArea。
 
-注意:
+共有 MapArea 設計メモ:
 
-- `API_SPEC.md` の MapArea 閲覧権限セクションは、見出しが「設計中」のまま。
-- 実装とテストは完了済みなので、次のドキュメント整理で「実装済み」扱いに直すとよい。
+- 将来的に `MapArea.is_public` を追加する想定。
+- `is_public=False` は作成者本人だけ閲覧・採点可。
+- `is_public=True` はログインユーザー全員が閲覧・採点可。
+- GridCell 自動生成は `is_public` に関係なく作成者だけ。
+- `created_by=None` は public 扱いしない。
+- 一覧 API は「自分の MapArea + public MapArea」を返す方針。
 
 ## README.md の状態
 
@@ -223,6 +282,8 @@ POST /api/maps/grids/bulk-ratings/
 - MapArea 閲覧制限の確認。
 - `otheruser` で `testuser` の `MapArea` を見ようとすると、一覧では出ず、詳細とグリッド一覧は `404 Not Found` になる確認。
 - 他ユーザーでは単体採点 API と一括採点 API を実行できないことの確認。
+- 確認用 demo ページの使い方。
+- demo ページで MapArea 作成、GridCell 自動生成、採点、Score Map の色更新を確認する手順。
 
 ## テスト
 
@@ -240,6 +301,7 @@ POST /api/maps/grids/bulk-ratings/
 - 単体採点 API の view テスト。
 - 一括採点 API の view テスト。
 - 点数付きグリッド一覧 API の view テスト。
+- demo ページ表示テスト。
 
 直近の確認結果:
 
@@ -250,7 +312,7 @@ POST /api/maps/grids/bulk-ratings/
 結果:
 
 ```text
-Ran 88 tests
+Ran 89 tests
 OK
 ```
 
@@ -267,13 +329,40 @@ System check identified no issues
 直近で確認した差分チェック:
 
 ```bash
-git diff --check -- API_SPEC.md maps/views.py maps/tests.py
+git diff --check -- maps/static/maps/demo.html maps/static/maps/demo.css maps/static/maps/demo.js README.md maps/tests.py
 ```
 
 結果:
 
 ```text
 問題なし
+```
+
+JavaScript 構文チェック:
+
+```bash
+node --check maps/static/maps/demo.js
+```
+
+結果:
+
+```text
+問題なし
+```
+
+ローカルサーバー確認:
+
+```bash
+.venv/bin/python manage.py runserver 127.0.0.1:8001
+curl -s http://127.0.0.1:8001/api/maps/demo/
+curl -I http://127.0.0.1:8001/static/maps/demo.js
+```
+
+結果:
+
+```text
+demo ページの HTML と demo.js が返ることを確認済み
+確認用サーバーは停止済み
 ```
 
 ## 2026-05-21 手動確認結果
@@ -302,9 +391,31 @@ MapArea 作成
 → 他ユーザーの閲覧・採点拒否
 ```
 
+## 2026-05-21 demo ページ更新結果
+
+確認用 demo ページに、ブラウザだけで最小フローを確認しやすくする機能を追加済み。
+
+追加済みの流れ:
+
+```text
+demo ページを開く
+→ username/password を入力
+→ MapArea を作成
+→ 作成した MapArea を選択
+→ GridCell を自動生成
+→ Score Map と GridCell テーブルを確認
+→ GridCell に score を入力して採点
+→ calculated_score と色分け表示が更新されることを確認
+```
+
+ユーザーへの説明済み:
+
+- マス表示は demo ページ右側の `Score Map` に出る。
+- `GridCell を自動生成` 後、または GridCell 一覧取得後に表示される。
+- `Score Map` が「GridCell はまだ表示されていません。」の場合は、対象 MapArea に GridCell がない。
+
 ## 現在未対応
 
-- `API_SPEC.md` の MapArea 閲覧権限セクションを「実装済み」扱いに整理すること。
 - `TASK.md` を完了済みとして整理すること。
 - `MapArea` 更新 API。
 - `MapArea` 削除 API。
@@ -313,16 +424,19 @@ MapArea 作成
 - ページネーション。
 - 地図表示範囲による絞り込み。
 - Token 認証 / JWT 認証の検討。
+- MapArea 作成時に GridCell も自動生成する API 仕様にするかどうかの検討。
+- 共有 MapArea の `is_public` 実装。
+- Score Map を実際の地図座標に合わせて正確に描画すること。
 
 ## 次にやるとよい作業
 
 優先度が高い順:
 
-1. `API_SPEC.md` の MapArea 閲覧権限セクションを「実装済み」扱いに整理する。
-2. `TASK.md` を今日の完了状態に整理する。
-3. 現在の差分を確認して、必要ならコミットする。
-4. 次の機能候補を決める。候補は `MapArea` 更新 API、`MapArea` 削除 API、周辺の高得点グリッド検索 API、または簡易 UI。
-5. 簡易的に見える形を優先するなら、curl ではなくブラウザで確認しやすい表示方法を検討する。
+1. `TASK.md` を今日の完了状態に整理する。
+2. 現在の差分を確認して、必要ならコミットする。
+3. demo ページで MapArea 作成後に GridCell 自動生成 API も自動で呼ぶか検討する。
+4. 共有 MapArea の `is_public` 実装に進むか、MapArea 更新 / 削除 API に進むか決める。
+5. Score Map の見た目をもう少し地図らしくするか検討する。
 
 ## 作業時の注意
 

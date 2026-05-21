@@ -7,10 +7,22 @@ const elements = {
   username: document.querySelector("#username"),
   password: document.querySelector("#password"),
   loadAreasButton: document.querySelector("#load-areas-button"),
+  createAreaForm: document.querySelector("#create-area-form"),
+  createAreaButton: document.querySelector("#create-area-button"),
+  areaName: document.querySelector("#area-name"),
+  areaDescription: document.querySelector("#area-description"),
+  areaNorth: document.querySelector("#area-north"),
+  areaSouth: document.querySelector("#area-south"),
+  areaEast: document.querySelector("#area-east"),
+  areaWest: document.querySelector("#area-west"),
+  areaGridSize: document.querySelector("#area-grid-size"),
+  areaSource: document.querySelector("#area-source"),
   areasList: document.querySelector("#areas-list"),
   selectedAreaLabel: document.querySelector("#selected-area-label"),
+  generateGridsButton: document.querySelector("#generate-grids-button"),
   reloadGridsButton: document.querySelector("#reload-grids-button"),
   message: document.querySelector("#message"),
+  scoreMap: document.querySelector("#score-map"),
   gridsBody: document.querySelector("#grids-body"),
 };
 
@@ -44,7 +56,27 @@ function formatNumber(value) {
     return "";
   }
   const numberValue = Number(value);
+  if (!Number.isFinite(numberValue)) {
+    return "";
+  }
   return Number.isInteger(numberValue) ? String(numberValue) : numberValue.toFixed(2);
+}
+
+function scoreClass(score) {
+  const numberScore = Number(score);
+  if (!Number.isFinite(numberScore)) {
+    return "score-low";
+  }
+  if (numberScore >= 8) {
+    return "score-very-high";
+  }
+  if (numberScore >= 6) {
+    return "score-high";
+  }
+  if (numberScore >= 3) {
+    return "score-middle";
+  }
+  return "score-low";
 }
 
 async function readJsonResponse(response) {
@@ -106,12 +138,62 @@ function renderAreas(areas) {
     .join("");
 }
 
+function readAreaForm() {
+  return {
+    name: elements.areaName.value.trim(),
+    description: elements.areaDescription.value.trim(),
+    north: Number(elements.areaNorth.value),
+    south: Number(elements.areaSouth.value),
+    east: Number(elements.areaEast.value),
+    west: Number(elements.areaWest.value),
+    grid_size_meters: Number(elements.areaGridSize.value),
+    source: elements.areaSource.value.trim(),
+  };
+}
+
 function renderEmptyGrids(message) {
+  elements.scoreMap.textContent = message;
+  elements.scoreMap.style.setProperty("--score-map-cols", 1);
   elements.gridsBody.innerHTML = `
     <tr>
       <td colspan="9">${escapeHtml(message)}</td>
     </tr>
   `;
+}
+
+function renderScoreMap(grids) {
+  const positionedGrids = grids.filter((grid) => {
+    return Number.isInteger(Number(grid.row_index)) && Number.isInteger(Number(grid.col_index));
+  });
+
+  if (!positionedGrids.length) {
+    elements.scoreMap.textContent = "row_index / col_index を持つ GridCell がありません。";
+    elements.scoreMap.style.setProperty("--score-map-cols", 1);
+    return;
+  }
+
+  const maxCol = Math.max(...positionedGrids.map((grid) => Number(grid.col_index)));
+  elements.scoreMap.style.setProperty("--score-map-cols", maxCol + 1);
+  elements.scoreMap.innerHTML = positionedGrids
+    .map((grid) => {
+      const row = Number(grid.row_index) + 1;
+      const col = Number(grid.col_index) + 1;
+      const score = formatNumber(grid.calculated_score) || "0";
+      const className = scoreClass(grid.calculated_score);
+
+      return `
+        <div
+          class="score-cell ${className}"
+          style="grid-row: ${row}; grid-column: ${col};"
+          title="GridCell #${grid.id}: calculated_score ${escapeHtml(score)}"
+        >
+          <strong>#${grid.id}</strong>
+          <span>row ${escapeHtml(grid.row_index)} / col ${escapeHtml(grid.col_index)}</span>
+          <span>score ${escapeHtml(score)}</span>
+        </div>
+      `;
+    })
+    .join("");
 }
 
 function renderGrids(grids) {
@@ -120,17 +202,22 @@ function renderGrids(grids) {
     return;
   }
 
+  renderScoreMap(grids);
   elements.gridsBody.innerHTML = grids
     .map(
-      (grid) => `
+      (grid) => {
+        const calculatedScore = formatNumber(grid.calculated_score);
+        const className = scoreClass(grid.calculated_score);
+
+        return `
         <tr>
           <td>${grid.id}</td>
-          <td>${grid.row_index}</td>
-          <td>${grid.col_index}</td>
+          <td>${escapeHtml(grid.row_index)}</td>
+          <td>${escapeHtml(grid.col_index)}</td>
           <td>${formatNumber(grid.initial_score)}</td>
           <td>${formatNumber(grid.average_user_score)}</td>
           <td>${grid.rating_count}</td>
-          <td>${formatNumber(grid.calculated_score)}</td>
+          <td><span class="score-badge ${className}">${calculatedScore || "0"}</span></td>
           <td>
             <input
               class="score-input"
@@ -148,7 +235,8 @@ function renderGrids(grids) {
             </button>
           </td>
         </tr>
-      `
+      `;
+      }
     )
     .join("");
 }
@@ -168,10 +256,43 @@ async function loadAreas() {
   }
 }
 
+async function createArea(event) {
+  event.preventDefault();
+
+  const payload = readAreaForm();
+  if (!payload.name) {
+    setMessage("name を入力してください。", "error");
+    return;
+  }
+
+  setMessage("MapArea を作成しています。");
+  elements.createAreaButton.disabled = true;
+
+  try {
+    const area = await apiFetch("/api/maps/areas/", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+    state.selectedAreaId = area.id;
+    state.selectedAreaName = area.name;
+    await loadAreas();
+    await selectArea(area.id, area.name);
+    setMessage(`MapArea #${area.id} を作成しました。`, "success");
+  } catch (error) {
+    setMessage(error.message, "error");
+  } finally {
+    elements.createAreaButton.disabled = false;
+  }
+}
+
 async function selectArea(areaId, areaName) {
   state.selectedAreaId = Number(areaId);
   state.selectedAreaName = areaName;
   elements.selectedAreaLabel.textContent = `選択中: #${areaId} ${areaName}`;
+  elements.generateGridsButton.disabled = false;
   elements.reloadGridsButton.disabled = false;
 
   document.querySelectorAll(".area-button").forEach((button) => {
@@ -200,6 +321,30 @@ async function loadGrids() {
   } catch (error) {
     setMessage(error.message, "error");
   } finally {
+    elements.reloadGridsButton.disabled = false;
+  }
+}
+
+async function generateGrids() {
+  if (!state.selectedAreaId) {
+    setMessage("MapArea を選択してください。", "error");
+    return;
+  }
+
+  setMessage("GridCell を自動生成しています。");
+  elements.generateGridsButton.disabled = true;
+  elements.reloadGridsButton.disabled = true;
+
+  try {
+    const data = await apiFetch(`/api/maps/areas/${state.selectedAreaId}/grids/`, {
+      method: "POST",
+    });
+    renderGrids(data.grids || []);
+    setMessage("GridCell を自動生成しました。", "success");
+  } catch (error) {
+    setMessage(error.message, "error");
+  } finally {
+    elements.generateGridsButton.disabled = false;
     elements.reloadGridsButton.disabled = false;
   }
 }
@@ -233,7 +378,9 @@ async function rateGrid(gridId) {
   }
 }
 
+elements.createAreaForm.addEventListener("submit", createArea);
 elements.loadAreasButton.addEventListener("click", loadAreas);
+elements.generateGridsButton.addEventListener("click", generateGrids);
 elements.reloadGridsButton.addEventListener("click", loadGrids);
 
 elements.areasList.addEventListener("click", (event) => {

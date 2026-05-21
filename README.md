@@ -382,7 +382,8 @@ curl -i -u testuser:test-password \
 curl ではなくブラウザで簡単に確認したい場合は、確認用 demo ページを使えます。
 このページは開発確認用です。JavaScript で Basic 認証情報を扱うため、本番向けのログイン画面ではありません。
 
-まず、事前準備の手順で確認用ユーザー、`MapArea`、`GridCell` を作成しておきます。
+まず、事前準備の手順で確認用ユーザーを作成しておきます。
+既存の `MapArea` や `GridCell` がなくても、demo ページから作成できます。
 その後、開発サーバーを起動します。
 
 ```bash
@@ -405,11 +406,15 @@ password: test-password
 
 確認する流れ:
 
-1. `MapArea 一覧を取得` を押す。
-2. 表示された `MapArea` を選択する。
-3. `GridCell` 一覧が表示されることを確認する。
-4. 任意の `GridCell` に 1 から 10 の score を入力して `採点` を押す。
-5. 採点後に `average_user_score`、`rating_count`、`calculated_score` が更新されることを確認する。
+1. 必要に応じて `MapArea 作成` フォームの値を調整し、`MapArea を作成` を押す。
+2. 作成した `MapArea` が一覧に表示され、選択できることを確認する。
+3. `GridCell を自動生成` を押す。
+4. 生成後に `Score Map` と `GridCell` 一覧が表示されることを確認する。
+5. 任意の `GridCell` に 1 から 10 の score を入力して `採点` を押す。
+6. 採点後に `average_user_score`、`rating_count`、`calculated_score` が更新されることを確認する。
+7. `calculated_score` に応じて `Score Map` のマス色も更新されることを確認する。
+
+既に `GridCell` がある `MapArea` で `GridCell を自動生成` をもう一度押すと、`400 Bad Request` のエラーが画面に表示されます。
 
 ## 依存関係を追加したいとき
 

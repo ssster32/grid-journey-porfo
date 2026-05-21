@@ -1,39 +1,20 @@
 # 現在のタスク
 
-demo ページに MapArea 作成と GridCell 自動生成ボタンを追加してください。
+GridCell を表形式または簡易グリッド状に表示し、`calculated_score` に応じて色を変えてください。
 
 # 目的
 
-現在の確認用 demo ページでは、既存 API を使って次の操作ができます。
+現在の demo ページでは、GridCell 一覧をテーブルで確認できます。
+
+今回は、`calculated_score` を視覚的に確認しやすくするため、GridCell の表示を改善します。
+
+本格的な地図表示ではなく、確認用 demo ページ上で次のことが分かれば十分です。
 
 ```text
-MapArea 一覧取得
-→ MapArea 選択
-→ GridCell 一覧取得
-→ 単体採点
-→ 点数再集計
+どの GridCell がどの位置にあるか
+どの GridCell の calculated_score が高いか低いか
+採点後に色が変わるか
 ```
-
-今回は demo ページから、確認用データ作成の一部もできるようにします。
-
-追加する操作は次の 2 つです。
-
-```text
-MapArea 作成
-GridCell 自動生成
-```
-
-これにより、ブラウザだけで次の流れを確認しやすくします。
-
-```text
-MapArea 作成
-→ GridCell 自動生成
-→ GridCell 一覧取得
-→ 単体採点
-→ 点数再集計
-```
-
-本格的な地図 UI ではなく、API 動作確認用の demo ページとして実装してください。
 
 # 担当役割
 
@@ -93,114 +74,106 @@ Backend Developer / Documentation Writer / Tester
 GET /api/maps/demo/
 ```
 
-既存の確認用 demo ページに機能を追加してください。
+既存の確認用 demo ページに表示改善を追加してください。
 
-# 追加する機能
+# 実装方針
 
-## 1. MapArea 作成フォーム
+GridCell 一覧について、次のどちらかの方針で実装してください。
 
-demo ページ上に、MapArea 作成用のフォームを追加してください。
+## 推奨: 簡易グリッド状表示を追加する
 
-呼び出す API:
+現在のテーブル表示は残したまま、上部または下部に簡易グリッド状の表示を追加してください。
+
+GridCell の `row_index` と `col_index` を使って、CSS Grid でマス目状に表示します。
+
+期待する表示:
 
 ```text
-POST /api/maps/areas/
+row_index / col_index に対応したマス目
+各マスに GridCell ID と calculated_score を表示
+calculated_score に応じて背景色が変わる
 ```
 
-最低限入力できる項目:
+## 代替: 表形式のまま色を付ける
 
-- `name`
-- `description`
-- `north`
-- `south`
-- `east`
-- `west`
-- `grid_size_meters`
-- `source`
+簡易グリッド状表示が大きくなりすぎる場合は、既存テーブルの行または `calculated_score` セルに色を付けても構いません。
 
-初期値は手動確認しやすい値を入れておいて構いません。
+ただし、できれば簡易グリッド状表示を優先してください。
+
+# 色分けルール
+
+`calculated_score` に応じて、分かりやすく色を変えてください。
 
 例:
 
-```json
-{
-  "name": "Demo Area",
-  "description": "created from demo page",
-  "north": 35.7,
-  "south": 35.69,
-  "east": 139.8,
-  "west": 139.79,
-  "grid_size_meters": 500,
-  "source": "demo"
+| calculated_score | 表示イメージ |
+| --- | --- |
+| 0 以上 3 未満 | 低スコア色 |
+| 3 以上 6 未満 | 中スコア色 |
+| 6 以上 8 未満 | 高スコア色 |
+| 8 以上 | 最高スコア色 |
+
+具体的な色は任せます。
+ただし、文字が読みにくくならないようにしてください。
+
+色分けは JavaScript の関数にまとめてください。
+
+例:
+
+```javascript
+function scoreClass(score) {
+  if (score >= 8) {
+    return "score-very-high";
+  }
+  if (score >= 6) {
+    return "score-high";
+  }
+  if (score >= 3) {
+    return "score-middle";
+  }
+  return "score-low";
 }
 ```
 
-期待する UI:
-
-- 入力フォーム
-- `MapArea を作成` ボタン
-- 作成成功時に成功メッセージを表示
-- 作成成功後、MapArea 一覧を再取得する
-- 作成した MapArea を選択できる
-
-## 2. GridCell 自動生成ボタン
-
-選択中の MapArea に対して、GridCell 自動生成 API を実行できるボタンを追加してください。
-
-呼び出す API:
-
-```text
-POST /api/maps/areas/{area_id}/grids/
-```
-
-期待する UI:
-
-- MapArea を選択しているときだけ押せる
-- `GridCell を自動生成` ボタン
-- 成功時に成功メッセージを表示
-- 成功後、GridCell 一覧を再取得する
-- 既に GridCell がある場合は `400 Bad Request` のエラー内容を画面に表示する
-
-# 既存機能との関係
+# demo ページの機能要件
 
 既存の次の機能は壊さないでください。
 
 - username/password 入力
-- Basic 認証を使った API 呼び出し
+- MapArea 作成
 - MapArea 一覧取得
 - MapArea 選択
+- GridCell 自動生成
 - GridCell 一覧取得
 - 単体採点
 - 採点後の GridCell 一覧再取得
 - エラーや成功メッセージ表示
 
+採点後に GridCell 一覧を再取得したとき、色分け表示も更新されるようにしてください。
+
 # UI の見た目
 
-本格的なデザインは不要です。
+本格的な地図 UI は不要です。
 ただし、確認しやすいように最低限整えてください。
 
 方針:
 
-- 1 ページ構成のままにする
-- MapArea 作成フォームは認証・MapArea 一覧の近くに置く
-- GridCell 自動生成ボタンは選択中 MapArea の情報の近くに置く
-- テーブル表示は現状のままでよい
-- エラーや成功メッセージを画面に表示する
+- 既存の 1 ページ構成を維持
+- 簡易グリッドはテーブルの前に置くのがおすすめ
+- 各マスは小さくてもよいが、`id` と `calculated_score` は見えるようにする
+- マスが多い場合は横スクロールしてよい
 - 外部ライブラリは追加しない
+- Leaflet / Google Maps は使わない
 
 # README.md に追記・修正する内容
 
-README の demo ページ確認手順を更新してください。
+README の demo ページ確認手順を短く更新してください。
 
 最低限、次を含めてください。
 
-- demo ページで MapArea を作成できること
-- 作成した MapArea を選択できること
-- GridCell 自動生成ボタンを押せること
-- 生成後に GridCell 一覧が表示されること
-- そのまま score 入力と採点ができること
-- 既に GridCell がある MapArea で再生成すると `400 Bad Request` になること
-- JavaScript で Basic 認証情報を扱うため、本番向けではないこと
+- GridCell が簡易グリッド状または色付き表示で確認できること
+- `calculated_score` に応じて色が変わること
+- 採点後に再取得され、色も更新されること
 
 # テスト
 
@@ -211,8 +184,13 @@ README の demo ページ確認手順を更新してください。
 例:
 
 ```python
-self.assertContains(response, "MapArea を作成")
-self.assertContains(response, "GridCell を自動生成")
+self.assertContains(response, "Score Map")
+```
+
+JavaScript の詳細な表示ロジックは、Django の通常テストでは確認しにくいため、次の確認を行ってください。
+
+```bash
+node --check maps/static/maps/demo.js
 ```
 
 # 今回やらないこと
@@ -230,7 +208,7 @@ self.assertContains(response, "GridCell を自動生成")
 - React / Vue などのフロントエンドフレームワーク導入
 - 外部 API 連携
 - 地図画像表示
-- calculated_score による色分けグリッド表示
+- 実際の地図座標に合わせた正確な描画
 - 共有 MapArea の `is_public` 実装
 
 # 注意点
@@ -240,9 +218,9 @@ self.assertContains(response, "GridCell を自動生成")
 - 外部ライブラリは追加しないでください。
 - 共用 PC 前提なので、グローバル環境に依存しないでください。
 - demo ページは確認用であることが分かるようにしてください。
-- JavaScript で Basic 認証情報を扱うため、本番向けではないことを README に短く書いてください。
-- GridCell 自動生成 API は、作成者本人だけ実行できる現在の権限仕様を変えないでください。
-- 既に GridCell がある MapArea への再生成はエラーとして扱ってください。
+- calculated_score が 0 の GridCell も見えるようにしてください。
+- score が数値でない場合や null の場合でも表示が崩れないようにしてください。
+- row_index / col_index が欠けている場合でも、ページ全体が壊れないようにしてください。
 
 # 確認方法
 
@@ -251,6 +229,7 @@ self.assertContains(response, "GridCell を自動生成")
 ```bash
 .venv/bin/python manage.py test maps
 .venv/bin/python manage.py check
+node --check maps/static/maps/demo.js
 git diff -- maps/static/maps/demo.html maps/static/maps/demo.css maps/static/maps/demo.js README.md
 git diff --check -- maps/static/maps/demo.html maps/static/maps/demo.css maps/static/maps/demo.js README.md
 ```
@@ -280,8 +259,8 @@ http://127.0.0.1:8000/api/maps/demo/
 
 - 担当した役割
 - 変更したファイル
-- demo ページに追加した機能
-- demo ページで確認できる流れ
+- demo ページに追加した表示
+- 色分けルール
 - 実行した確認コマンド
 - 確認結果
 - 未対応のこと

@@ -372,6 +372,9 @@ class MapDemoViewTests(TestCase):
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertContains(response, "Map Demo")
+        self.assertContains(response, "MapArea を作成")
+        self.assertContains(response, "GridCell を自動生成")
+        self.assertContains(response, "Score Map")
 
 
 class MapAreaCreateViewTests(TestCase):
