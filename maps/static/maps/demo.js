@@ -22,6 +22,7 @@ const elements = {
   selectedAreaLabel: document.querySelector("#selected-area-label"),
   reloadGridsButton: document.querySelector("#reload-grids-button"),
   message: document.querySelector("#message"),
+  mapImageUrl: document.querySelector("#map-image-url"),
   scoreMapRatio: document.querySelector("#score-map-ratio"),
   scoreMap: document.querySelector("#score-map"),
   gridsBody: document.querySelector("#grids-body"),
@@ -114,6 +115,24 @@ function applyScoreMapAspectRatio() {
     ratio.toFixed(3)
   );
   elements.scoreMapRatio.textContent = `area ratio ${ratio.toFixed(2)}`;
+}
+
+function cssUrlValue(value) {
+  return `url("${value.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}")`;
+}
+
+function applyScoreMapBackgroundImage() {
+  const imageUrl = elements.mapImageUrl.value.trim();
+  const stage = elements.scoreMap.parentElement;
+
+  if (!imageUrl) {
+    stage.classList.remove("has-map-image");
+    stage.style.removeProperty("--score-map-image");
+    return;
+  }
+
+  stage.style.setProperty("--score-map-image", cssUrlValue(imageUrl));
+  stage.classList.add("has-map-image");
 }
 
 async function readJsonResponse(response) {
@@ -405,6 +424,7 @@ async function rateGrid(gridId) {
 elements.createAreaForm.addEventListener("submit", createArea);
 elements.loadAreasButton.addEventListener("click", loadAreas);
 elements.reloadGridsButton.addEventListener("click", loadGrids);
+elements.mapImageUrl.addEventListener("input", applyScoreMapBackgroundImage);
 
 elements.areasList.addEventListener("click", (event) => {
   const button = event.target.closest("[data-area-id]");
@@ -423,3 +443,5 @@ elements.gridsBody.addEventListener("click", (event) => {
 
   rateGrid(button.dataset.rateGrid);
 });
+
+applyScoreMapBackgroundImage();

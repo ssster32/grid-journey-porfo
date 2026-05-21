@@ -2,6 +2,7 @@ from django.contrib.staticfiles import finders
 from django.db import transaction
 from django.http import Http404, HttpResponse
 from rest_framework import status
+from rest_framework.authentication import TokenAuthentication
 from rest_framework.authentication import BasicAuthentication, SessionAuthentication
 from rest_framework.generics import get_object_or_404
 from rest_framework.permissions import IsAuthenticated
@@ -19,6 +20,13 @@ from .serializers import (
 from .services import generate_grid_cells_for_area, update_grid_cell_score
 
 
+API_AUTHENTICATION_CLASSES = [
+    TokenAuthentication,
+    BasicAuthentication,
+    SessionAuthentication,
+]
+
+
 class MapDemoView(APIView):
     def get(self, request):
         demo_path = finders.find("maps/demo.html")
@@ -30,7 +38,7 @@ class MapDemoView(APIView):
 
 
 class MapAreaListCreateView(APIView):
-    authentication_classes = [BasicAuthentication, SessionAuthentication]
+    authentication_classes = API_AUTHENTICATION_CLASSES
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
@@ -64,7 +72,7 @@ class MapAreaListCreateView(APIView):
 
 
 class MapAreaDetailView(APIView):
-    authentication_classes = [BasicAuthentication, SessionAuthentication]
+    authentication_classes = API_AUTHENTICATION_CLASSES
     permission_classes = [IsAuthenticated]
 
     def get(self, request, area_id):
@@ -77,7 +85,7 @@ class MapAreaDetailView(APIView):
 
 
 class GridRatingCreateView(APIView):
-    authentication_classes = [BasicAuthentication, SessionAuthentication]
+    authentication_classes = API_AUTHENTICATION_CLASSES
     permission_classes = [IsAuthenticated]
 
     def post(self, request, grid_id):
@@ -110,7 +118,7 @@ class GridRatingCreateView(APIView):
 
 
 class BulkGridRatingCreateView(APIView):
-    authentication_classes = [BasicAuthentication, SessionAuthentication]
+    authentication_classes = API_AUTHENTICATION_CLASSES
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
@@ -161,7 +169,7 @@ class BulkGridRatingCreateView(APIView):
 
 
 class GridCellListView(APIView):
-    authentication_classes = [BasicAuthentication, SessionAuthentication]
+    authentication_classes = API_AUTHENTICATION_CLASSES
     permission_classes = [IsAuthenticated]
 
     def get(self, request, area_id):

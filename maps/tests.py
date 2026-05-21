@@ -1,9 +1,11 @@
+import base64
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.urls import reverse
 from rest_framework import status
+from rest_framework.authtoken.models import Token
 from rest_framework.test import APIClient
 
 from .models import GridCell, GridRating, MapArea
@@ -378,9 +380,144 @@ class MapDemoViewTests(TestCase):
         self.assertNotContains(response, "GridCell を自動生成")
         self.assertContains(response, "GridCell を再取得")
         self.assertContains(response, "Score Map")
+        self.assertContains(response, "Map image URL")
         self.assertContains(response, "score-map-stage")
         self.assertContains(response, "score-map-background")
+        self.assertContains(response, "map-image-url")
         self.assertContains(response, "score-map-ratio")
+
+
+class TokenAuthenticationTests(TestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            username="testuser",
+            password="test-password",
+        )
+        self.other_user = get_user_model().objects.create_user(
+            username="otheruser",
+            password="other-password",
+        )
+        self.client = APIClient()
+        self.token_url = reverse("api-token-auth")
+        self.area_url = reverse("map-area-list-create")
+        self.valid_payload = {
+            "name": "Token Test Area",
+            "description": "created with token",
+            "north": 35.7,
+            "south": 35.6,
+            "east": 139.8,
+            "west": 139.7,
+            "grid_size_meters": 500,
+            "source": "token-test",
+        }
+
+    def token_credentials(self, user):
+        token, _ = Token.objects.get_or_create(user=user)
+        return {"HTTP_AUTHORIZATION": f"Token {token.key}"}
+
+    def basic_credentials(self, username, password):
+        raw_credentials = f"{username}:{password}".encode()
+        encoded_credentials = base64.b64encode(raw_credentials).decode()
+        return {"HTTP_AUTHORIZATION": f"Basic {encoded_credentials}"}
+
+    def test_valid_username_and_password_return_token(self):
+        response = self.client.post(
+            self.token_url,
+            {
+                "username": "testuser",
+                "password": "test-password",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("token", response.data)
+        self.assertEqual(response.data["token"], Token.objects.get(user=self.user).key)
+
+    def test_invalid_password_returns_400(self):
+        response = self.client.post(
+            self.token_url,
+            {
+                "username": "testuser",
+                "password": "wrong-password",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertNotIn("token", response.data)
+
+    def test_token_authentication_can_get_map_area_list(self):
+        own_area = MapArea.objects.create(
+            name="Own Token Area",
+            north=35.7,
+            south=35.6,
+            east=139.8,
+            west=139.7,
+            grid_size_meters=500,
+            created_by=self.user,
+        )
+
+        response = self.client.get(
+            self.area_url,
+            **self.token_credentials(self.user),
+        )
+        area_ids = [area["id"] for area in response.data["areas"]]
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn(own_area.id, area_ids)
+
+    def test_token_authentication_can_create_map_area(self):
+        response = self.client.post(
+            self.area_url,
+            self.valid_payload,
+            format="json",
+            **self.token_credentials(self.user),
+        )
+        area = MapArea.objects.get(id=response.data["id"])
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(area.created_by, self.user)
+        self.assertGreater(GridCell.objects.filter(area=area).count(), 0)
+
+    def test_token_authentication_keeps_created_by_view_restriction(self):
+        other_area = MapArea.objects.create(
+            name="Other Token Area",
+            north=35.7,
+            south=35.6,
+            east=139.8,
+            west=139.7,
+            grid_size_meters=500,
+            created_by=self.other_user,
+        )
+        detail_url = reverse("map-area-detail", kwargs={"area_id": other_area.id})
+
+        response = self.client.get(
+            detail_url,
+            **self.token_credentials(self.user),
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_basic_authentication_still_works(self):
+        own_area = MapArea.objects.create(
+            name="Own Basic Area",
+            north=35.7,
+            south=35.6,
+            east=139.8,
+            west=139.7,
+            grid_size_meters=500,
+            created_by=self.user,
+        )
+
+        response = self.client.get(
+            self.area_url,
+            **self.basic_credentials("testuser", "test-password"),
+        )
+        area_ids = [area["id"] for area in response.data["areas"]]
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn(own_area.id, area_ids)
 
 
 class MapAreaCreateViewTests(TestCase):

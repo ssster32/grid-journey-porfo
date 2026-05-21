@@ -28,6 +28,7 @@
 | `POST` | `/api/maps/grids/bulk-ratings/` | 複数グリッドをまとめて採点する | 必要 |
 | `GET` | `/api/maps/areas/{area_id}/grids/` | 点数付きグリッド一覧を取得する | 必要 |
 | `POST` | `/api/maps/areas/{area_id}/grids/` | 地図範囲からグリッドを自動生成する | 必要 |
+| `POST` | `/api/auth/token/` | Token 認証用 token を発行する | 不要 |
 
 未実装 API 候補:
 
@@ -37,12 +38,16 @@
 
 ## 認証
 
-現在実装済みの API はログイン必須です。
+現在実装済みの地図 API はログイン必須です。
 
 実装では各 view に次を設定しています。
 
 ```python
-authentication_classes = [BasicAuthentication, SessionAuthentication]
+authentication_classes = [
+    TokenAuthentication,
+    BasicAuthentication,
+    SessionAuthentication,
+]
 permission_classes = [IsAuthenticated]
 ```
 
@@ -52,9 +57,54 @@ permission_classes = [IsAuthenticated]
 - 権限は「その人が何をしてよいか」を確認する仕組みです。
 - `BasicAuthentication` は、ユーザー名とパスワードを使う認証方式です。
 - `SessionAuthentication` は、Django のログイン状態を使う認証方式です。
+- `TokenAuthentication` は、発行済み token を HTTP ヘッダーで送る認証方式です。
 
-新しい認証方式はまだ追加していません。
-Token 認証や JWT 認証を使うかどうかは未定です。
+現在は Basic 認証、Session 認証、Token 認証を併用します。
+Basic 認証は開発確認用として当面残します。
+JWT 認証はまだ実装しません。
+
+### Token 発行 API
+
+```text
+POST /api/auth/token/
+```
+
+username/password から Token 認証用 token を発行します。
+
+#### リクエスト
+
+```json
+{
+  "username": "testuser",
+  "password": "test-password"
+}
+```
+
+#### レスポンス
+
+```json
+{
+  "token": "xxxxxxxxxxxxxxxx"
+}
+```
+
+#### ステータスコード
+
+| 状況 | ステータス |
+| --- | --- |
+| token 発行成功 | `200 OK` |
+| username/password が不正 | `400 Bad Request` |
+
+#### Token 認証ヘッダー
+
+Token 認証で既存 API を呼ぶ場合は、次の HTTP ヘッダーを送ります。
+
+```http
+Authorization: Token <TOKEN>
+```
+
+created_by ベースの権限チェックは、認証方式に関係なく同じです。
+Basic 認証でも Token 認証でも、`request.user` が `MapArea.created_by` と一致するかで閲覧・採点可否を判断します。
 
 ## 実装済み: 採点 API の権限
 
@@ -529,8 +579,8 @@ GET /api/maps/areas/{area_id}/grids/
 - demo ページの Score Map では、`calculated_score` を各マスのメイン表示に使います。
 - `GridCell ID` と `row_index` / `col_index` は、現在は確認用に小さく表示します。
 - demo ページでは、MapArea の `north`, `south`, `east`, `west` を使って Score Map の概算縦横比を決めます。
-- 将来的には地図背景の上に Score Map を重ねる想定です。
-- 現時点では地図背景の取得・表示は行いません。
+- demo ページでは、任意の画像 URL を Score Map の背景として指定できます。
+- 背景画像指定は表示確認用であり、画像アップロードや外部地図 API 連携は行いません。
 - 現時点では正確な地図投影は行わず、`row_index` / `col_index` による簡易グリッド配置を維持します。
 - この表示改善では API レスポンス形式は変更しません。
 

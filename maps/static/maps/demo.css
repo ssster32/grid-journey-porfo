@@ -245,7 +245,19 @@ label {
 .score-map-tools {
   display: grid;
   justify-items: end;
-  gap: 6px;
+  gap: 8px;
+}
+
+.map-image-field {
+  width: min(320px, 100%);
+  margin: 0;
+  color: var(--muted);
+  text-align: left;
+}
+
+.map-image-field input {
+  min-height: 36px;
+  font-size: 0.88rem;
 }
 
 .score-map-ratio {
@@ -290,6 +302,15 @@ label {
   background-size: auto, 32px 32px, 32px 32px;
 }
 
+.score-map-stage.has-map-image .score-map-background {
+  background:
+    linear-gradient(rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0.16)),
+    var(--score-map-image);
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: 100% 100%;
+}
+
 .score-map {
   position: relative;
   display: grid;
@@ -313,7 +334,6 @@ label {
   color: var(--text);
   font-size: 0.86rem;
   text-align: center;
-  opacity: 0.88;
 }
 
 .score-value {
@@ -322,6 +342,7 @@ label {
   line-height: 1;
   font-weight: 900;
   letter-spacing: 0;
+  text-shadow: 0 1px 2px rgba(255, 255, 255, 0.72);
 }
 
 .score-meta {
@@ -333,20 +354,24 @@ label {
 }
 
 .score-low {
-  background: var(--score-low);
+  background: rgba(219, 231, 239, 0.76);
 }
 
 .score-middle {
-  background: var(--score-middle);
+  background: rgba(255, 241, 184, 0.76);
 }
 
 .score-high {
-  background: var(--score-high);
+  background: rgba(191, 231, 196, 0.76);
 }
 
 .score-very-high {
-  background: var(--score-very-high);
+  background: rgba(23, 111, 92, 0.82);
   color: #ffffff;
+}
+
+.score-very-high .score-value {
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.42);
 }
 
 .score-very-high .score-meta {

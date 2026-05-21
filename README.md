@@ -63,10 +63,11 @@ deactivate
 
 ## 実装済み API の手動確認
 
-ここでは、ローカル開発用 DB に確認用データを作り、実装済みの採点 API を `curl` で確認します。
+ここでは、ローカル開発用 DB に確認用ユーザーを作り、実装済み API を `curl` で確認します。
 
 `curl` はターミナルから API にリクエストを送るためのコマンドです。
 `-u testuser:test-password` は Basic 認証で、ユーザー名とパスワードを送る指定です。
+Token 認証を使う場合は、先に token を発行し、`Authorization: Token <TOKEN>` ヘッダーを送ります。
 
 ### 1. 事前準備
 
@@ -77,7 +78,7 @@ source .venv/bin/activate
 python manage.py migrate
 ```
 
-確認用ユーザー、地図範囲、グリッドを作成します。
+確認用ユーザーを作成します。
 すでに同じユーザーがある場合は再利用します。
 
 ```bash
@@ -88,7 +89,6 @@ python manage.py shell
 
 ```python
 from django.contrib.auth import get_user_model
-from maps.models import GridCell, MapArea
 
 User = get_user_model()
 user, _ = User.objects.get_or_create(
@@ -97,49 +97,9 @@ user, _ = User.objects.get_or_create(
 )
 user.set_password("test-password")
 user.save()
-
-area, _ = MapArea.objects.get_or_create(
-    name="Manual Test Area",
-    defaults={
-        "north": 35.7,
-        "south": 35.6,
-        "east": 139.8,
-        "west": 139.7,
-        "grid_size_meters": 500,
-        "created_by": user,
-    },
-)
-grid1, _ = GridCell.objects.get_or_create(
-    area=area,
-    row_index=0,
-    col_index=0,
-    defaults={
-        "north": 35.7,
-        "south": 35.69,
-        "east": 139.8,
-        "west": 139.79,
-        "initial_score": 3,
-    },
-)
-grid2, _ = GridCell.objects.get_or_create(
-    area=area,
-    row_index=0,
-    col_index=1,
-    defaults={
-        "north": 35.7,
-        "south": 35.69,
-        "east": 139.79,
-        "west": 139.78,
-        "initial_score": 7,
-    },
-)
 print("user:", user.username)
-print("area_id:", area.id)
-print("grid1_id:", grid1.id)
-print("grid2_id:", grid2.id)
 ```
 
-表示された `area_id`、`grid1_id`、`grid2_id` を、次の確認コマンドの `<AREA_ID>`、`<GRID1_ID>`、`<GRID2_ID>` に置き換えてください。
 確認が終わったら、`exit()` で shell を終了します。
 
 別のターミナルを開き、開発サーバーを起動します。
@@ -149,7 +109,73 @@ source .venv/bin/activate
 python manage.py runserver
 ```
 
-### 2. 単体採点 API
+### 2. Token 認証の確認
+
+このプロジェクトでは、Basic 認証と Session 認証に加えて、DRF の Token 認証も使えます。
+Token 認証を追加した後は、Token 用テーブルを作るために `python manage.py migrate` が必要です。
+上の事前準備で `migrate` 済みなら、ここで追加実行しなくても大丈夫です。
+
+まず token を発行します。
+
+```bash
+curl -i \
+  -H "Content-Type: application/json" \
+  -X POST http://127.0.0.1:8000/api/auth/token/ \
+  -d '{"username": "testuser", "password": "test-password"}'
+```
+
+正常な username/password なら `200 OK` が返り、レスポンスに `token` が含まれます。
+返ってきた token を、以降の `<TOKEN>` に置き換えてください。
+
+Token 認証で MapArea 一覧 API を呼びます。
+
+```bash
+curl -i \
+  -H "Authorization: Token <TOKEN>" \
+  http://127.0.0.1:8000/api/maps/areas/
+```
+
+正常に認証できた場合は `200 OK` が返ります。
+Basic 認証も当面残しているため、以降の手順は `-u testuser:test-password` のままでも確認できます。
+
+### 3. MapArea 作成 API と GridCell 自動生成
+
+MapArea を作成します。
+現在の仕様では、MapArea 作成後に GridCell も自動生成されます。
+
+```bash
+curl -i -u testuser:test-password \
+  -H "Content-Type: application/json" \
+  -X POST http://127.0.0.1:8000/api/maps/areas/ \
+  -d '{"name": "Manual Test Area", "description": "manual curl test", "north": 35.7, "south": 35.69, "east": 139.8, "west": 139.79, "grid_size_meters": 500, "source": "manual"}'
+```
+
+Token 認証で確認する場合は、次の形でも同じ API を呼べます。
+
+```bash
+curl -i \
+  -H "Authorization: Token <TOKEN>" \
+  -H "Content-Type: application/json" \
+  -X POST http://127.0.0.1:8000/api/maps/areas/ \
+  -d '{"name": "Manual Token Area", "description": "manual token test", "north": 35.7, "south": 35.69, "east": 139.8, "west": 139.79, "grid_size_meters": 500, "source": "manual"}'
+```
+
+正常に作成できた場合は `201 Created` が返ります。
+レスポンスの `id` を、以降の `<AREA_ID>` に置き換えてください。
+
+次に、作成された MapArea の GridCell 一覧を取得します。
+
+```bash
+curl -i -u testuser:test-password \
+  http://127.0.0.1:8000/api/maps/areas/<AREA_ID>/grids/
+```
+
+正常に取得できた場合は `200 OK` が返ります。
+`grids` に含まれる先頭 2 件の `id` を、以降の `<GRID1_ID>`、`<GRID2_ID>` に置き換えてください。
+
+GridCell が返ることを確認することで、MapArea 作成時の GridCell 自動生成も確認できます。
+
+### 4. 単体採点 API
 
 1 つのグリッドに点数を付けます。
 
@@ -165,7 +191,7 @@ curl -i -u testuser:test-password \
 
 レスポンスには、作成または更新された `rating` と、再集計後の `grid` が含まれます。
 
-### 3. 一括採点 API
+### 5. 一括採点 API
 
 複数のグリッドに同じ点数をまとめて付けます。
 
@@ -181,54 +207,24 @@ curl -i -u testuser:test-password \
 
 レスポンスには、再集計後の `grids` 一覧が含まれます。
 
-### 4. GridCell 自動生成 API
+### 6. GridCell 自動生成 API
 
 指定した地図範囲から、グリッドを自動生成します。
 
 通常の MapArea 作成 API では、MapArea 作成後に GridCell も自動生成されます。
 この確認手順では、既に GridCell がある場合に自動生成 API が `400 Bad Request` を返すことを確認できます。
 
-事前準備で作った `Manual Test Area` には確認用グリッドがすでにあるため、自動生成 API の確認用にグリッドが 0 件の `MapArea` を別に作ります。
-
-```bash
-python manage.py shell
-```
-
-`>>>` が表示されたら、次の Python コードを貼り付けます。
-
-```python
-from django.contrib.auth import get_user_model
-from maps.models import MapArea
-
-User = get_user_model()
-user = User.objects.get(username="testuser")
-area = MapArea.objects.create(
-    name="Auto Grid Test Area",
-    north=35.7,
-    south=35.69,
-    east=139.8,
-    west=139.79,
-    grid_size_meters=500,
-    created_by=user,
-)
-print("auto_area_id:", area.id)
-```
-
-表示された `auto_area_id` を、次の `<AUTO_AREA_ID>` に置き換えてください。
-確認が終わったら、`exit()` で shell を終了します。
+`<AREA_ID>` は、MapArea 作成 API で返った `id` に置き換えてください。
 
 ```bash
 curl -i -u testuser:test-password \
-  -X POST http://127.0.0.1:8000/api/maps/areas/<AUTO_AREA_ID>/grids/
+  -X POST http://127.0.0.1:8000/api/maps/areas/<AREA_ID>/grids/
 ```
 
-正常に生成できた場合は `201 Created` が返ります。
-レスポンスには `area` と、生成された `grids` 一覧が含まれます。
-
-同じコマンドをもう一度実行すると、既に `GridCell` があるため `400 Bad Request` になります。
+MapArea 作成時点ですでに GridCell があるため、`400 Bad Request` が返ります。
 これは、重複生成で既存の採点や集計値を壊さないための動きです。
 
-### 5. 点数付きグリッド一覧 API
+### 7. 点数付きグリッド一覧 API
 
 指定した地図範囲に属するグリッド一覧を、点数付きで取得します。
 
@@ -272,7 +268,7 @@ curl -i -u testuser:test-password \
 この API は保存済みの集計値を読むだけです。
 新しく採点したい場合は、単体採点 API または一括採点 API を使います。
 
-### 6. MapArea 閲覧制限の確認
+### 8. MapArea 閲覧制限の確認
 
 `MapArea` は作成者本人だけが一覧・詳細・グリッド一覧で閲覧できます。
 別ユーザーで同じ `area_id` を指定すると、詳細とグリッド一覧は `404 Not Found` になります。
@@ -297,7 +293,7 @@ print("user:", other_user.username)
 
 確認が終わったら、`exit()` で shell を終了します。
 
-`<AREA_ID>` は、事前準備で表示された `area_id` に置き換えてください。
+`<AREA_ID>` は、MapArea 作成 API で返った `id` に置き換えてください。
 
 ```bash
 curl -i -u otheruser:other-password \
@@ -321,9 +317,9 @@ curl -i -u otheruser:other-password \
 
 グリッド一覧も同じく、`404 Not Found` が返ります。
 
-### 7. 他ユーザーでは採点できないことの確認
+### 9. 他ユーザーでは採点できないことの確認
 
-`<GRID1_ID>` と `<GRID2_ID>` は、事前準備で表示された `grid1_id`、`grid2_id` に置き換えてください。
+`<GRID1_ID>` と `<GRID2_ID>` は、GridCell 一覧 API の `grids` に含まれる `id` に置き換えてください。
 
 ```bash
 curl -i -u otheruser:other-password \
@@ -344,7 +340,7 @@ curl -i -u otheruser:other-password \
 一括採点でも同じく、他ユーザーの `GridCell` が含まれるため `400 Bad Request` が返ります。
 この場合、一部だけ採点されることはありません。
 
-### 8. エラー確認
+### 10. エラー確認
 
 ログイン情報を付けずに送ると、ログイン必須のため `401 Unauthorized` になります。
 
@@ -418,7 +414,11 @@ password: test-password
 7. `calculated_score` に応じて `Score Map` のマス色も更新されることを確認する。
 
 `Score Map` は、将来の地図背景に重ねる想定で、一枚の地図状の四角として表示します。
-現時点では地図背景は表示せず、`calculated_score` を大きく表示します。
+`Map image URL` に画像 URL を入力すると、Score Map の背景として表示できます。
+例えば `maps/static/maps/demo-map.png` に確認用画像を置いた場合は、`/static/maps/demo-map.png` と入力します。
+画像アップロードや外部地図 API 連携は行わず、ブラウザで読み込める画像 URL を表示に使うだけです。
+地図画像を使う場合は、利用条件や著作権を確認してください。
+`calculated_score` は大きく表示します。
 `GridCell ID` と `row_index` / `col_index` は、現在は確認用に小さく表示しています。
 表示領域の縦横比は、MapArea の `east - west` と `north - south` から概算します。
 ただし、正確な地図投影ではなく、row/col による簡易グリッド配置は維持しています。
