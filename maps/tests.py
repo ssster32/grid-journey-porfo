@@ -380,6 +380,7 @@ class MapDemoViewTests(TestCase):
         self.assertContains(response, "Score Map")
         self.assertContains(response, "score-map-stage")
         self.assertContains(response, "score-map-background")
+        self.assertContains(response, "score-map-ratio")
 
 
 class MapAreaCreateViewTests(TestCase):

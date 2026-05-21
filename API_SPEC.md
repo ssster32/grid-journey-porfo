@@ -528,8 +528,10 @@ GET /api/maps/areas/{area_id}/grids/
 
 - demo ページの Score Map では、`calculated_score` を各マスのメイン表示に使います。
 - `GridCell ID` と `row_index` / `col_index` は、現在は確認用に小さく表示します。
+- demo ページでは、MapArea の `north`, `south`, `east`, `west` を使って Score Map の概算縦横比を決めます。
 - 将来的には地図背景の上に Score Map を重ねる想定です。
 - 現時点では地図背景の取得・表示は行いません。
+- 現時点では正確な地図投影は行わず、`row_index` / `col_index` による簡易グリッド配置を維持します。
 - この表示改善では API レスポンス形式は変更しません。
 
 ### GridCell 自動生成 API

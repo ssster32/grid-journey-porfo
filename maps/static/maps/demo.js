@@ -1,6 +1,7 @@
 const state = {
   selectedAreaId: null,
   selectedAreaName: "",
+  areasById: new Map(),
 };
 
 const elements = {
@@ -21,9 +22,14 @@ const elements = {
   selectedAreaLabel: document.querySelector("#selected-area-label"),
   reloadGridsButton: document.querySelector("#reload-grids-button"),
   message: document.querySelector("#message"),
+  scoreMapRatio: document.querySelector("#score-map-ratio"),
   scoreMap: document.querySelector("#score-map"),
   gridsBody: document.querySelector("#grids-body"),
 };
+
+const FALLBACK_AREA_ASPECT_RATIO = 1.4;
+const MIN_AREA_ASPECT_RATIO = 0.6;
+const MAX_AREA_ASPECT_RATIO = 2.2;
 
 function authHeaders(extraHeaders = {}) {
   const username = elements.username.value.trim();
@@ -78,6 +84,38 @@ function scoreClass(score) {
   return "score-low";
 }
 
+function clamp(value, min, max) {
+  return Math.min(Math.max(value, min), max);
+}
+
+function mapAreaAspectRatio(area) {
+  if (!area) {
+    return FALLBACK_AREA_ASPECT_RATIO;
+  }
+
+  const width = Number(area.east) - Number(area.west);
+  const height = Number(area.north) - Number(area.south);
+
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+    return FALLBACK_AREA_ASPECT_RATIO;
+  }
+
+  return clamp(width / height, MIN_AREA_ASPECT_RATIO, MAX_AREA_ASPECT_RATIO);
+}
+
+function selectedArea() {
+  return state.areasById.get(state.selectedAreaId) || null;
+}
+
+function applyScoreMapAspectRatio() {
+  const ratio = mapAreaAspectRatio(selectedArea());
+  elements.scoreMap.parentElement.style.setProperty(
+    "--score-map-aspect-ratio",
+    ratio.toFixed(3)
+  );
+  elements.scoreMapRatio.textContent = `area ratio ${ratio.toFixed(2)}`;
+}
+
 async function readJsonResponse(response) {
   const text = await response.text();
   if (!text) {
@@ -116,6 +154,8 @@ async function apiFetch(url, options = {}) {
 }
 
 function renderAreas(areas) {
+  state.areasById = new Map(areas.map((area) => [Number(area.id), area]));
+
   if (!areas.length) {
     elements.areasList.textContent = "MapArea がありません。";
     return;
@@ -151,6 +191,7 @@ function readAreaForm() {
 }
 
 function renderEmptyGrids(message) {
+  applyScoreMapAspectRatio();
   elements.scoreMap.textContent = message;
   elements.scoreMap.style.setProperty("--score-map-cols", 1);
   elements.scoreMap.style.setProperty("--score-map-rows", 1);
@@ -163,6 +204,8 @@ function renderEmptyGrids(message) {
 }
 
 function renderScoreMap(grids) {
+  applyScoreMapAspectRatio();
+
   const positionedGrids = grids.filter((grid) => {
     return Number.isInteger(Number(grid.row_index)) && Number.isInteger(Number(grid.col_index));
   });

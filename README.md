@@ -420,6 +420,8 @@ password: test-password
 `Score Map` は、将来の地図背景に重ねる想定で、一枚の地図状の四角として表示します。
 現時点では地図背景は表示せず、`calculated_score` を大きく表示します。
 `GridCell ID` と `row_index` / `col_index` は、現在は確認用に小さく表示しています。
+表示領域の縦横比は、MapArea の `east - west` と `north - south` から概算します。
+ただし、正確な地図投影ではなく、row/col による簡易グリッド配置は維持しています。
 
 demo ページでは、MapArea 作成時に GridCell が自動生成される前提のため、GridCell 自動生成 API を直接実行するボタンは表示していません。
 

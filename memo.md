@@ -53,6 +53,8 @@
 - `maps/static/maps/demo.html`
 - `maps/static/maps/demo.css`
 - `maps/static/maps/demo.js`
+- `API_SPEC.md`
+- `memo.md`
 
 直近の主なコミット:
 
@@ -131,7 +133,8 @@ POST /api/maps/areas/
 
 - ログイン中ユーザーで `MapArea` を作成する。
 - `created_by` はリクエストから受け取らず、サーバー側で `request.user` を入れる。
-- `GridCell` の自動生成はしない。
+- 作成後、同じ transaction 内で `generate_grid_cells_for_area(area)` を呼び、`GridCell` も自動生成する。
+- GridCell 生成に失敗した場合、MapArea だけが保存される状態にはしない。
 
 ### MapArea 一覧 API
 
@@ -225,7 +228,7 @@ demo ページ自体は認証なしで表示できる。
 - MapArea 作成。
 - MapArea 一覧取得。
 - MapArea 選択。
-- GridCell 自動生成。
+- MapArea 作成後の GridCell 自動生成。
 - GridCell 一覧取得。
 - 単体採点。
 - 採点後の GridCell 一覧再取得。
@@ -233,8 +236,11 @@ demo ページ自体は認証なしで表示できる。
 
 Score Map:
 
-- `row_index` / `col_index` に対応した簡易グリッド表示。
-- 各マスに `GridCell ID`、`row/col`、`calculated_score` を表示。
+- 将来の地図背景に重ねる想定の、一枚の地図状の四角として表示。
+- `MapArea.east - MapArea.west` と `MapArea.north - MapArea.south` から概算した縦横比を反映する。
+- 正確な地図投影や外部地図表示はまだ行わない。
+- `row_index` / `col_index` に対応した簡易グリッド配置は維持。
+- 各マスは `calculated_score` を大きく表示し、`GridCell ID`、`row/col` は確認用に小さく表示。
 - テーブルの `calculated_score` にも色付きバッジを表示。
 
 色分け:
@@ -248,9 +254,9 @@ Score Map:
 
 注意:
 
-- MapArea 作成 API 自体は、現在も `MapArea` だけを作成する。
-- demo ページでは、作成後に必要に応じて `GridCell を自動生成` ボタンを押す。
-- API 本体は「MapArea 作成時に GridCell も自動生成する」仕様にはしていない。
+- MapArea 作成 API は、MapArea 作成後に GridCell も自動生成する。
+- demo ページには `GridCell を自動生成` ボタンは表示しない。
+- demo ページでは `GridCell を再取得` ボタンで表示を更新できる。
 - 外部ライブラリ、React、Vue、Leaflet、Google Maps は使っていない。
 
 ## API_SPEC.md の状態
@@ -283,7 +289,8 @@ Score Map:
 - `otheruser` で `testuser` の `MapArea` を見ようとすると、一覧では出ず、詳細とグリッド一覧は `404 Not Found` になる確認。
 - 他ユーザーでは単体採点 API と一括採点 API を実行できないことの確認。
 - 確認用 demo ページの使い方。
-- demo ページで MapArea 作成、GridCell 自動生成、採点、Score Map の色更新を確認する手順。
+- demo ページで MapArea 作成、GridCell 自動生成済み Score Map 表示、採点、Score Map の色更新を確認する手順。
+- Score Map を一枚の地図状の四角として表示し、MapArea bounds から概算縦横比を反映する説明。
 
 ## テスト
 
@@ -312,7 +319,7 @@ Score Map:
 結果:
 
 ```text
-Ran 89 tests
+Ran 94 tests
 OK
 ```
 
@@ -356,12 +363,13 @@ node --check maps/static/maps/demo.js
 .venv/bin/python manage.py runserver 127.0.0.1:8001
 curl -s http://127.0.0.1:8001/api/maps/demo/
 curl -I http://127.0.0.1:8001/static/maps/demo.js
+curl -I http://127.0.0.1:8001/static/maps/demo.css
 ```
 
 結果:
 
 ```text
-demo ページの HTML と demo.js が返ることを確認済み
+demo ページの HTML、demo.js、demo.css が返ることを確認済み
 確認用サーバーは停止済み
 ```
 
@@ -402,7 +410,7 @@ demo ページを開く
 → username/password を入力
 → MapArea を作成
 → 作成した MapArea を選択
-→ GridCell を自動生成
+→ 自動生成済み GridCell を再取得
 → Score Map と GridCell テーブルを確認
 → GridCell に score を入力して採点
 → calculated_score と色分け表示が更新されることを確認
@@ -411,8 +419,28 @@ demo ページを開く
 ユーザーへの説明済み:
 
 - マス表示は demo ページ右側の `Score Map` に出る。
-- `GridCell を自動生成` 後、または GridCell 一覧取得後に表示される。
+- MapArea 作成後、または GridCell 一覧取得後に表示される。
 - `Score Map` が「GridCell はまだ表示されていません。」の場合は、対象 MapArea に GridCell がない。
+- `Score Map` はマス間の gap をなくし、一枚の地図状の面として表示する。
+- score 値を主役にし、ID と row/col は確認用に小さく表示する。
+- Score Map には将来の地図背景用に `score-map-background` レイヤーを用意済み。
+- 表示領域の縦横比は MapArea の緯度経度範囲から概算する。
+- ただし、外部地図 API、地図画像、正確な地図投影はまだ実装していない。
+
+## 2026-05-21 demo ページ手動確認結果
+
+ユーザー確認で、demo ページの最新表示が期待通り動作することを確認済み。
+
+確認済み:
+
+- MapArea 作成後に GridCell が自動生成される。
+- demo ページには `GridCell を自動生成` ボタンを表示しない。
+- `GridCell を再取得` で Score Map と GridCell 一覧を更新できる。
+- Score Map は一枚の大きな四角として表示される。
+- `calculated_score` が各マスのメイン表示になる。
+- `GridCell ID` と `row_index` / `col_index` は確認用に小さく表示される。
+- MapArea の緯度経度範囲から概算した `area ratio` が表示される。
+- 採点後、`calculated_score` と色分け表示が更新される。
 
 ## 現在未対応
 
@@ -424,9 +452,9 @@ demo ページを開く
 - ページネーション。
 - 地図表示範囲による絞り込み。
 - Token 認証 / JWT 認証の検討。
-- MapArea 作成時に GridCell も自動生成する API 仕様にするかどうかの検討。
 - 共有 MapArea の `is_public` 実装。
 - Score Map を実際の地図座標に合わせて正確に描画すること。
+- 外部地図 API や地図画像を Score Map 背景として表示すること。
 
 ## 次にやるとよい作業
 
@@ -434,9 +462,9 @@ demo ページを開く
 
 1. `TASK.md` を今日の完了状態に整理する。
 2. 現在の差分を確認して、必要ならコミットする。
-3. demo ページで MapArea 作成後に GridCell 自動生成 API も自動で呼ぶか検討する。
+3. README の手動確認結果を必要に応じて追記する。
 4. 共有 MapArea の `is_public` 実装に進むか、MapArea 更新 / 削除 API に進むか決める。
-5. Score Map の見た目をもう少し地図らしくするか検討する。
+5. 外部地図背景、正確な地図投影、Token/JWT 認証のどれを次に扱うか決める。
 
 ## 作業時の注意
 
