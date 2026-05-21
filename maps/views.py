@@ -59,7 +59,11 @@ class GridRatingCreateView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request, grid_id):
-        grid = get_object_or_404(GridCell, id=grid_id)
+        grid = get_object_or_404(
+            GridCell,
+            id=grid_id,
+            area__created_by=request.user,
+        )
         serializer = GridRatingCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
@@ -92,8 +96,20 @@ class BulkGridRatingCreateView(APIView):
         serializer.is_valid(raise_exception=True)
 
         grid_ids = serializer.validated_data["grid_ids"]
-        grids = GridCell.objects.filter(id__in=grid_ids)
+        grids = GridCell.objects.filter(
+            id__in=grid_ids,
+            area__created_by=request.user,
+        )
         grids_by_id = {grid.id: grid for grid in grids}
+        if len(grids_by_id) != len(grid_ids):
+            return Response(
+                {
+                    "grid_ids": [
+                        "存在しない、または採点権限がない GridCell ID が含まれています。"
+                    ],
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         ordered_grids = [grids_by_id[grid_id] for grid_id in grid_ids]
 
         has_updated_rating = False

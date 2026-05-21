@@ -56,6 +56,35 @@ permission_classes = [IsAuthenticated]
 新しい認証方式はまだ追加していません。
 Token 認証や JWT 認証を使うかどうかは未定です。
 
+## 実装済み: 採点 API の権限
+
+単体採点 API と一括採点 API では、`GridCell.area.created_by` を使って採点できる対象を制限します。
+
+採点できるのは、ログイン中ユーザーが作成した `MapArea` に属する `GridCell` だけです。
+
+| 状況 | 結果 |
+| --- | --- |
+| 未ログイン | `401 Unauthorized` |
+| `GridCell.area.created_by == request.user` | 採点許可 |
+| `GridCell.area.created_by != request.user` | 採点不可 |
+| `GridCell.area.created_by is None` | 採点不可 |
+
+他ユーザーが作成した `MapArea` に属する `GridCell` や、`created_by` が `null` の `MapArea` に属する `GridCell` は採点できません。
+
+単体採点 API では、採点不可の `GridCell` は存在しないものとして扱い、`404 Not Found` を返します。
+一括採点 API では、採点不可の ID が 1 件でも含まれる場合、存在しない ID が含まれる場合と同じく、全体を `400 Bad Request` にします。
+
+一括採点 API は、一部だけ採点して成功にはしません。
+すべての `grid_ids` がログイン中ユーザーの `MapArea` に属している場合だけ、採点と点数再集計を実行します。
+
+実装では、単体採点 API は次のように対象を絞ります。
+
+```python
+grid = get_object_or_404(GridCell, id=grid_id, area__created_by=request.user)
+```
+
+一括採点 API は、指定された `grid_ids` を `area__created_by=request.user` で絞り、取得できた件数が入力 ID 数と一致する場合だけ処理します。
+
 ## 設計中: MapArea の閲覧権限
 
 現在の MapArea 一覧 API、MapArea 詳細 API、点数付きグリッド一覧 API は、ログイン済みであれば他ユーザーが作成した `MapArea` も取得できる状態です。
@@ -193,6 +222,12 @@ POST /api/maps/grids/{grid_id}/ratings/
 `grid` と `user` はリクエストボディでは受け取りません。
 `grid` は URL の `grid_id` から、`user` はログイン中ユーザーからサーバー側で決めます。
 
+#### 権限
+
+採点できるのは、自分が作成した `MapArea` に属する `GridCell` だけです。
+
+他ユーザーが作成した `MapArea` に属する `GridCell` や、`created_by` が `null` の `MapArea` に属する `GridCell` は、存在しないものとして扱い `404 Not Found` を返します。
+
 #### レスポンス
 
 ```json
@@ -232,6 +267,8 @@ POST /api/maps/grids/{grid_id}/ratings/
 | 既存採点を更新した | `200 OK` |
 | 未ログイン | `401 Unauthorized` |
 | `grid_id` が存在しない | `404 Not Found` |
+| 他ユーザーの `GridCell` を指定した | `404 Not Found` |
+| `created_by` が `null` の `MapArea` に属する `GridCell` を指定した | `404 Not Found` |
 | `score` が範囲外 | `400 Bad Request` |
 | `score` がない | `400 Bad Request` |
 
@@ -269,6 +306,15 @@ POST /api/maps/grids/bulk-ratings/
 
 `grid_ids` に重複がある場合、重複は取り除いて 1 回だけ処理します。
 `grid_ids` に存在しない ID が 1 つでも含まれる場合は、全体を `400 Bad Request` にします。
+
+#### 権限
+
+採点できるのは、自分が作成した `MapArea` に属する `GridCell` だけです。
+
+`grid_ids` に他ユーザーの `GridCell` や、`created_by` が `null` の `MapArea` に属する `GridCell` が 1 件でも含まれる場合は、全体を `400 Bad Request` にします。
+
+一括採点 API では、一部だけ採点して成功にはしません。
+すべての `grid_ids` が採点可能な場合だけ、`GridRating` の作成または更新と `GridCell` の点数再集計を実行します。
 
 #### レスポンス
 
@@ -318,6 +364,8 @@ POST /api/maps/grids/bulk-ratings/
 | 未ログイン | `401 Unauthorized` |
 | `grid_ids` が空 | `400 Bad Request` |
 | `grid_ids` に存在しない ID がある | `400 Bad Request` |
+| `grid_ids` に他ユーザーの `GridCell` がある | `400 Bad Request` |
+| `grid_ids` に `created_by` が `null` の `MapArea` に属する `GridCell` がある | `400 Bad Request` |
 | `score` が範囲外 | `400 Bad Request` |
 | `score` がない | `400 Bad Request` |
 

@@ -790,6 +790,104 @@ class GridRatingCreateViewTests(SerializerTestDataMixin, TestCase):
 
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
+    def test_other_users_grid_returns_404(self):
+        other_user = get_user_model().objects.create_user(
+            username="otheruser",
+            password="test-password",
+        )
+        other_area = MapArea.objects.create(
+            name="Other User Area",
+            north=36.7,
+            south=36.6,
+            east=140.8,
+            west=140.7,
+            grid_size_meters=1000,
+            created_by=other_user,
+        )
+        other_grid = GridCell.objects.create(
+            area=other_area,
+            row_index=0,
+            col_index=0,
+            north=36.7,
+            south=36.69,
+            east=140.8,
+            west=140.79,
+            initial_score=9,
+        )
+        self.client.force_authenticate(user=self.user)
+        url = reverse("grid-rating-create", kwargs={"grid_id": other_grid.id})
+
+        response = self.client.post(url, {"score": 8}, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(GridRating.objects.count(), 0)
+
+    def test_grid_without_area_creator_returns_404(self):
+        no_creator_area = MapArea.objects.create(
+            name="No Creator Area",
+            north=36.7,
+            south=36.6,
+            east=140.8,
+            west=140.7,
+            grid_size_meters=1000,
+            created_by=None,
+        )
+        no_creator_grid = GridCell.objects.create(
+            area=no_creator_area,
+            row_index=0,
+            col_index=0,
+            north=36.7,
+            south=36.69,
+            east=140.8,
+            west=140.79,
+            initial_score=9,
+        )
+        self.client.force_authenticate(user=self.user)
+        url = reverse("grid-rating-create", kwargs={"grid_id": no_creator_grid.id})
+
+        response = self.client.post(url, {"score": 8}, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(GridRating.objects.count(), 0)
+
+    def test_unauthorized_grid_does_not_update_score_fields(self):
+        other_user = get_user_model().objects.create_user(
+            username="otheruser",
+            password="test-password",
+        )
+        other_area = MapArea.objects.create(
+            name="Other User Area",
+            north=36.7,
+            south=36.6,
+            east=140.8,
+            west=140.7,
+            grid_size_meters=1000,
+            created_by=other_user,
+        )
+        other_grid = GridCell.objects.create(
+            area=other_area,
+            row_index=0,
+            col_index=0,
+            north=36.7,
+            south=36.69,
+            east=140.8,
+            west=140.79,
+            initial_score=9,
+            average_user_score=2,
+            rating_count=3,
+            calculated_score=5.5,
+        )
+        self.client.force_authenticate(user=self.user)
+        url = reverse("grid-rating-create", kwargs={"grid_id": other_grid.id})
+
+        response = self.client.post(url, {"score": 8}, format="json")
+        other_grid.refresh_from_db()
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(other_grid.average_user_score, 2)
+        self.assertEqual(other_grid.rating_count, 3)
+        self.assertEqual(other_grid.calculated_score, 5.5)
+
     def test_invalid_score_returns_400(self):
         self.client.force_authenticate(user=self.user)
 
@@ -928,6 +1026,154 @@ class BulkGridRatingCreateViewTests(SerializerTestDataMixin, TestCase):
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("grid_ids", response.data)
         self.assertEqual(GridRating.objects.count(), 0)
+
+    def test_other_users_grid_id_returns_400(self):
+        other_user = get_user_model().objects.create_user(
+            username="otheruser",
+            password="test-password",
+        )
+        other_area = MapArea.objects.create(
+            name="Other User Area",
+            north=36.7,
+            south=36.6,
+            east=140.8,
+            west=140.7,
+            grid_size_meters=1000,
+            created_by=other_user,
+        )
+        other_grid = GridCell.objects.create(
+            area=other_area,
+            row_index=0,
+            col_index=0,
+            north=36.7,
+            south=36.69,
+            east=140.8,
+            west=140.79,
+            initial_score=9,
+        )
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.post(
+            self.url,
+            {"grid_ids": [self.grid.id, other_grid.id], "score": 5},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("grid_ids", response.data)
+        self.assertEqual(GridRating.objects.count(), 0)
+
+    def test_grid_without_area_creator_id_returns_400(self):
+        no_creator_area = MapArea.objects.create(
+            name="No Creator Area",
+            north=36.7,
+            south=36.6,
+            east=140.8,
+            west=140.7,
+            grid_size_meters=1000,
+            created_by=None,
+        )
+        no_creator_grid = GridCell.objects.create(
+            area=no_creator_area,
+            row_index=0,
+            col_index=0,
+            north=36.7,
+            south=36.69,
+            east=140.8,
+            west=140.79,
+            initial_score=9,
+        )
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.post(
+            self.url,
+            {"grid_ids": [self.grid.id, no_creator_grid.id], "score": 5},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("grid_ids", response.data)
+        self.assertEqual(GridRating.objects.count(), 0)
+
+    def test_unauthorized_grid_id_does_not_create_any_ratings(self):
+        other_user = get_user_model().objects.create_user(
+            username="otheruser",
+            password="test-password",
+        )
+        other_area = MapArea.objects.create(
+            name="Other User Area",
+            north=36.7,
+            south=36.6,
+            east=140.8,
+            west=140.7,
+            grid_size_meters=1000,
+            created_by=other_user,
+        )
+        other_grid = GridCell.objects.create(
+            area=other_area,
+            row_index=0,
+            col_index=0,
+            north=36.7,
+            south=36.69,
+            east=140.8,
+            west=140.79,
+            initial_score=9,
+        )
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.post(
+            self.url,
+            {"grid_ids": [self.grid.id, other_grid.id], "score": 5},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(GridRating.objects.count(), 0)
+
+    def test_unauthorized_grid_id_does_not_update_any_score_fields(self):
+        other_user = get_user_model().objects.create_user(
+            username="otheruser",
+            password="test-password",
+        )
+        other_area = MapArea.objects.create(
+            name="Other User Area",
+            north=36.7,
+            south=36.6,
+            east=140.8,
+            west=140.7,
+            grid_size_meters=1000,
+            created_by=other_user,
+        )
+        other_grid = GridCell.objects.create(
+            area=other_area,
+            row_index=0,
+            col_index=0,
+            north=36.7,
+            south=36.69,
+            east=140.8,
+            west=140.79,
+            initial_score=9,
+            average_user_score=2,
+            rating_count=3,
+            calculated_score=5.5,
+        )
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.post(
+            self.url,
+            {"grid_ids": [self.grid.id, other_grid.id], "score": 5},
+            format="json",
+        )
+        self.grid.refresh_from_db()
+        other_grid.refresh_from_db()
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(self.grid.average_user_score, 4)
+        self.assertEqual(self.grid.rating_count, 1)
+        self.assertEqual(self.grid.calculated_score, 3.5)
+        self.assertEqual(other_grid.average_user_score, 2)
+        self.assertEqual(other_grid.rating_count, 3)
+        self.assertEqual(other_grid.calculated_score, 5.5)
 
     def test_invalid_score_returns_400(self):
         self.client.force_authenticate(user=self.user)

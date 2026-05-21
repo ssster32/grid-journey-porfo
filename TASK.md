@@ -1,19 +1,27 @@
 # 現在のタスク
 
-MapArea 一覧・詳細・点数付きグリッド一覧に `created_by` ベースの閲覧制限を実装し、テストを追加してください。
+採点 API と一括採点 API に `created_by` ベースの権限チェックを追加してください。
 
 # 目的
 
-現在の MapArea 一覧 API、MapArea 詳細 API、点数付きグリッド一覧 API は、ログイン済みであれば他ユーザーが作成した `MapArea` も取得できる状態です。
+現在の採点 API は、ログイン済みであれば `GridCell` の ID を指定して採点できます。
 
-今回は、`MapArea.created_by` とログイン中ユーザー `request.user` を使って、作成者本人だけが自分の `MapArea` と紐づく `GridCell` を閲覧できるようにします。
+しかし、`GridCell` は `MapArea` に紐づいており、`MapArea` には作成者を表す `created_by` があります。
+そのため、他ユーザーが作成した `MapArea` に属する `GridCell` には採点できないようにします。
 
-作業範囲は、実装 + テスト追加です。
-`API_SPEC.md` の設計は既に追記済みなので、必要な微修正があれば行ってください。
+今回の目的は、次の流れをユーザー本人のデータ範囲で安全に動かせる状態にすることです。
+
+```text
+MapArea 作成
+→ GridCell 自動生成
+→ 点数付きグリッド一覧取得
+→ 採点
+→ 点数再集計
+```
 
 # 担当役割
 
-Backend Developer / Tester
+Backend Developer / Tester / API Designer
 
 # 作業前に確認するファイル
 
@@ -35,12 +43,13 @@ Backend Developer / Tester
 
 # 編集してよいファイル
 
+- `API_SPEC.md`
 - `maps/views.py`
 - `maps/tests.py`
 
 必要な場合のみ:
 
-- `API_SPEC.md`
+- `README.md`
 - `TASK.md`
 
 # 変更しないファイル
@@ -55,128 +64,141 @@ Backend Developer / Tester
 - `config/settings.py`
 - `config/urls.py`
 - `requirements.txt`
-- `README.md`
 
 # 対象 API
 
 ```text
-GET /api/maps/areas/
-GET /api/maps/areas/{area_id}/
-GET /api/maps/areas/{area_id}/grids/
+POST /api/maps/grids/{grid_id}/ratings/
+POST /api/maps/grids/bulk-ratings/
 ```
 
-# 追加する閲覧制限
+# 追加する権限チェック
 
-`MapArea.created_by` と `request.user` を比較してください。
+`GridCell.area.created_by` と `request.user` を比較してください。
 
 | 状況 | 結果 |
 | --- | --- |
 | 未ログイン | `401 Unauthorized` |
-| `MapArea.created_by == request.user` | 閲覧許可 |
-| `MapArea.created_by != request.user` | `404 Not Found` |
-| `MapArea.created_by is None` | `404 Not Found` |
+| `GridCell.area.created_by == request.user` | 採点許可 |
+| `GridCell.area.created_by != request.user` | `404 Not Found` |
+| `GridCell.area.created_by is None` | `404 Not Found` |
+| `grid_id` が存在しない | `404 Not Found` |
+
+# エラー方針
+
+他ユーザーの `GridCell` や `created_by is None` の `GridCell` は、存在しないものとして扱ってください。
+
+そのため、`403 Forbidden` ではなく `404 Not Found` を返します。
+
+理由:
+
+- MapArea 詳細 API、点数付きグリッド一覧 API の閲覧制限と方針を揃えるため
+- 他ユーザーのデータが存在することをレスポンスから推測しにくくするため
 
 # 実装方針
 
-## MapArea 一覧 API
+## 単体採点 API
 
-現在のように全件取得せず、ログイン中ユーザーが作成した `MapArea` のみ返してください。
+現在のように `id` だけで `GridCell` を取得せず、`area__created_by=request.user` も条件に含めてください。
+
+例:
 
 ```python
-areas = MapArea.objects.filter(created_by=request.user)
+grid = get_object_or_404(
+    GridCell,
+    id=grid_id,
+    area__created_by=request.user,
+)
 ```
 
 期待する挙動:
 
-- 自分の `MapArea` だけ `areas` に含まれる
-- 他ユーザーの `MapArea` は含まれない
-- `created_by is None` の `MapArea` は含まれない
-- 自分の `MapArea` が 0 件なら `areas: []`
+- 自分の `MapArea` に属する `GridCell` なら採点できる
+- 他ユーザーの `MapArea` に属する `GridCell` は `404 Not Found`
+- `created_by is None` の `MapArea` に属する `GridCell` は `404 Not Found`
+- 存在しない `grid_id` は `404 Not Found`
+- 採点成功時はこれまで通り `GridRating` を作成または更新する
+- 採点成功後はこれまで通り `update_grid_cell_score(grid)` を呼ぶ
 
-## MapArea 詳細 API
+## 一括採点 API
 
-`id` だけで取得せず、`created_by=request.user` も条件に含めてください。
+`grid_ids` に含まれるすべての `GridCell` が、ログイン中ユーザーの `MapArea` に属している場合だけ採点してください。
+
+例:
 
 ```python
-area = get_object_or_404(MapArea, id=area_id, created_by=request.user)
+grids = GridCell.objects.filter(
+    id__in=grid_ids,
+    area__created_by=request.user,
+)
 ```
+
+注意点:
+
+- 存在しない ID が含まれる場合は、これまで通り入力不正として扱う
+- 他ユーザーの `GridCell` が含まれる場合も、存在しない ID と同じように扱う
+- `created_by is None` の `GridCell` が含まれる場合も、存在しない ID と同じように扱う
+- 一部だけ採点して成功、という動きにはしない
+- 1 件でも採点不可の ID が含まれていたら、全体を失敗させる
 
 期待する挙動:
 
-- 自分の `MapArea` なら `200 OK`
-- 他ユーザーの `MapArea` なら `404 Not Found`
-- `created_by is None` の `MapArea` なら `404 Not Found`
-- 存在しない `area_id` なら `404 Not Found`
+- 全 ID が自分の `MapArea` に属する場合だけ採点できる
+- 他ユーザーの `GridCell` が 1 件でも含まれたら `400 Bad Request`
+- `created_by is None` の `GridCell` が 1 件でも含まれたら `400 Bad Request`
+- 存在しない ID が 1 件でも含まれたら `400 Bad Request`
+- 成功時はこれまで通り、各 `GridCell` の点数を再集計する
 
-## 点数付きグリッド一覧 API
+# API_SPEC.md に追記する内容
 
-`area_id` から `MapArea` を取得するときに、`created_by=request.user` も条件に含めてください。
+採点 API と一括採点 API の権限仕様を追記してください。
 
-```python
-area = get_object_or_404(MapArea, id=area_id, created_by=request.user)
-grids = area.grid_cells.order_by("row_index", "col_index")
-```
+最低限、次を明記してください。
 
-期待する挙動:
-
-- 自分の `MapArea` の `GridCell` なら取得できる
-- 他ユーザーの `MapArea` なら `404 Not Found`
-- `created_by is None` の `MapArea` なら `404 Not Found`
-- 存在しない `area_id` なら `404 Not Found`
+- 採点できるのは、自分が作成した `MapArea` に属する `GridCell` だけ
+- 他ユーザーの `GridCell` は採点できない
+- `created_by is None` の `MapArea` に属する `GridCell` は採点できない
+- 単体採点 API では権限なしを `404 Not Found` にする
+- 一括採点 API では、権限なし ID が 1 件でも含まれたら全体を `400 Bad Request` にする
+- 一括採点 API では、一部だけ採点して成功にはしない
 
 # テスト追加
 
 `maps/tests.py` にテストを追加してください。
 既存のテストクラスに追加して構いません。
 
-## MapArea 一覧 API のテスト
+## 単体採点 API のテスト
 
 最低限ほしいテスト:
 
-1. 自分の `MapArea` だけ一覧に含まれる
-2. 他ユーザーの `MapArea` は一覧に含まれない
-3. `created_by is None` の `MapArea` は一覧に含まれない
-4. 自分の `MapArea` が 0 件なら `areas: []`
+1. 自分の `MapArea` に属する `GridCell` は採点できる
+2. 他ユーザーの `MapArea` に属する `GridCell` は `404 Not Found`
+3. `created_by is None` の `MapArea` に属する `GridCell` は `404 Not Found`
+4. 存在しない `grid_id` は `404 Not Found`
+5. 権限がない場合は `GridRating` が作成されない
+6. 権限がない場合は `GridCell` の集計値が変わらない
 
-## MapArea 詳細 API のテスト
-
-最低限ほしいテスト:
-
-1. 自分の `MapArea` は `200 OK`
-2. 他ユーザーの `MapArea` は `404 Not Found`
-3. `created_by is None` の `MapArea` は `404 Not Found`
-4. 存在しない `area_id` は `404 Not Found`
-
-## 点数付きグリッド一覧 API のテスト
+## 一括採点 API のテスト
 
 最低限ほしいテスト:
 
-1. 自分の `MapArea` の `GridCell` は取得できる
-2. 他ユーザーの `MapArea` は `404 Not Found`
-3. `created_by is None` の `MapArea` は `404 Not Found`
-4. 存在しない `area_id` は `404 Not Found`
+1. 自分の `MapArea` に属する `GridCell` だけなら採点できる
+2. 他ユーザーの `GridCell` が 1 件でも含まれたら `400 Bad Request`
+3. `created_by is None` の `GridCell` が 1 件でも含まれたら `400 Bad Request`
+4. 存在しない ID が 1 件でも含まれたら `400 Bad Request`
+5. 権限がない ID が含まれる場合は、採点可能な `GridCell` にも `GridRating` が作成されない
+6. 権限がない ID が含まれる場合は、どの `GridCell` の集計値も変わらない
 
 # 注意点
 
-- 他ユーザーの `MapArea` は `403 Forbidden` ではなく `404 Not Found` にしてください。
-- 一覧 API では他ユーザーの `MapArea` をレスポンスに含めないだけで、エラーにはしません。
-- `created_by is None` の `MapArea` は、通常のユーザーからは見えない扱いにしてください。
+- 今回は `models.py` を変更しないでください。
+- migration は作成しないでください。
+- `created_by` を必須に変更しないでください。
+- 認証方式は変更しないでください。
+- serializer の責務を大きく変えないでください。
+- `update_grid_cell_score()` の計算ロジックは変更しないでください。
 - GridCell 自動生成 API の `403 Forbidden` 方針は変更しないでください。
-- 今回は閲覧 API のみ対象です。作成 API、採点 API、一括採点 API、自動生成 API の権限は変更しません。
-
-# 今回やらないこと
-
-- `models.py` の変更
-- migration の作成
-- `created_by` を必須に変更すること
-- `generate_grid_cells_for_area` service の変更
-- serializer の変更
-- URL の変更
-- 認証方式の変更
-- 依存関係の追加
-- README の手動確認手順追加
-- 管理者だけ全件閲覧できる特別ルール
-- 共有用の MapArea や公開 MapArea の設計
+- MapArea 一覧・詳細・点数付きグリッド一覧 API の閲覧制限は変更しないでください。
 
 # 確認方法
 
@@ -185,8 +207,15 @@ grids = area.grid_cells.order_by("row_index", "col_index")
 ```bash
 .venv/bin/python manage.py test maps
 .venv/bin/python manage.py check
-git diff -- maps/views.py maps/tests.py
-git diff --check -- maps/views.py maps/tests.py
+git diff -- API_SPEC.md maps/views.py maps/tests.py
+git diff --check -- API_SPEC.md maps/views.py maps/tests.py
+```
+
+README を更新した場合は、次も確認してください。
+
+```bash
+git diff -- README.md
+git diff --check -- README.md
 ```
 
 # 完了報告

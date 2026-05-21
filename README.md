@@ -318,7 +318,30 @@ curl -i -u otheruser:other-password \
 
 グリッド一覧も同じく、`404 Not Found` が返ります。
 
-### 7. エラー確認
+### 7. 他ユーザーでは採点できないことの確認
+
+`<GRID1_ID>` と `<GRID2_ID>` は、事前準備で表示された `grid1_id`、`grid2_id` に置き換えてください。
+
+```bash
+curl -i -u otheruser:other-password \
+  -H "Content-Type: application/json" \
+  -X POST http://127.0.0.1:8000/api/maps/grids/<GRID1_ID>/ratings/ \
+  -d '{"score": 8, "comment": "他ユーザーで採点"}'
+```
+
+`testuser` が作成した `MapArea` に属する `GridCell` を `otheruser` で採点しようとしているため、`404 Not Found` が返ります。
+
+```bash
+curl -i -u otheruser:other-password \
+  -H "Content-Type: application/json" \
+  -X POST http://127.0.0.1:8000/api/maps/grids/bulk-ratings/ \
+  -d '{"grid_ids": [<GRID1_ID>, <GRID2_ID>], "score": 5, "comment": "他ユーザーで一括採点"}'
+```
+
+一括採点でも同じく、他ユーザーの `GridCell` が含まれるため `400 Bad Request` が返ります。
+この場合、一部だけ採点されることはありません。
+
+### 8. エラー確認
 
 ログイン情報を付けずに送ると、ログイン必須のため `401 Unauthorized` になります。
 
