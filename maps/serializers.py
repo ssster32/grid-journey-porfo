@@ -1,6 +1,7 @@
+from django.contrib.auth import get_user_model
 from rest_framework import serializers
 
-from .models import GridCell, GridRating, MapArea
+from .models import GridCell, GridRating, MapArea, MapAreaShare
 
 
 class MapAreaSerializer(serializers.ModelSerializer):
@@ -41,6 +42,83 @@ class MapAreaSerializer(serializers.ModelSerializer):
                 {"grid_size_meters": "grid_size_meters は 0 より大きい値にしてください。"}
             )
 
+        return attrs
+
+
+class MapAreaListSerializer(MapAreaSerializer):
+    visibility = serializers.SerializerMethodField()
+    display_type = serializers.SerializerMethodField()
+    is_owner = serializers.SerializerMethodField()
+
+    class Meta(MapAreaSerializer.Meta):
+        fields = MapAreaSerializer.Meta.fields + [
+            "visibility",
+            "display_type",
+            "is_owner",
+        ]
+        read_only_fields = fields
+
+    def get_is_owner(self, obj):
+        request = self.context["request"]
+        return obj.created_by_id == request.user.id
+
+    def get_visibility(self, obj):
+        if self.get_is_owner(obj):
+            return "private"
+        return "shared"
+
+    def get_display_type(self, obj):
+        if self.get_visibility(obj) == "private":
+            return "メモグリッド"
+        return "共有メモグリッド"
+
+
+class UserSummarySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = get_user_model()
+        fields = [
+            "id",
+            "username",
+        ]
+        read_only_fields = fields
+
+
+class MapAreaShareSerializer(serializers.ModelSerializer):
+    user = UserSummarySerializer(read_only=True)
+
+    class Meta:
+        model = MapAreaShare
+        fields = [
+            "id",
+            "area",
+            "user",
+            "created_at",
+        ]
+        read_only_fields = fields
+
+
+class MapAreaShareCreateSerializer(serializers.Serializer):
+    username = serializers.CharField()
+
+    def validate(self, attrs):
+        area = self.context["area"]
+        username = attrs["username"]
+        user = get_user_model().objects.filter(username=username).first()
+
+        if user is None:
+            raise serializers.ValidationError(
+                {"username": "指定されたユーザーは存在しません。"}
+            )
+        if user == area.created_by:
+            raise serializers.ValidationError(
+                {"username": "作成者自身は共有相手に追加できません。"}
+            )
+        if MapAreaShare.objects.filter(area=area, user=user).exists():
+            raise serializers.ValidationError(
+                {"username": "このユーザーは既に共有相手に追加されています。"}
+            )
+
+        attrs["user"] = user
         return attrs
 
 

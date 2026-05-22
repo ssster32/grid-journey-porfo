@@ -7,6 +7,8 @@ from .views import (
     MapDemoView,
     MapAreaDetailView,
     MapAreaListCreateView,
+    MapAreaShareDetailView,
+    MapAreaShareListCreateView,
 )
 
 urlpatterns = [
@@ -24,6 +26,16 @@ urlpatterns = [
         "areas/<int:area_id>/",
         MapAreaDetailView.as_view(),
         name="map-area-detail",
+    ),
+    path(
+        "areas/<int:area_id>/shares/",
+        MapAreaShareListCreateView.as_view(),
+        name="map-area-share-list-create",
+    ),
+    path(
+        "areas/<int:area_id>/shares/<int:share_id>/",
+        MapAreaShareDetailView.as_view(),
+        name="map-area-share-detail",
     ),
     path(
         "areas/<int:area_id>/grids/",

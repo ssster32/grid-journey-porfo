@@ -2,13 +2,14 @@ import base64
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
+from django.db import IntegrityError, transaction
 from django.test import TestCase
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.authtoken.models import Token
 from rest_framework.test import APIClient
 
-from .models import GridCell, GridRating, MapArea
+from .models import GridCell, GridRating, MapArea, MapAreaShare
 from .serializers import (
     BulkGridRatingSerializer,
     GridCellScoreSerializer,
@@ -121,6 +122,87 @@ class GridCellScoreSerializerTests(SerializerTestDataMixin, TestCase):
         self.assertEqual(data["rating_count"], 1)
         self.assertEqual(data["calculated_score"], 3.5)
         self.assertIn("score_updated_at", data)
+
+
+class MapAreaShareModelTests(TestCase):
+    def setUp(self):
+        self.owner = get_user_model().objects.create_user(
+            username="owner",
+            password="test-password",
+        )
+        self.shared_user = get_user_model().objects.create_user(
+            username="shareduser",
+            password="test-password",
+        )
+        self.area = MapArea.objects.create(
+            name="Shared Memo Grid",
+            north=35.7,
+            south=35.6,
+            east=139.8,
+            west=139.7,
+            grid_size_meters=500,
+            created_by=self.owner,
+        )
+
+    def test_map_area_share_can_be_created(self):
+        share = MapAreaShare.objects.create(
+            area=self.area,
+            user=self.shared_user,
+        )
+
+        self.assertEqual(share.area, self.area)
+        self.assertEqual(share.user, self.shared_user)
+        self.assertIsNotNone(share.created_at)
+        self.assertEqual(str(share), f"{self.area} shared with {self.shared_user}")
+
+    def test_area_related_name_can_get_shares(self):
+        share = MapAreaShare.objects.create(
+            area=self.area,
+            user=self.shared_user,
+        )
+
+        self.assertEqual(list(self.area.shares.all()), [share])
+
+    def test_user_related_name_can_get_shared_map_areas(self):
+        share = MapAreaShare.objects.create(
+            area=self.area,
+            user=self.shared_user,
+        )
+
+        self.assertEqual(list(self.shared_user.shared_map_areas.all()), [share])
+
+    def test_same_area_and_user_cannot_be_shared_twice(self):
+        MapAreaShare.objects.create(
+            area=self.area,
+            user=self.shared_user,
+        )
+
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                MapAreaShare.objects.create(
+                    area=self.area,
+                    user=self.shared_user,
+                )
+
+    def test_deleting_map_area_deletes_share(self):
+        share = MapAreaShare.objects.create(
+            area=self.area,
+            user=self.shared_user,
+        )
+
+        self.area.delete()
+
+        self.assertFalse(MapAreaShare.objects.filter(id=share.id).exists())
+
+    def test_deleting_shared_user_deletes_share(self):
+        share = MapAreaShare.objects.create(
+            area=self.area,
+            user=self.shared_user,
+        )
+
+        self.shared_user.delete()
+
+        self.assertFalse(MapAreaShare.objects.filter(id=share.id).exists())
 
 
 class MapAreaSerializerTests(TestCase):
@@ -856,8 +938,38 @@ class MapAreaListViewTests(TestCase):
         self.assertEqual(response.data["areas"][1]["id"], area_b.id)
         self.assertEqual(response.data["areas"][0]["name"], "A Area")
         self.assertEqual(response.data["areas"][0]["created_by"], self.user.id)
+        self.assertEqual(response.data["areas"][0]["visibility"], "private")
+        self.assertEqual(response.data["areas"][0]["display_type"], "メモグリッド")
+        self.assertIs(response.data["areas"][0]["is_owner"], True)
         self.assertIn("created_at", response.data["areas"][0])
         self.assertIn("updated_at", response.data["areas"][0])
+
+    def test_shared_map_area_is_included_in_list(self):
+        owner = get_user_model().objects.create_user(
+            username="owner",
+            password="test-password",
+        )
+        shared_area = MapArea.objects.create(
+            name="Shared Area",
+            north=35.7,
+            south=35.6,
+            east=139.8,
+            west=139.7,
+            grid_size_meters=500,
+            created_by=owner,
+        )
+        MapAreaShare.objects.create(area=shared_area, user=self.user)
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.get(self.url)
+        area = response.data["areas"][0]
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data["areas"]), 1)
+        self.assertEqual(area["id"], shared_area.id)
+        self.assertEqual(area["visibility"], "shared")
+        self.assertEqual(area["display_type"], "共有メモグリッド")
+        self.assertIs(area["is_owner"], False)
 
     def test_other_users_map_areas_are_not_included_in_list(self):
         other_user = get_user_model().objects.create_user(
@@ -890,6 +1002,39 @@ class MapAreaListViewTests(TestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertIn(own_area.id, area_ids)
         self.assertNotIn(other_area.id, area_ids)
+
+    def test_unshared_other_users_map_areas_are_not_included_when_shared_exists(self):
+        owner = get_user_model().objects.create_user(
+            username="owner",
+            password="test-password",
+        )
+        shared_area = MapArea.objects.create(
+            name="Shared Area",
+            north=35.7,
+            south=35.6,
+            east=139.8,
+            west=139.7,
+            grid_size_meters=500,
+            created_by=owner,
+        )
+        unshared_area = MapArea.objects.create(
+            name="Unshared Area",
+            north=36.7,
+            south=36.6,
+            east=140.8,
+            west=140.7,
+            grid_size_meters=1000,
+            created_by=owner,
+        )
+        MapAreaShare.objects.create(area=shared_area, user=self.user)
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.get(self.url)
+        area_ids = [area["id"] for area in response.data["areas"]]
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn(shared_area.id, area_ids)
+        self.assertNotIn(unshared_area.id, area_ids)
 
     def test_map_areas_without_creator_are_not_included_in_list(self):
         own_area = MapArea.objects.create(
@@ -948,6 +1093,29 @@ class MapAreaListViewTests(TestCase):
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["areas"], [])
+
+    def test_own_shared_map_area_is_not_duplicated_and_owner_status_wins(self):
+        own_area = MapArea.objects.create(
+            name="Own Shared Area",
+            north=35.7,
+            south=35.6,
+            east=139.8,
+            west=139.7,
+            grid_size_meters=500,
+            created_by=self.user,
+        )
+        MapAreaShare.objects.create(area=own_area, user=self.user)
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.get(self.url)
+        areas = response.data["areas"]
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(areas), 1)
+        self.assertEqual(areas[0]["id"], own_area.id)
+        self.assertEqual(areas[0]["visibility"], "private")
+        self.assertEqual(areas[0]["display_type"], "メモグリッド")
+        self.assertIs(areas[0]["is_owner"], True)
 
     def test_area_without_map_areas_returns_empty_list(self):
         self.client.force_authenticate(user=self.user)
@@ -1036,6 +1204,33 @@ class MapAreaDetailViewTests(TestCase):
 
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
+    def test_shared_map_area_detail_can_be_viewed(self):
+        owner = get_user_model().objects.create_user(
+            username="owner",
+            password="test-password",
+        )
+        shared_area = MapArea.objects.create(
+            name="Shared Area",
+            description="shared memo grid",
+            north=36.7,
+            south=36.6,
+            east=140.8,
+            west=140.7,
+            grid_size_meters=1000,
+            created_by=owner,
+        )
+        MapAreaShare.objects.create(area=shared_area, user=self.user)
+        self.client.force_authenticate(user=self.user)
+        url = reverse("map-area-detail", kwargs={"area_id": shared_area.id})
+
+        response = self.client.get(url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["id"], shared_area.id)
+        self.assertEqual(response.data["name"], "Shared Area")
+        self.assertEqual(response.data["description"], "shared memo grid")
+        self.assertEqual(response.data["created_by"], owner.id)
+
     def test_map_area_without_creator_detail_returns_404(self):
         no_creator_area = MapArea.objects.create(
             name="No Creator Area",
@@ -1052,6 +1247,466 @@ class MapAreaDetailViewTests(TestCase):
         response = self.client.get(url)
 
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_shared_map_area_without_creator_detail_can_be_viewed(self):
+        no_creator_area = MapArea.objects.create(
+            name="Shared No Creator Area",
+            north=36.7,
+            south=36.6,
+            east=140.8,
+            west=140.7,
+            grid_size_meters=1000,
+            created_by=None,
+        )
+        MapAreaShare.objects.create(area=no_creator_area, user=self.user)
+        self.client.force_authenticate(user=self.user)
+        url = reverse("map-area-detail", kwargs={"area_id": no_creator_area.id})
+
+        response = self.client.get(url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["id"], no_creator_area.id)
+        self.assertIsNone(response.data["created_by"])
+
+
+class MapAreaShareManagementViewTests(TestCase):
+    def setUp(self):
+        self.owner = get_user_model().objects.create_user(
+            username="owner",
+            password="test-password",
+        )
+        self.shared_user = get_user_model().objects.create_user(
+            username="shareduser",
+            password="test-password",
+        )
+        self.other_user = get_user_model().objects.create_user(
+            username="otheruser",
+            password="test-password",
+        )
+        self.client = APIClient()
+        self.area = MapArea.objects.create(
+            name="Owner Area",
+            north=35.7,
+            south=35.6,
+            east=139.8,
+            west=139.7,
+            grid_size_meters=500,
+            created_by=self.owner,
+        )
+        self.grid = GridCell.objects.create(
+            area=self.area,
+            row_index=0,
+            col_index=0,
+            north=35.7,
+            south=35.69,
+            east=139.8,
+            west=139.79,
+            initial_score=3,
+        )
+        self.list_url = reverse(
+            "map-area-share-list-create",
+            kwargs={"area_id": self.area.id},
+        )
+
+    def test_owner_can_get_share_list(self):
+        share = MapAreaShare.objects.create(
+            area=self.area,
+            user=self.shared_user,
+        )
+        self.client.force_authenticate(user=self.owner)
+
+        response = self.client.get(self.list_url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["area"]["id"], self.area.id)
+        self.assertEqual(response.data["area"]["name"], self.area.name)
+        self.assertEqual(len(response.data["shares"]), 1)
+        self.assertEqual(response.data["shares"][0]["id"], share.id)
+        self.assertEqual(response.data["shares"][0]["area"], self.area.id)
+        self.assertEqual(response.data["shares"][0]["user"]["id"], self.shared_user.id)
+        self.assertEqual(
+            response.data["shares"][0]["user"]["username"],
+            self.shared_user.username,
+        )
+        self.assertNotIn("email", response.data["shares"][0]["user"])
+        self.assertIn("created_at", response.data["shares"][0])
+
+    def test_owner_gets_empty_share_list_when_no_shares_exist(self):
+        self.client.force_authenticate(user=self.owner)
+
+        response = self.client.get(self.list_url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["shares"], [])
+
+    def test_shared_user_cannot_get_share_list(self):
+        MapAreaShare.objects.create(area=self.area, user=self.shared_user)
+        self.client.force_authenticate(user=self.shared_user)
+
+        response = self.client.get(self.list_url)
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_unshared_user_cannot_get_share_list(self):
+        self.client.force_authenticate(user=self.other_user)
+
+        response = self.client.get(self.list_url)
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_unauthenticated_user_cannot_get_share_list(self):
+        response = self.client.get(self.list_url)
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_unknown_area_id_share_list_returns_404(self):
+        self.client.force_authenticate(user=self.owner)
+        url = reverse(
+            "map-area-share-list-create",
+            kwargs={"area_id": 999999},
+        )
+
+        response = self.client.get(url)
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_area_without_creator_share_list_returns_404(self):
+        no_creator_area = MapArea.objects.create(
+            name="No Creator Area",
+            north=35.7,
+            south=35.6,
+            east=139.8,
+            west=139.7,
+            grid_size_meters=500,
+            created_by=None,
+        )
+        self.client.force_authenticate(user=self.owner)
+        url = reverse(
+            "map-area-share-list-create",
+            kwargs={"area_id": no_creator_area.id},
+        )
+
+        response = self.client.get(url)
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_owner_can_add_share_by_username(self):
+        self.client.force_authenticate(user=self.owner)
+
+        response = self.client.post(
+            self.list_url,
+            {"username": self.shared_user.username},
+            format="json",
+        )
+        share = MapAreaShare.objects.get(area=self.area, user=self.shared_user)
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["share"]["id"], share.id)
+        self.assertEqual(response.data["share"]["area"], self.area.id)
+        self.assertEqual(response.data["share"]["user"]["id"], self.shared_user.id)
+        self.assertEqual(
+            response.data["share"]["user"]["username"],
+            self.shared_user.username,
+        )
+        self.assertNotIn("email", response.data["share"]["user"])
+
+    def test_added_user_can_view_grid_and_rate_area(self):
+        self.client.force_authenticate(user=self.owner)
+        self.client.post(
+            self.list_url,
+            {"username": self.shared_user.username},
+            format="json",
+        )
+
+        self.client.force_authenticate(user=self.shared_user)
+        list_response = self.client.get(reverse("map-area-list-create"))
+        detail_response = self.client.get(
+            reverse("map-area-detail", kwargs={"area_id": self.area.id})
+        )
+        grids_response = self.client.get(
+            reverse("grid-cell-list", kwargs={"area_id": self.area.id})
+        )
+        rating_response = self.client.post(
+            reverse("grid-rating-create", kwargs={"grid_id": self.grid.id}),
+            {"score": 7},
+            format="json",
+        )
+
+        self.assertEqual(list_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(list_response.data["areas"][0]["id"], self.area.id)
+        self.assertEqual(list_response.data["areas"][0]["visibility"], "shared")
+        self.assertEqual(detail_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(grids_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(rating_response.status_code, status.HTTP_201_CREATED)
+        self.assertTrue(
+            GridRating.objects.filter(grid=self.grid, user=self.shared_user).exists()
+        )
+
+    def test_unknown_username_cannot_be_shared(self):
+        self.client.force_authenticate(user=self.owner)
+
+        response = self.client.post(
+            self.list_url,
+            {"username": "missing-user"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("username", response.data)
+        self.assertFalse(MapAreaShare.objects.exists())
+
+    def test_missing_username_cannot_be_shared(self):
+        self.client.force_authenticate(user=self.owner)
+
+        response = self.client.post(self.list_url, {}, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("username", response.data)
+        self.assertFalse(MapAreaShare.objects.exists())
+
+    def test_non_string_username_cannot_be_shared(self):
+        self.client.force_authenticate(user=self.owner)
+
+        response = self.client.post(
+            self.list_url,
+            {"username": 123},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("username", response.data)
+        self.assertFalse(MapAreaShare.objects.exists())
+
+    def test_duplicate_share_returns_400(self):
+        MapAreaShare.objects.create(area=self.area, user=self.shared_user)
+        self.client.force_authenticate(user=self.owner)
+
+        response = self.client.post(
+            self.list_url,
+            {"username": self.shared_user.username},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(
+            MapAreaShare.objects.filter(area=self.area, user=self.shared_user).count(),
+            1,
+        )
+
+    def test_owner_cannot_share_area_with_self(self):
+        self.client.force_authenticate(user=self.owner)
+
+        response = self.client.post(
+            self.list_url,
+            {"username": self.owner.username},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(MapAreaShare.objects.exists())
+
+    def test_shared_user_cannot_add_share(self):
+        MapAreaShare.objects.create(area=self.area, user=self.shared_user)
+        self.client.force_authenticate(user=self.shared_user)
+
+        response = self.client.post(
+            self.list_url,
+            {"username": self.other_user.username},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertFalse(
+            MapAreaShare.objects.filter(area=self.area, user=self.other_user).exists()
+        )
+
+    def test_unshared_user_cannot_add_share(self):
+        self.client.force_authenticate(user=self.other_user)
+
+        response = self.client.post(
+            self.list_url,
+            {"username": self.shared_user.username},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertFalse(MapAreaShare.objects.exists())
+
+    def test_unauthenticated_user_cannot_add_share(self):
+        response = self.client.post(
+            self.list_url,
+            {"username": self.shared_user.username},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertFalse(MapAreaShare.objects.exists())
+
+    def test_area_without_creator_cannot_be_shared_by_regular_user(self):
+        no_creator_area = MapArea.objects.create(
+            name="No Creator Area",
+            north=35.7,
+            south=35.6,
+            east=139.8,
+            west=139.7,
+            grid_size_meters=500,
+            created_by=None,
+        )
+        self.client.force_authenticate(user=self.owner)
+        url = reverse(
+            "map-area-share-list-create",
+            kwargs={"area_id": no_creator_area.id},
+        )
+
+        response = self.client.post(
+            url,
+            {"username": self.shared_user.username},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertFalse(MapAreaShare.objects.filter(area=no_creator_area).exists())
+
+    def test_owner_can_delete_share(self):
+        share = MapAreaShare.objects.create(area=self.area, user=self.shared_user)
+        self.client.force_authenticate(user=self.owner)
+        url = reverse(
+            "map-area-share-detail",
+            kwargs={"area_id": self.area.id, "share_id": share.id},
+        )
+
+        response = self.client.delete(url)
+
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertFalse(MapAreaShare.objects.filter(id=share.id).exists())
+
+    def test_deleted_user_loses_view_and_rating_access(self):
+        share = MapAreaShare.objects.create(area=self.area, user=self.shared_user)
+        self.client.force_authenticate(user=self.owner)
+        delete_url = reverse(
+            "map-area-share-detail",
+            kwargs={"area_id": self.area.id, "share_id": share.id},
+        )
+        self.client.delete(delete_url)
+
+        self.client.force_authenticate(user=self.shared_user)
+        detail_response = self.client.get(
+            reverse("map-area-detail", kwargs={"area_id": self.area.id})
+        )
+        grids_response = self.client.get(
+            reverse("grid-cell-list", kwargs={"area_id": self.area.id})
+        )
+        rating_response = self.client.post(
+            reverse("grid-rating-create", kwargs={"grid_id": self.grid.id}),
+            {"score": 7},
+            format="json",
+        )
+
+        self.assertEqual(detail_response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(grids_response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(rating_response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertFalse(
+            GridRating.objects.filter(grid=self.grid, user=self.shared_user).exists()
+        )
+
+    def test_unknown_share_id_returns_404(self):
+        self.client.force_authenticate(user=self.owner)
+        url = reverse(
+            "map-area-share-detail",
+            kwargs={"area_id": self.area.id, "share_id": 999999},
+        )
+
+        response = self.client.delete(url)
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_share_from_other_area_cannot_be_deleted(self):
+        other_area = MapArea.objects.create(
+            name="Other Area",
+            north=35.7,
+            south=35.6,
+            east=139.8,
+            west=139.7,
+            grid_size_meters=500,
+            created_by=self.owner,
+        )
+        other_share = MapAreaShare.objects.create(
+            area=other_area,
+            user=self.shared_user,
+        )
+        self.client.force_authenticate(user=self.owner)
+        url = reverse(
+            "map-area-share-detail",
+            kwargs={"area_id": self.area.id, "share_id": other_share.id},
+        )
+
+        response = self.client.delete(url)
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertTrue(MapAreaShare.objects.filter(id=other_share.id).exists())
+
+    def test_shared_user_cannot_delete_share(self):
+        share = MapAreaShare.objects.create(area=self.area, user=self.shared_user)
+        self.client.force_authenticate(user=self.shared_user)
+        url = reverse(
+            "map-area-share-detail",
+            kwargs={"area_id": self.area.id, "share_id": share.id},
+        )
+
+        response = self.client.delete(url)
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertTrue(MapAreaShare.objects.filter(id=share.id).exists())
+
+    def test_unshared_user_cannot_delete_share(self):
+        share = MapAreaShare.objects.create(area=self.area, user=self.shared_user)
+        self.client.force_authenticate(user=self.other_user)
+        url = reverse(
+            "map-area-share-detail",
+            kwargs={"area_id": self.area.id, "share_id": share.id},
+        )
+
+        response = self.client.delete(url)
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertTrue(MapAreaShare.objects.filter(id=share.id).exists())
+
+    def test_unauthenticated_user_cannot_delete_share(self):
+        share = MapAreaShare.objects.create(area=self.area, user=self.shared_user)
+        url = reverse(
+            "map-area-share-detail",
+            kwargs={"area_id": self.area.id, "share_id": share.id},
+        )
+
+        response = self.client.delete(url)
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertTrue(MapAreaShare.objects.filter(id=share.id).exists())
+
+    def test_area_without_creator_share_cannot_be_deleted_by_regular_user(self):
+        no_creator_area = MapArea.objects.create(
+            name="No Creator Area",
+            north=35.7,
+            south=35.6,
+            east=139.8,
+            west=139.7,
+            grid_size_meters=500,
+            created_by=None,
+        )
+        share = MapAreaShare.objects.create(
+            area=no_creator_area,
+            user=self.shared_user,
+        )
+        self.client.force_authenticate(user=self.owner)
+        url = reverse(
+            "map-area-share-detail",
+            kwargs={"area_id": no_creator_area.id, "share_id": share.id},
+        )
+
+        response = self.client.delete(url)
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertTrue(MapAreaShare.objects.filter(id=share.id).exists())
 
 
 class GridRatingCreateViewTests(SerializerTestDataMixin, TestCase):
@@ -1159,6 +1814,103 @@ class GridRatingCreateViewTests(SerializerTestDataMixin, TestCase):
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
         self.assertEqual(GridRating.objects.count(), 0)
 
+    def test_shared_grid_can_be_rated(self):
+        owner = get_user_model().objects.create_user(
+            username="owner",
+            password="test-password",
+        )
+        shared_user = get_user_model().objects.create_user(
+            username="shareduser",
+            password="test-password",
+        )
+        shared_area = MapArea.objects.create(
+            name="Shared Area",
+            north=36.7,
+            south=36.6,
+            east=140.8,
+            west=140.7,
+            grid_size_meters=1000,
+            created_by=owner,
+        )
+        shared_grid = GridCell.objects.create(
+            area=shared_area,
+            row_index=0,
+            col_index=0,
+            north=36.7,
+            south=36.69,
+            east=140.8,
+            west=140.79,
+            initial_score=9,
+        )
+        MapAreaShare.objects.create(area=shared_area, user=shared_user)
+        self.client.force_authenticate(user=shared_user)
+        url = reverse("grid-rating-create", kwargs={"grid_id": shared_grid.id})
+
+        response = self.client.post(
+            url,
+            {"score": 7, "comment": "shared rating"},
+            format="json",
+        )
+        rating = GridRating.objects.get(grid=shared_grid, user=shared_user)
+        shared_grid.refresh_from_db()
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["rating"]["user"], shared_user.id)
+        self.assertEqual(rating.score, 7)
+        self.assertEqual(rating.comment, "shared rating")
+        self.assertEqual(shared_grid.average_user_score, 7)
+        self.assertEqual(shared_grid.rating_count, 1)
+
+    def test_shared_user_can_update_own_rating(self):
+        owner = get_user_model().objects.create_user(
+            username="owner",
+            password="test-password",
+        )
+        shared_user = get_user_model().objects.create_user(
+            username="shareduser",
+            password="test-password",
+        )
+        shared_area = MapArea.objects.create(
+            name="Shared Area",
+            north=36.7,
+            south=36.6,
+            east=140.8,
+            west=140.7,
+            grid_size_meters=1000,
+            created_by=owner,
+        )
+        shared_grid = GridCell.objects.create(
+            area=shared_area,
+            row_index=0,
+            col_index=0,
+            north=36.7,
+            south=36.69,
+            east=140.8,
+            west=140.79,
+            initial_score=9,
+        )
+        MapAreaShare.objects.create(area=shared_area, user=shared_user)
+        GridRating.objects.create(
+            grid=shared_grid,
+            user=shared_user,
+            score=4,
+            comment="before",
+        )
+        self.client.force_authenticate(user=shared_user)
+        url = reverse("grid-rating-create", kwargs={"grid_id": shared_grid.id})
+
+        response = self.client.post(
+            url,
+            {"score": 8, "comment": "after"},
+            format="json",
+        )
+        rating = GridRating.objects.get(grid=shared_grid, user=shared_user)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(GridRating.objects.filter(grid=shared_grid).count(), 1)
+        self.assertEqual(rating.score, 8)
+        self.assertEqual(rating.comment, "after")
+
     def test_grid_without_area_creator_returns_404(self):
         no_creator_area = MapArea.objects.create(
             name="No Creator Area",
@@ -1186,6 +1938,41 @@ class GridRatingCreateViewTests(SerializerTestDataMixin, TestCase):
 
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
         self.assertEqual(GridRating.objects.count(), 0)
+
+    def test_shared_grid_without_area_creator_can_be_rated(self):
+        shared_user = get_user_model().objects.create_user(
+            username="shareduser",
+            password="test-password",
+        )
+        no_creator_area = MapArea.objects.create(
+            name="Shared No Creator Area",
+            north=36.7,
+            south=36.6,
+            east=140.8,
+            west=140.7,
+            grid_size_meters=1000,
+            created_by=None,
+        )
+        shared_grid = GridCell.objects.create(
+            area=no_creator_area,
+            row_index=0,
+            col_index=0,
+            north=36.7,
+            south=36.69,
+            east=140.8,
+            west=140.79,
+            initial_score=9,
+        )
+        MapAreaShare.objects.create(area=no_creator_area, user=shared_user)
+        self.client.force_authenticate(user=shared_user)
+        url = reverse("grid-rating-create", kwargs={"grid_id": shared_grid.id})
+
+        response = self.client.post(url, {"score": 8}, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertTrue(
+            GridRating.objects.filter(grid=shared_grid, user=shared_user).exists()
+        )
 
     def test_unauthorized_grid_does_not_update_score_fields(self):
         other_user = get_user_model().objects.create_user(
@@ -1400,6 +2187,108 @@ class BulkGridRatingCreateViewTests(SerializerTestDataMixin, TestCase):
         self.assertIn("grid_ids", response.data)
         self.assertEqual(GridRating.objects.count(), 0)
 
+    def test_shared_grid_ids_can_be_bulk_rated(self):
+        owner = get_user_model().objects.create_user(
+            username="owner",
+            password="test-password",
+        )
+        shared_user = get_user_model().objects.create_user(
+            username="shareduser",
+            password="test-password",
+        )
+        shared_area = MapArea.objects.create(
+            name="Shared Area",
+            north=36.7,
+            south=36.6,
+            east=140.8,
+            west=140.7,
+            grid_size_meters=1000,
+            created_by=owner,
+        )
+        shared_grid_1 = GridCell.objects.create(
+            area=shared_area,
+            row_index=0,
+            col_index=0,
+            north=36.7,
+            south=36.69,
+            east=140.8,
+            west=140.79,
+            initial_score=9,
+        )
+        shared_grid_2 = GridCell.objects.create(
+            area=shared_area,
+            row_index=0,
+            col_index=1,
+            north=36.7,
+            south=36.69,
+            east=140.79,
+            west=140.78,
+            initial_score=6,
+        )
+        MapAreaShare.objects.create(area=shared_area, user=shared_user)
+        self.client.force_authenticate(user=shared_user)
+
+        response = self.client.post(
+            self.url,
+            {
+                "grid_ids": [shared_grid_1.id, shared_grid_2.id],
+                "score": 7,
+                "comment": "shared bulk",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(
+            GridRating.objects.filter(user=shared_user, score=7).count(),
+            2,
+        )
+        self.assertEqual(len(response.data["grids"]), 2)
+
+    def test_own_and_shared_grid_ids_can_be_bulk_rated_together(self):
+        owner = get_user_model().objects.create_user(
+            username="owner",
+            password="test-password",
+        )
+        shared_area = MapArea.objects.create(
+            name="Shared Area",
+            north=36.7,
+            south=36.6,
+            east=140.8,
+            west=140.7,
+            grid_size_meters=1000,
+            created_by=owner,
+        )
+        shared_grid = GridCell.objects.create(
+            area=shared_area,
+            row_index=0,
+            col_index=0,
+            north=36.7,
+            south=36.69,
+            east=140.8,
+            west=140.79,
+            initial_score=9,
+        )
+        MapAreaShare.objects.create(area=shared_area, user=self.user)
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.post(
+            self.url,
+            {
+                "grid_ids": [self.grid.id, shared_grid.id],
+                "score": 6,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertTrue(
+            GridRating.objects.filter(grid=self.grid, user=self.user).exists()
+        )
+        self.assertTrue(
+            GridRating.objects.filter(grid=shared_grid, user=self.user).exists()
+        )
+
     def test_grid_without_area_creator_id_returns_400(self):
         no_creator_area = MapArea.objects.create(
             name="No Creator Area",
@@ -1431,6 +2320,44 @@ class BulkGridRatingCreateViewTests(SerializerTestDataMixin, TestCase):
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("grid_ids", response.data)
         self.assertEqual(GridRating.objects.count(), 0)
+
+    def test_shared_grid_without_area_creator_can_be_bulk_rated(self):
+        shared_user = get_user_model().objects.create_user(
+            username="shareduser",
+            password="test-password",
+        )
+        no_creator_area = MapArea.objects.create(
+            name="Shared No Creator Area",
+            north=36.7,
+            south=36.6,
+            east=140.8,
+            west=140.7,
+            grid_size_meters=1000,
+            created_by=None,
+        )
+        shared_grid = GridCell.objects.create(
+            area=no_creator_area,
+            row_index=0,
+            col_index=0,
+            north=36.7,
+            south=36.69,
+            east=140.8,
+            west=140.79,
+            initial_score=9,
+        )
+        MapAreaShare.objects.create(area=no_creator_area, user=shared_user)
+        self.client.force_authenticate(user=shared_user)
+
+        response = self.client.post(
+            self.url,
+            {"grid_ids": [shared_grid.id], "score": 8},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertTrue(
+            GridRating.objects.filter(grid=shared_grid, user=shared_user).exists()
+        )
 
     def test_unauthorized_grid_id_does_not_create_any_ratings(self):
         other_user = get_user_model().objects.create_user(
@@ -1827,6 +2754,43 @@ class GridCellListViewTests(SerializerTestDataMixin, TestCase):
 
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
+    def test_shared_area_grid_cells_can_be_listed(self):
+        owner = get_user_model().objects.create_user(
+            username="owner",
+            password="test-password",
+        )
+        shared_area = MapArea.objects.create(
+            name="Shared Area",
+            north=35.8,
+            south=35.7,
+            east=139.9,
+            west=139.8,
+            grid_size_meters=500,
+            created_by=owner,
+        )
+        shared_grid = GridCell.objects.create(
+            area=shared_area,
+            row_index=0,
+            col_index=0,
+            north=35.8,
+            south=35.79,
+            east=139.9,
+            west=139.89,
+            initial_score=9,
+            calculated_score=9,
+        )
+        MapAreaShare.objects.create(area=shared_area, user=self.user)
+        self.client.force_authenticate(user=self.user)
+        url = reverse("grid-cell-list", kwargs={"area_id": shared_area.id})
+
+        response = self.client.get(url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["area"]["id"], shared_area.id)
+        self.assertEqual(response.data["area"]["name"], shared_area.name)
+        self.assertEqual(len(response.data["grids"]), 1)
+        self.assertEqual(response.data["grids"][0]["id"], shared_grid.id)
+
     def test_area_without_creator_grid_cells_return_404(self):
         no_creator_area = MapArea.objects.create(
             name="No Creator Area",
@@ -1853,6 +2817,37 @@ class GridCellListViewTests(SerializerTestDataMixin, TestCase):
         response = self.client.get(url)
 
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_shared_area_without_creator_grid_cells_can_be_listed(self):
+        no_creator_area = MapArea.objects.create(
+            name="Shared No Creator Area",
+            north=35.8,
+            south=35.7,
+            east=139.9,
+            west=139.8,
+            grid_size_meters=500,
+            created_by=None,
+        )
+        no_creator_grid = GridCell.objects.create(
+            area=no_creator_area,
+            row_index=0,
+            col_index=0,
+            north=35.8,
+            south=35.79,
+            east=139.9,
+            west=139.89,
+            initial_score=9,
+        )
+        MapAreaShare.objects.create(area=no_creator_area, user=self.user)
+        self.client.force_authenticate(user=self.user)
+        url = reverse("grid-cell-list", kwargs={"area_id": no_creator_area.id})
+
+        response = self.client.get(url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["area"]["id"], no_creator_area.id)
+        self.assertEqual(len(response.data["grids"]), 1)
+        self.assertEqual(response.data["grids"][0]["id"], no_creator_grid.id)
 
     def test_grid_cells_from_other_area_are_not_included(self):
         other_area = MapArea.objects.create(

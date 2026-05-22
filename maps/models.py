@@ -43,6 +43,32 @@ class MapArea(models.Model):
         return self.name
 
 
+class MapAreaShare(models.Model):
+    area = models.ForeignKey(
+        MapArea,
+        on_delete=models.CASCADE,
+        related_name="shares",
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="shared_map_areas",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["area", "user"],
+                name="unique_map_area_share_per_user",
+            ),
+        ]
+        ordering = ["area", "user", "id"]
+
+    def __str__(self):
+        return f"{self.area} shared with {self.user}"
+
+
 class GridCell(models.Model):
     area = models.ForeignKey(
         MapArea,

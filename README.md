@@ -326,7 +326,46 @@ curl -i -u otheruser:other-password \
 
 グリッド一覧も同じく、`404 Not Found` が返ります。
 
-### 9. 他ユーザーでは採点できないことの確認
+### 9. 共有相手管理 API の確認
+
+作成者は、共有相手を追加・一覧取得・削除できます。
+`<AREA_ID>` は共有したいメモグリッドの `id` に置き換えてください。
+
+```bash
+curl -i -u testuser:test-password \
+  -H "Content-Type: application/json" \
+  -X POST http://127.0.0.1:8000/api/maps/areas/<AREA_ID>/shares/ \
+  -d '{"username": "otheruser"}'
+```
+
+正常なら `201 Created` が返ります。
+レスポンスの `share.id` を、以降の `<SHARE_ID>` に置き換えてください。
+
+```bash
+curl -i -u testuser:test-password \
+  http://127.0.0.1:8000/api/maps/areas/<AREA_ID>/shares/
+```
+
+正常なら `200 OK` が返り、`shares` に `otheruser` が含まれます。
+
+共有後は、`otheruser` でも詳細・GridCell 一覧・採点ができます。
+
+```bash
+curl -i -u otheruser:other-password \
+  http://127.0.0.1:8000/api/maps/areas/<AREA_ID>/grids/
+```
+
+共有を解除します。
+
+```bash
+curl -i -u testuser:test-password \
+  -X DELETE http://127.0.0.1:8000/api/maps/areas/<AREA_ID>/shares/<SHARE_ID>/
+```
+
+正常なら `204 No Content` が返ります。
+共有解除後は、`otheruser` で同じメモグリッドを取得すると `404 Not Found` が返ります。
+
+### 10. 他ユーザーでは採点できないことの確認
 
 `<GRID1_ID>` と `<GRID2_ID>` は、GridCell 一覧 API の `grids` に含まれる `id` に置き換えてください。
 
@@ -349,7 +388,7 @@ curl -i -u otheruser:other-password \
 一括採点でも同じく、他ユーザーの `GridCell` が含まれるため `400 Bad Request` が返ります。
 この場合、一部だけ採点されることはありません。
 
-### 10. エラー確認
+### 11. エラー確認
 
 ログイン情報を付けずに送ると、ログイン必須のため `401 Unauthorized` になります。
 

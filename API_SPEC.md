@@ -28,6 +28,9 @@
 | `POST` | `/api/maps/grids/bulk-ratings/` | 複数グリッドをまとめて採点する | 必要 |
 | `GET` | `/api/maps/areas/{area_id}/grids/` | 点数付きグリッド一覧を取得する | 必要 |
 | `POST` | `/api/maps/areas/{area_id}/grids/` | 地図範囲からグリッドを自動生成する | 必要 |
+| `GET` | `/api/maps/areas/{area_id}/shares/` | 共有メモグリッドの共有相手一覧を取得する | 必要 |
+| `POST` | `/api/maps/areas/{area_id}/shares/` | 共有メモグリッドに共有相手を追加する | 必要 |
+| `DELETE` | `/api/maps/areas/{area_id}/shares/{share_id}/` | 共有メモグリッドから共有相手を削除する | 必要 |
 | `POST` | `/api/auth/token/` | Token 認証用 token を発行する | 不要 |
 
 未実装 API 候補:
@@ -108,81 +111,101 @@ Basic 認証でも Token 認証でも、`request.user` が `MapArea.created_by` 
 
 ## 実装済み: 採点 API の権限
 
-単体採点 API と一括採点 API では、`GridCell.area.created_by` を使って採点できる対象を制限します。
+単体採点 API と一括採点 API では、`GridCell.area.created_by` と `MapAreaShare` を使って採点できる対象を制限します。
 
-採点できるのは、ログイン中ユーザーが作成した `MapArea` に属する `GridCell` だけです。
+採点できるのは、ログイン中ユーザーが作成した `MapArea` に属する `GridCell`、またはログイン中ユーザーに共有された `MapArea` に属する `GridCell` です。
 
 | 状況 | 結果 |
 | --- | --- |
 | 未ログイン | `401 Unauthorized` |
 | `GridCell.area.created_by == request.user` | 採点許可 |
+| `MapAreaShare(area=GridCell.area, user=request.user)` が存在する | 採点許可 |
 | `GridCell.area.created_by != request.user` | 採点不可 |
-| `GridCell.area.created_by is None` | 採点不可 |
+| `GridCell.area.created_by is None` かつ共有されていない | 採点不可 |
 
-他ユーザーが作成した `MapArea` に属する `GridCell` や、`created_by` が `null` の `MapArea` に属する `GridCell` は採点できません。
+他ユーザーが作成した `MapArea` に属する `GridCell` や、`created_by` が `null` の `MapArea` に属する `GridCell` でも、ログイン中ユーザーに共有されていれば採点できます。
+共有されていない `GridCell` は採点できません。
 
 単体採点 API では、採点不可の `GridCell` は存在しないものとして扱い、`404 Not Found` を返します。
 一括採点 API では、採点不可の ID が 1 件でも含まれる場合、存在しない ID が含まれる場合と同じく、全体を `400 Bad Request` にします。
 
 一括採点 API は、一部だけ採点して成功にはしません。
-すべての `grid_ids` がログイン中ユーザーの `MapArea` に属している場合だけ、採点と点数再集計を実行します。
+すべての `grid_ids` がログイン中ユーザーの `MapArea`、またはログイン中ユーザーに共有された `MapArea` に属している場合だけ、採点と点数再集計を実行します。
 
 実装では、単体採点 API は次のように対象を絞ります。
 
 ```python
-grid = get_object_or_404(GridCell, id=grid_id, area__created_by=request.user)
+grid = get_object_or_404(
+    GridCell.objects.filter(
+        Q(area__created_by=request.user) | Q(area__shares__user=request.user)
+    ).distinct(),
+    id=grid_id,
+)
 ```
 
-一括採点 API は、指定された `grid_ids` を `area__created_by=request.user` で絞り、取得できた件数が入力 ID 数と一致する場合だけ処理します。
+一括採点 API は、指定された `grid_ids` を `area__created_by=request.user` または `area__shares__user=request.user` で絞り、取得できた件数が入力 ID 数と一致する場合だけ処理します。
 
 ## 実装済み: MapArea の閲覧権限
 
-現在の MapArea 一覧 API、MapArea 詳細 API、点数付きグリッド一覧 API は、ログイン済みであれば他ユーザーが作成した `MapArea` も取得できる状態です。
-今後は、`MapArea.created_by` を使って、作成者本人だけが自分の `MapArea` と紐づく `GridCell` を閲覧できる方針にします。
+MapArea 一覧 API、MapArea 詳細 API、点数付きグリッド一覧 API は、`MapArea.created_by` と `MapAreaShare` を使って閲覧範囲を制限します。
 
 対象 API:
 
 | メソッド | パス | 方針 |
 | --- | --- | --- |
-| `GET` | `/api/maps/areas/` | ログイン中ユーザーが作成した `MapArea` だけ返す |
-| `GET` | `/api/maps/areas/{area_id}/` | ログイン中ユーザーが作成した `MapArea` だけ取得できる |
-| `GET` | `/api/maps/areas/{area_id}/grids/` | ログイン中ユーザーが作成した `MapArea` の `GridCell` だけ取得できる |
+| `GET` | `/api/maps/areas/` | 自分の `MapArea` と自分に共有された `MapArea` を返す |
+| `GET` | `/api/maps/areas/{area_id}/` | 自分の `MapArea` と自分に共有された `MapArea` だけ取得できる |
+| `GET` | `/api/maps/areas/{area_id}/grids/` | 自分の `MapArea` と自分に共有された `MapArea` の `GridCell` だけ取得できる |
 
 ### 基本方針
 
 `MapArea.created_by` と `request.user` を比較します。
+また、`MapAreaShare(area=MapArea, user=request.user)` が存在する場合も閲覧を許可します。
 
 | 状況 | 結果 |
 | --- | --- |
 | 未ログイン | `401 Unauthorized` |
 | `MapArea.created_by == request.user` | 閲覧許可 |
+| `MapAreaShare.user == request.user` | 閲覧許可 |
 | `MapArea.created_by != request.user` | `404 Not Found` |
-| `MapArea.created_by is None` | `404 Not Found` |
+| `MapArea.created_by is None` かつ共有されていない | `404 Not Found` |
 
-他ユーザーの `MapArea` や `created_by` が `null` の `MapArea` は、存在しないものとして扱います。
+他ユーザーの `MapArea` や `created_by` が `null` の `MapArea` でも、自分に共有されていないものは存在しないものとして扱います。
 これは、他ユーザーのデータが存在すること自体をレスポンスから推測しにくくするためです。
 
 GridCell 自動生成 API は「存在するが操作できない」ことを `403 Forbidden` で返します。
-一方、閲覧 API は、一覧や詳細の取得範囲を `created_by=request.user` に絞るため、他ユーザーのデータは `404 Not Found` または一覧に出ない形にします。
+一方、閲覧 API は、一覧や詳細の取得範囲を「自分が作成したもの + 自分に共有されたもの」に絞るため、共有されていない他ユーザーのデータは `404 Not Found` または一覧に出ない形にします。
 
 ### 実装方針
 
 MapArea 一覧 API:
 
 ```python
-areas = MapArea.objects.filter(created_by=request.user)
+areas = MapArea.objects.filter(
+    Q(created_by=request.user) | Q(shares__user=request.user)
+).distinct()
 ```
 
 MapArea 詳細 API:
 
 ```python
-area = get_object_or_404(MapArea, id=area_id, created_by=request.user)
+area = get_object_or_404(
+    MapArea.objects.filter(
+        Q(created_by=request.user) | Q(shares__user=request.user)
+    ).distinct(),
+    id=area_id,
+)
 ```
 
 点数付きグリッド一覧 API:
 
 ```python
-area = get_object_or_404(MapArea, id=area_id, created_by=request.user)
+area = get_object_or_404(
+    MapArea.objects.filter(
+        Q(created_by=request.user) | Q(shares__user=request.user)
+    ).distinct(),
+    id=area_id,
+)
 grids = area.grid_cells.order_by("row_index", "col_index")
 ```
 
@@ -190,31 +213,32 @@ grids = area.grid_cells.order_by("row_index", "col_index")
 
 MapArea 一覧 API:
 
-- 自分が作成した `MapArea` だけ `areas` に含めます。
-- 他ユーザーが作成した `MapArea` は含めません。
-- `created_by is None` の `MapArea` も含めません。
+- 自分が作成した `MapArea` を `areas` に含めます。
+- 自分に共有された `MapArea` も `areas` に含めます。
+- 他ユーザーが作成し、自分に共有されていない `MapArea` は含めません。
+- `created_by is None` の `MapArea` も、自分に共有されていなければ含めません。
 - 対象が 0 件なら `areas: []` を返します。
 
 MapArea 詳細 API:
 
 - 自分が作成した `MapArea` なら `200 OK` を返します。
-- 他ユーザーが作成した `MapArea` なら `404 Not Found` を返します。
-- `created_by is None` の `MapArea` も `404 Not Found` を返します。
+- 自分に共有された `MapArea` も `200 OK` を返します。
+- 他ユーザーが作成し、自分に共有されていない `MapArea` なら `404 Not Found` を返します。
+- `created_by is None` の `MapArea` も、自分に共有されていなければ `404 Not Found` を返します。
 
 点数付きグリッド一覧 API:
 
 - 自分が作成した `MapArea` なら、その `MapArea` に属する `GridCell` を返します。
-- 他ユーザーが作成した `MapArea` なら `404 Not Found` を返します。
-- `created_by is None` の `MapArea` も `404 Not Found` を返します。
+- 自分に共有された `MapArea` でも、その `MapArea` に属する `GridCell` を返します。
+- 他ユーザーが作成し、自分に共有されていない `MapArea` なら `404 Not Found` を返します。
+- `created_by is None` の `MapArea` も、自分に共有されていなければ `404 Not Found` を返します。
 
 ### 今回は実装しないこと
 
-- `maps/views.py` の変更
-- `maps/tests.py` の変更
 - `created_by` を必須にする model 変更
 - migration の作成
 - 管理者だけ全件閲覧できる特別ルール
-- 共有用の MapArea や公開 MapArea の設計
+- 採点 API の共有メモグリッド対応
 
 `created_by` は現在 nullable です。
 既存データや管理画面で作成者なしの `MapArea` が作られる可能性があるため、今回は閲覧 API からは見えない扱いにします。
@@ -239,7 +263,9 @@ MapArea 詳細 API:
 ## 設計メモ: 共有 MapArea
 
 将来的に、他ユーザーと共有できる `MapArea` を実装する想定です。
-この時点では設計メモのみで、model 変更や migration 作成はまだ行いません。
+この時点では段階的に実装します。
+`MapAreaShare` model は実装済みです。
+一覧 API、詳細 API、GridCell 一覧 API の閲覧権限と、採点 API の権限に反映済みです。
 
 この節の既存 `is_public` 方針は、主に `ワールドグリッド` を想定した初期案です。
 今後 `共有メモグリッド` を実装する場合は、特定ユーザーだけを許可する共有メンバー管理も別途設計します。
@@ -249,17 +275,23 @@ MapArea 詳細 API:
 `共有メモグリッド` は、作成者が特定のユーザーにだけ共有する `MapArea` です。
 ワールドグリッドのようにログインユーザー全員へ公開するものではありません。
 
-想定する model 追加:
+実装済み model:
 
 ```python
 class MapAreaShare(models.Model):
     area = models.ForeignKey(MapArea, on_delete=models.CASCADE, related_name="shares")
-    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="shared_map_areas",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 ```
 
 `MapAreaShare` は、どの `MapArea` をどのユーザーに共有しているかを表します。
 同じ `area` と `user` の組み合わせは重複できないようにします。
+現時点では、一覧 API、詳細 API、GridCell 一覧 API の閲覧判定と、単体採点 API / 一括採点 API の採点権限に使っています。
+GridCell 自動生成 API にはまだ使っていません。
 
 共有メモグリッドの権限方針:
 
@@ -271,6 +303,260 @@ class MapAreaShare(models.Model):
 
 共有されたユーザーは閲覧と採点だけできます。
 編集、削除、共有相手の追加・削除、GridCell 自動生成は作成者だけが実行できる方針です。
+
+### 共有相手管理 API
+
+共有相手管理 API は、`MapAreaShare` を作成・削除するための API です。
+共有メモグリッドの作成者だけが利用できます。
+
+採用する API:
+
+| メソッド | パス | 目的 |
+| --- | --- | --- |
+| `GET` | `/api/maps/areas/{area_id}/shares/` | 共有相手一覧を取得する |
+| `POST` | `/api/maps/areas/{area_id}/shares/` | 共有相手を追加する |
+| `DELETE` | `/api/maps/areas/{area_id}/shares/{share_id}/` | 共有相手を削除する |
+
+削除 API は `share_id` を URL に含める設計にします。
+理由は、削除対象が `MapAreaShare` という共有関係そのものだからです。
+`user_id` 指定でも実装はできますが、`share_id` を使うと「どの共有レコードを削除するか」が明確になり、DRF の詳細削除 API としても自然です。
+
+共有相手追加 API は、手動確認しやすさを優先して `username` を受け取ります。
+`user_id` は DB 上は扱いやすいですが、curl で確認するときに事前に ID を調べる必要があります。
+一方 `username` なら、人が見て分かる値で共有相手を指定できます。
+
+レスポンスに含めるユーザー情報は、当面 `id` と `username` だけにします。
+`email` は個人情報になりやすく、共有相手管理に必須ではないため返しません。
+
+#### 共通権限
+
+共有相手管理 API はログイン必須です。
+
+操作できるのは、`MapArea.created_by == request.user` の場合だけです。
+共有されたユーザーは、共有相手一覧の取得・追加・削除はできません。
+
+| 状況 | 結果 |
+| --- | --- |
+| 未ログイン | `401 Unauthorized` |
+| `MapArea.created_by == request.user` | 操作許可 |
+| 共有されたユーザー | `404 Not Found` |
+| 共有されていない他ユーザー | `404 Not Found` |
+| `created_by=None` の `MapArea` | `404 Not Found` |
+| 存在しない `area_id` | `404 Not Found` |
+
+権限がない場合は、他ユーザーの `MapArea` が存在することを推測しにくくするため `404 Not Found` を返す方針です。
+これは、閲覧 API の方針に合わせます。
+
+実装時は、共有相手管理用に次のような取得処理を使う想定です。
+
+```python
+area = get_object_or_404(
+    MapArea.objects.filter(created_by=request.user),
+    id=area_id,
+)
+```
+
+#### 共有相手一覧 API
+
+```text
+GET /api/maps/areas/{area_id}/shares/
+```
+
+指定した `MapArea` の共有相手一覧を取得します。
+
+##### URL パラメータ
+
+| 名前 | 型 | 内容 |
+| --- | --- | --- |
+| `area_id` | integer | 共有相手一覧を取得する `MapArea` ID |
+
+##### リクエスト
+
+リクエストボディはありません。
+
+##### レスポンス
+
+```json
+{
+  "area": {
+    "id": 1,
+    "name": "東京駅周辺"
+  },
+  "shares": [
+    {
+      "id": 1,
+      "user": {
+        "id": 4,
+        "username": "otheruser"
+      },
+      "created_at": "2026-05-22T10:00:00+09:00"
+    }
+  ]
+}
+```
+
+共有相手が 0 件の場合は、空配列を返します。
+
+```json
+{
+  "area": {
+    "id": 1,
+    "name": "東京駅周辺"
+  },
+  "shares": []
+}
+```
+
+並び順は、`MapAreaShare` model の ordering に合わせます。
+現状は `area`, `user`, `id` 順です。
+
+##### ステータスコード
+
+| 状況 | ステータス |
+| --- | --- |
+| 取得成功 | `200 OK` |
+| 未ログイン | `401 Unauthorized` |
+| `area_id` が存在しない | `404 Not Found` |
+| 作成者以外が取得しようとした | `404 Not Found` |
+| `created_by=None` の `MapArea` を指定した | `404 Not Found` |
+
+#### 共有相手追加 API
+
+```text
+POST /api/maps/areas/{area_id}/shares/
+```
+
+指定した `MapArea` に共有相手を追加します。
+
+##### URL パラメータ
+
+| 名前 | 型 | 内容 |
+| --- | --- | --- |
+| `area_id` | integer | 共有相手を追加する `MapArea` ID |
+
+##### リクエスト
+
+```json
+{
+  "username": "otheruser"
+}
+```
+
+| 項目 | 必須 | 内容 |
+| --- | --- | --- |
+| `username` | 必須 | 共有相手に追加するユーザー名 |
+
+##### レスポンス
+
+```json
+{
+  "share": {
+    "id": 1,
+    "area": 1,
+    "user": {
+      "id": 4,
+      "username": "otheruser"
+    },
+    "created_at": "2026-05-22T10:00:00+09:00"
+  }
+}
+```
+
+##### ステータスコード
+
+| 状況 | ステータス |
+| --- | --- |
+| 追加成功 | `201 Created` |
+| 未ログイン | `401 Unauthorized` |
+| `area_id` が存在しない | `404 Not Found` |
+| 作成者以外が追加しようとした | `404 Not Found` |
+| `created_by=None` の `MapArea` を指定した | `404 Not Found` |
+| `username` がない | `400 Bad Request` |
+| `username` が文字列ではない | `400 Bad Request` |
+| 存在しないユーザーを指定した | `400 Bad Request` |
+| 作成者自身を指定した | `400 Bad Request` |
+| 既に共有済みのユーザーを指定した | `400 Bad Request` |
+
+既に共有済みのユーザーを指定した場合は、新しい `MapAreaShare` は作成しません。
+今回は分かりやすさを優先し、`200 OK` で冪等に扱うのではなく、入力エラーとして `400 Bad Request` を返します。
+
+初心者向け補足:
+
+- 冪等とは、同じ操作を何度実行しても結果が変わらない性質です。
+- 今回は「重複して共有しようとした」ことを利用者に知らせるため、重複共有をエラーにします。
+
+#### 共有相手削除 API
+
+```text
+DELETE /api/maps/areas/{area_id}/shares/{share_id}/
+```
+
+指定した `MapArea` から共有相手を削除します。
+
+##### URL パラメータ
+
+| 名前 | 型 | 内容 |
+| --- | --- | --- |
+| `area_id` | integer | 共有相手を削除する `MapArea` ID |
+| `share_id` | integer | 削除する `MapAreaShare` ID |
+
+##### リクエスト
+
+リクエストボディはありません。
+
+##### レスポンス
+
+削除成功時は本文を返さず、`204 No Content` を返します。
+
+##### ステータスコード
+
+| 状況 | ステータス |
+| --- | --- |
+| 削除成功 | `204 No Content` |
+| 未ログイン | `401 Unauthorized` |
+| `area_id` が存在しない | `404 Not Found` |
+| 作成者以外が削除しようとした | `404 Not Found` |
+| `created_by=None` の `MapArea` を指定した | `404 Not Found` |
+| `share_id` が存在しない | `404 Not Found` |
+| `share_id` が指定 `area_id` に属していない | `404 Not Found` |
+
+削除対象がない場合や、別の `MapArea` の共有関係を指定した場合も `404 Not Found` にします。
+これは、他ユーザーの共有関係を推測しにくくするためです。
+
+#### テスト観点
+
+共有相手一覧 API:
+
+- 作成者は共有相手一覧を取得できる
+- 共有相手が 0 件なら `shares: []` を返す
+- 共有されたユーザーは共有相手一覧を取得できない
+- 共有されていない他ユーザーは取得できない
+- 未ログインは拒否される
+- 存在しない `area_id` は拒否される
+- `created_by=None` の `MapArea` は通常ユーザーが管理できない
+
+共有相手追加 API:
+
+- 作成者は共有相手を追加できる
+- 追加後、そのユーザーは MapArea 一覧・詳細・GridCell 一覧・採点 API を使える
+- 存在しないユーザーは追加できない
+- 既に共有済みのユーザーは重複追加できない
+- 作成者自身は共有相手に追加できない
+- 共有されたユーザーは追加できない
+- 共有されていない他ユーザーは追加できない
+- 未ログインは拒否される
+- `created_by=None` の `MapArea` は通常ユーザーが管理できない
+
+共有相手削除 API:
+
+- 作成者は共有相手を削除できる
+- 削除後、そのユーザーは MapArea 一覧・詳細・GridCell 一覧・採点 API を使えなくなる
+- 存在しない共有関係は削除できない
+- 指定 `area_id` に属さない `share_id` は削除できない
+- 共有されたユーザーは削除できない
+- 共有されていない他ユーザーは削除できない
+- 未ログインは拒否される
+- `created_by=None` の `MapArea` は通常ユーザーが管理できない
 
 MapArea 一覧 API では、共有メモグリッドも判別できる形で返します。
 一覧には少なくとも次のような表示用情報を含める想定です。
@@ -436,9 +722,12 @@ POST /api/maps/grids/{grid_id}/ratings/
 
 #### 権限
 
-採点できるのは、自分が作成した `MapArea` に属する `GridCell` だけです。
+採点できるのは、自分が作成した `MapArea` に属する `GridCell`、または自分に共有された `MapArea` に属する `GridCell` です。
 
-他ユーザーが作成した `MapArea` に属する `GridCell` や、`created_by` が `null` の `MapArea` に属する `GridCell` は、存在しないものとして扱い `404 Not Found` を返します。
+採点者は常にログイン中ユーザーです。
+共有メモグリッドを採点した場合も、作成者の採点ではなく、共有されたユーザー自身の `GridRating` として保存します。
+
+他ユーザーが作成し、自分に共有されていない `MapArea` に属する `GridCell` や、`created_by` が `null` かつ自分に共有されていない `MapArea` に属する `GridCell` は、存在しないものとして扱い `404 Not Found` を返します。
 
 #### レスポンス
 
@@ -479,8 +768,8 @@ POST /api/maps/grids/{grid_id}/ratings/
 | 既存採点を更新した | `200 OK` |
 | 未ログイン | `401 Unauthorized` |
 | `grid_id` が存在しない | `404 Not Found` |
-| 他ユーザーの `GridCell` を指定した | `404 Not Found` |
-| `created_by` が `null` の `MapArea` に属する `GridCell` を指定した | `404 Not Found` |
+| 自分に共有されていない他ユーザーの `GridCell` を指定した | `404 Not Found` |
+| `created_by` が `null` かつ自分に共有されていない `MapArea` に属する `GridCell` を指定した | `404 Not Found` |
 | `score` が範囲外 | `400 Bad Request` |
 | `score` がない | `400 Bad Request` |
 
@@ -521,9 +810,9 @@ POST /api/maps/grids/bulk-ratings/
 
 #### 権限
 
-採点できるのは、自分が作成した `MapArea` に属する `GridCell` だけです。
+採点できるのは、自分が作成した `MapArea` に属する `GridCell`、または自分に共有された `MapArea` に属する `GridCell` です。
 
-`grid_ids` に他ユーザーの `GridCell` や、`created_by` が `null` の `MapArea` に属する `GridCell` が 1 件でも含まれる場合は、全体を `400 Bad Request` にします。
+`grid_ids` に自分に共有されていない他ユーザーの `GridCell` や、`created_by` が `null` かつ自分に共有されていない `MapArea` に属する `GridCell` が 1 件でも含まれる場合は、全体を `400 Bad Request` にします。
 
 一括採点 API では、一部だけ採点して成功にはしません。
 すべての `grid_ids` が採点可能な場合だけ、`GridRating` の作成または更新と `GridCell` の点数再集計を実行します。
@@ -576,8 +865,8 @@ POST /api/maps/grids/bulk-ratings/
 | 未ログイン | `401 Unauthorized` |
 | `grid_ids` が空 | `400 Bad Request` |
 | `grid_ids` に存在しない ID がある | `400 Bad Request` |
-| `grid_ids` に他ユーザーの `GridCell` がある | `400 Bad Request` |
-| `grid_ids` に `created_by` が `null` の `MapArea` に属する `GridCell` がある | `400 Bad Request` |
+| `grid_ids` に自分に共有されていない他ユーザーの `GridCell` がある | `400 Bad Request` |
+| `grid_ids` に `created_by` が `null` かつ自分に共有されていない `MapArea` に属する `GridCell` がある | `400 Bad Request` |
 | `score` が範囲外 | `400 Bad Request` |
 | `score` がない | `400 Bad Request` |
 
@@ -592,6 +881,8 @@ GET /api/maps/areas/{area_id}/grids/
 
 この API では集計値を再計算しません。
 保存済みの `GridCell` の集計値を読み取って返します。
+自分に共有された共有メモグリッドの `GridCell` 一覧も取得できます。
+共有メモグリッドの `GridCell` は、共有されたユーザーも採点できます。
 
 #### 認証
 
@@ -661,6 +952,7 @@ GET /api/maps/areas/{area_id}/grids/
 | 一覧を取得できた | `200 OK` |
 | 未ログイン | `401 Unauthorized` |
 | `area_id` が存在しない | `404 Not Found` |
+| `area_id` が自分に共有されていない | `404 Not Found` |
 
 #### 注意点
 
@@ -954,7 +1246,11 @@ limit = 20 / 60
 GET /api/maps/areas/
 ```
 
-ログイン中ユーザーが、登録済みの `MapArea` 一覧を取得する API です。
+ログイン中ユーザーが、閲覧できる `MapArea` 一覧を取得する API です。
+ユーザー向けには、個人用の `MapArea` を `メモグリッド`、共有された `MapArea` を `共有メモグリッド` と表示します。
+
+この時点では、一覧 API だけが共有メモグリッドを含みます。
+詳細 API、GridCell 一覧 API、採点 API はまだ共有メモグリッド対応していません。
 
 #### 認証
 
@@ -980,6 +1276,9 @@ GET /api/maps/areas/
       "grid_size_meters": 500,
       "source": "manual",
       "created_by": 3,
+      "visibility": "private",
+      "display_type": "メモグリッド",
+      "is_owner": true,
       "created_at": "2026-05-18T10:00:00+09:00",
       "updated_at": "2026-05-18T10:00:00+09:00"
     }
@@ -999,6 +1298,33 @@ GET /api/maps/areas/
 
 `MapArea` model の ordering に従い、`name`, `id` の順に並びます。
 
+#### 取得対象
+
+一覧 API は、次の `MapArea` を返します。
+
+- 自分が作成した `MapArea`
+- `MapAreaShare` によって自分に共有された `MapArea`
+
+この時点では、ワールドグリッドはまだ含めません。
+同じ `MapArea` が自分の作成分と共有分の両方に該当する場合は、重複させず 1 件だけ返します。
+
+#### 表示用フィールド
+
+| フィールド | 型 | 内容 |
+| --- | --- | --- |
+| `visibility` | string | `private` または `shared` |
+| `display_type` | string | `メモグリッド` または `共有メモグリッド` |
+| `is_owner` | boolean | ログイン中ユーザーが作成者なら `true` |
+
+判定ルール:
+
+| 状況 | `visibility` | `display_type` | `is_owner` |
+| --- | --- | --- | --- |
+| `created_by == request.user` | `private` | `メモグリッド` | `true` |
+| `MapAreaShare.user == request.user` | `shared` | `共有メモグリッド` | `false` |
+
+自分が作成した `MapArea` が自分に共有されている場合は、`private` を優先します。
+
 #### ステータスコード
 
 | 状況 | ステータス |
@@ -1013,6 +1339,8 @@ GET /api/maps/areas/{area_id}/
 ```
 
 指定した `MapArea` 1 件の詳細を取得する API です。
+自分が作成したメモグリッドだけでなく、自分に共有された共有メモグリッドも取得できます。
+共有されていない `MapArea` は、存在しないものとして `404 Not Found` を返します。
 
 #### 認証
 
@@ -1054,6 +1382,7 @@ GET /api/maps/areas/{area_id}/
 | 詳細を取得できた | `200 OK` |
 | 未ログイン | `401 Unauthorized` |
 | `area_id` が存在しない | `404 Not Found` |
+| `area_id` が自分に共有されていない | `404 Not Found` |
 
 ## 現在のモデル
 

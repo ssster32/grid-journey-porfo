@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import GridCell, GridRating, MapArea
+from .models import GridCell, GridRating, MapArea, MapAreaShare
 
 
 @admin.register(MapArea)
@@ -15,6 +15,13 @@ class MapAreaAdmin(admin.ModelAdmin):
     )
     search_fields = ("name", "source")
     list_filter = ("source", "created_at")
+
+
+@admin.register(MapAreaShare)
+class MapAreaShareAdmin(admin.ModelAdmin):
+    list_display = ("id", "area", "user", "created_at")
+    search_fields = ("area__name", "user__username")
+    list_filter = ("created_at",)
 
 
 @admin.register(GridCell)

@@ -1,5 +1,6 @@
 from django.contrib.staticfiles import finders
 from django.db import transaction
+from django.db.models import Q
 from django.http import Http404, HttpResponse
 from rest_framework import status
 from rest_framework.authentication import TokenAuthentication
@@ -9,11 +10,14 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .models import GridCell, GridRating, MapArea
+from .models import GridCell, GridRating, MapArea, MapAreaShare
 from .serializers import (
     BulkGridRatingSerializer,
     GridCellScoreSerializer,
+    MapAreaListSerializer,
     MapAreaSerializer,
+    MapAreaShareCreateSerializer,
+    MapAreaShareSerializer,
     GridRatingCreateSerializer,
     GridRatingResponseSerializer,
 )
@@ -40,6 +44,21 @@ def is_area_too_large_for_general_user(validated_data):
     return latitude_diff > limit or longitude_diff > limit
 
 
+def get_viewable_map_area_or_404(user, area_id):
+    queryset = MapArea.objects.filter(Q(created_by=user) | Q(shares__user=user))
+    return get_object_or_404(queryset.distinct(), id=area_id)
+
+
+def get_owned_map_area_or_404(user, area_id):
+    return get_object_or_404(MapArea.objects.filter(created_by=user), id=area_id)
+
+
+def rateable_grid_cells_for_user(user):
+    return GridCell.objects.filter(
+        Q(area__created_by=user) | Q(area__shares__user=user)
+    ).distinct()
+
+
 class MapDemoView(APIView):
     def get(self, request):
         demo_path = finders.find("maps/demo.html")
@@ -55,11 +74,30 @@ class MapAreaListCreateView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        areas = MapArea.objects.filter(created_by=request.user)
+        shared_area_ids = set(
+            MapAreaShare.objects.filter(user=request.user).values_list(
+                "area_id",
+                flat=True,
+            )
+        )
+        areas = (
+            MapArea.objects.filter(
+                Q(created_by=request.user) | Q(id__in=shared_area_ids)
+            )
+            .distinct()
+            .order_by("name", "id")
+        )
 
         return Response(
             {
-                "areas": MapAreaSerializer(areas, many=True).data,
+                "areas": MapAreaListSerializer(
+                    areas,
+                    many=True,
+                    context={
+                        "request": request,
+                        "shared_area_ids": shared_area_ids,
+                    },
+                ).data,
             },
             status=status.HTTP_200_OK,
         )
@@ -97,7 +135,7 @@ class MapAreaDetailView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, area_id):
-        area = get_object_or_404(MapArea, id=area_id, created_by=request.user)
+        area = get_viewable_map_area_or_404(request.user, area_id)
 
         return Response(
             MapAreaSerializer(area).data,
@@ -105,16 +143,64 @@ class MapAreaDetailView(APIView):
         )
 
 
+class MapAreaShareListCreateView(APIView):
+    authentication_classes = API_AUTHENTICATION_CLASSES
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, area_id):
+        area = get_owned_map_area_or_404(request.user, area_id)
+        shares = area.shares.select_related("user").all()
+
+        return Response(
+            {
+                "area": {
+                    "id": area.id,
+                    "name": area.name,
+                },
+                "shares": MapAreaShareSerializer(shares, many=True).data,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    def post(self, request, area_id):
+        area = get_owned_map_area_or_404(request.user, area_id)
+        serializer = MapAreaShareCreateSerializer(
+            data=request.data,
+            context={"area": area},
+        )
+        serializer.is_valid(raise_exception=True)
+
+        share = MapAreaShare.objects.create(
+            area=area,
+            user=serializer.validated_data["user"],
+        )
+
+        return Response(
+            {
+                "share": MapAreaShareSerializer(share).data,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class MapAreaShareDetailView(APIView):
+    authentication_classes = API_AUTHENTICATION_CLASSES
+    permission_classes = [IsAuthenticated]
+
+    def delete(self, request, area_id, share_id):
+        area = get_owned_map_area_or_404(request.user, area_id)
+        share = get_object_or_404(MapAreaShare, id=share_id, area=area)
+        share.delete()
+
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
 class GridRatingCreateView(APIView):
     authentication_classes = API_AUTHENTICATION_CLASSES
     permission_classes = [IsAuthenticated]
 
     def post(self, request, grid_id):
-        grid = get_object_or_404(
-            GridCell,
-            id=grid_id,
-            area__created_by=request.user,
-        )
+        grid = get_object_or_404(rateable_grid_cells_for_user(request.user), id=grid_id)
         serializer = GridRatingCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
@@ -147,10 +233,7 @@ class BulkGridRatingCreateView(APIView):
         serializer.is_valid(raise_exception=True)
 
         grid_ids = serializer.validated_data["grid_ids"]
-        grids = GridCell.objects.filter(
-            id__in=grid_ids,
-            area__created_by=request.user,
-        )
+        grids = rateable_grid_cells_for_user(request.user).filter(id__in=grid_ids)
         grids_by_id = {grid.id: grid for grid in grids}
         if len(grids_by_id) != len(grid_ids):
             return Response(
@@ -194,7 +277,7 @@ class GridCellListView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, area_id):
-        area = get_object_or_404(MapArea, id=area_id, created_by=request.user)
+        area = get_viewable_map_area_or_404(request.user, area_id)
         grids = area.grid_cells.order_by("row_index", "col_index")
 
         return Response(
