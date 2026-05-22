@@ -12,7 +12,7 @@
         <p class="eyebrow">API check page</p>
         <h1>Map Demo</h1>
         <p class="lead">
-          確認用の簡易 UI です。既存 API を使って MapArea 一覧、GridCell 一覧、単体採点を試せます。
+          確認用の簡易 UI です。既存 API を使ってメモグリッド一覧、GridCell 一覧、単体採点を試せます。
         </p>
       </header>
 
@@ -32,11 +32,11 @@
               Password
               <input id="password" type="password" value="test-password" autocomplete="current-password">
             </label>
-            <button id="load-areas-button" type="button">MapArea 一覧を取得</button>
+            <button id="load-areas-button" type="button">メモグリッド一覧を取得</button>
           </section>
 
           <section class="panel" aria-labelledby="create-area-heading">
-            <h2 id="create-area-heading">MapArea 作成</h2>
+            <h2 id="create-area-heading">メモグリッド作成</h2>
             <form id="create-area-form" class="area-form">
               <label>
                 Name
@@ -72,12 +72,12 @@
                 Source
                 <input id="area-source" type="text" value="demo">
               </label>
-              <button id="create-area-button" type="submit">MapArea を作成</button>
+              <button id="create-area-button" type="submit">メモグリッドを作成</button>
             </form>
           </section>
 
           <section class="panel" aria-labelledby="areas-heading">
-            <h2 id="areas-heading">MapArea</h2>
+            <h2 id="areas-heading">メモグリッド</h2>
             <div id="areas-list" class="areas-list" aria-live="polite">
               まだ読み込んでいません。
             </div>
@@ -88,7 +88,7 @@
           <div class="content-header">
             <div>
               <h2 id="grids-heading">GridCell</h2>
-              <p id="selected-area-label">MapArea を選択すると、自動生成済みの GridCell を表示します。</p>
+              <p id="selected-area-label">メモグリッドを選択すると、自動生成済みの GridCell を表示します。</p>
             </div>
             <div class="action-row">
               <button id="reload-grids-button" type="button" disabled>GridCell を再取得</button>

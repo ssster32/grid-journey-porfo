@@ -25,6 +25,19 @@ API_AUTHENTICATION_CLASSES = [
     BasicAuthentication,
     SessionAuthentication,
 ]
+MAX_GENERAL_USER_AREA_DEGREES = 20 / 60
+AREA_SIZE_COMPARISON_EPSILON = 1e-12
+AREA_SIZE_LIMIT_ERROR_MESSAGE = (
+    "一般ユーザーは緯度差・経度差が20分を超えるMapAreaを作成できません。"
+)
+
+
+def is_area_too_large_for_general_user(validated_data):
+    latitude_diff = validated_data["north"] - validated_data["south"]
+    longitude_diff = validated_data["east"] - validated_data["west"]
+    limit = MAX_GENERAL_USER_AREA_DEGREES + AREA_SIZE_COMPARISON_EPSILON
+
+    return latitude_diff > limit or longitude_diff > limit
 
 
 class MapDemoView(APIView):
@@ -54,6 +67,14 @@ class MapAreaListCreateView(APIView):
     def post(self, request):
         serializer = MapAreaSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+
+        if not request.user.is_staff and is_area_too_large_for_general_user(
+            serializer.validated_data
+        ):
+            return Response(
+                {"detail": AREA_SIZE_LIMIT_ERROR_MESSAGE},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         try:
             with transaction.atomic():

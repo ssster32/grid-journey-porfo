@@ -376,7 +376,9 @@ class MapDemoViewTests(TestCase):
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertContains(response, "Map Demo")
-        self.assertContains(response, "MapArea を作成")
+        self.assertContains(response, "メモグリッド作成")
+        self.assertContains(response, "メモグリッド一覧を取得")
+        self.assertContains(response, "メモグリッドを作成")
         self.assertNotContains(response, "GridCell を自動生成")
         self.assertContains(response, "GridCell を再取得")
         self.assertContains(response, "Score Map")
@@ -526,6 +528,11 @@ class MapAreaCreateViewTests(TestCase):
             username="testuser",
             password="test-password",
         )
+        self.staff_user = get_user_model().objects.create_user(
+            username="staffuser",
+            password="test-password",
+            is_staff=True,
+        )
         self.client = APIClient()
         self.url = reverse("map-area-list-create")
         self.valid_payload = {
@@ -567,6 +574,106 @@ class MapAreaCreateViewTests(TestCase):
         area = MapArea.objects.get(id=response.data["id"])
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertGreater(GridCell.objects.filter(area=area).count(), 0)
+
+    def test_general_user_can_create_map_area_with_latitude_diff_equal_to_20_minutes(
+        self,
+    ):
+        self.client.force_authenticate(user=self.user)
+        payload = {
+            **self.valid_payload,
+            "north": 35.33333333333333,
+            "south": 35.0,
+            "east": 139.1,
+            "west": 139.0,
+            "grid_size_meters": 50000,
+        }
+
+        response = self.client.post(self.url, payload, format="json")
+        area = MapArea.objects.get(id=response.data["id"])
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(area.created_by, self.user)
+        self.assertGreater(GridCell.objects.filter(area=area).count(), 0)
+
+    def test_general_user_can_create_map_area_with_longitude_diff_equal_to_20_minutes(
+        self,
+    ):
+        self.client.force_authenticate(user=self.user)
+        payload = {
+            **self.valid_payload,
+            "north": 35.1,
+            "south": 35.0,
+            "east": 139.33333333333333,
+            "west": 139.0,
+            "grid_size_meters": 50000,
+        }
+
+        response = self.client.post(self.url, payload, format="json")
+        area = MapArea.objects.get(id=response.data["id"])
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(area.created_by, self.user)
+        self.assertGreater(GridCell.objects.filter(area=area).count(), 0)
+
+    def test_general_user_cannot_create_map_area_over_20_minutes_latitude(self):
+        self.client.force_authenticate(user=self.user)
+        payload = {
+            **self.valid_payload,
+            "north": 35.34,
+            "south": 35.0,
+            "east": 139.1,
+            "west": 139.0,
+            "grid_size_meters": 50000,
+        }
+
+        response = self.client.post(self.url, payload, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(
+            response.data["detail"],
+            "一般ユーザーは緯度差・経度差が20分を超えるMapAreaを作成できません。",
+        )
+        self.assertEqual(MapArea.objects.count(), 0)
+        self.assertEqual(GridCell.objects.count(), 0)
+
+    def test_general_user_cannot_create_map_area_over_20_minutes_longitude(self):
+        self.client.force_authenticate(user=self.user)
+        payload = {
+            **self.valid_payload,
+            "north": 35.1,
+            "south": 35.0,
+            "east": 139.34,
+            "west": 139.0,
+            "grid_size_meters": 50000,
+        }
+
+        response = self.client.post(self.url, payload, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(
+            response.data["detail"],
+            "一般ユーザーは緯度差・経度差が20分を超えるMapAreaを作成できません。",
+        )
+        self.assertEqual(MapArea.objects.count(), 0)
+        self.assertEqual(GridCell.objects.count(), 0)
+
+    def test_staff_user_can_create_map_area_over_20_minutes(self):
+        self.client.force_authenticate(user=self.staff_user)
+        payload = {
+            **self.valid_payload,
+            "north": 35.6,
+            "south": 35.0,
+            "east": 139.6,
+            "west": 139.0,
+            "grid_size_meters": 50000,
+        }
+
+        response = self.client.post(self.url, payload, format="json")
+        area = MapArea.objects.get(id=response.data["id"])
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(area.created_by, self.staff_user)
         self.assertGreater(GridCell.objects.filter(area=area).count(), 0)
 
     def test_generated_grid_cells_are_linked_to_created_map_area(self):

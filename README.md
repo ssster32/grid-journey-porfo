@@ -69,6 +69,9 @@ deactivate
 `-u testuser:test-password` は Basic 認証で、ユーザー名とパスワードを送る指定です。
 Token 認証を使う場合は、先に token を発行し、`Authorization: Token <TOKEN>` ヘッダーを送ります。
 
+画面上では、個人用の `MapArea` を「メモグリッド」と表示します。
+API 内部の model 名やエンドポイント名は、従来どおり `MapArea` のままです。
+
 ### 1. 事前準備
 
 プロジェクト直下で実行します。
@@ -140,8 +143,9 @@ Basic 認証も当面残しているため、以降の手順は `-u testuser:tes
 
 ### 3. MapArea 作成 API と GridCell 自動生成
 
-MapArea を作成します。
-現在の仕様では、MapArea 作成後に GridCell も自動生成されます。
+メモグリッドを作成します。
+API 内部では、メモグリッドは `MapArea` として保存されます。
+現在の仕様では、メモグリッド作成後に GridCell も自動生成されます。
 
 ```bash
 curl -i -u testuser:test-password \
@@ -163,7 +167,11 @@ curl -i \
 正常に作成できた場合は `201 Created` が返ります。
 レスポンスの `id` を、以降の `<AREA_ID>` に置き換えてください。
 
-次に、作成された MapArea の GridCell 一覧を取得します。
+一般ユーザーは、緯度差または経度差が 20 分を超えるメモグリッドを作成できません。
+管理者はこの制限の対象外です。
+これは、広すぎる範囲で `GridCell` が大量生成されることを防ぐための制限です。
+
+次に、作成されたメモグリッドの GridCell 一覧を取得します。
 
 ```bash
 curl -i -u testuser:test-password \
@@ -173,7 +181,7 @@ curl -i -u testuser:test-password \
 正常に取得できた場合は `200 OK` が返ります。
 `grids` に含まれる先頭 2 件の `id` を、以降の `<GRID1_ID>`、`<GRID2_ID>` に置き換えてください。
 
-GridCell が返ることを確認することで、MapArea 作成時の GridCell 自動生成も確認できます。
+GridCell が返ることを確認することで、メモグリッド作成時の GridCell 自動生成も確認できます。
 
 ### 4. 単体採点 API
 
@@ -268,9 +276,10 @@ curl -i -u testuser:test-password \
 この API は保存済みの集計値を読むだけです。
 新しく採点したい場合は、単体採点 API または一括採点 API を使います。
 
-### 8. MapArea 閲覧制限の確認
+### 8. メモグリッド閲覧制限の確認
 
-`MapArea` は作成者本人だけが一覧・詳細・グリッド一覧で閲覧できます。
+メモグリッドは作成者本人だけが一覧・詳細・グリッド一覧で閲覧できます。
+API 内部では `MapArea` として扱います。
 別ユーザーで同じ `area_id` を指定すると、詳細とグリッド一覧は `404 Not Found` になります。
 
 まず別ユーザーを作成します。
@@ -300,15 +309,15 @@ curl -i -u otheruser:other-password \
   http://127.0.0.1:8000/api/maps/areas/
 ```
 
-`otheruser` が作成した `MapArea` がなければ、`200 OK` で `areas: []` が返ります。
-`testuser` が作成した `MapArea` は含まれません。
+`otheruser` が作成したメモグリッドがなければ、`200 OK` で `areas: []` が返ります。
+`testuser` が作成したメモグリッドは含まれません。
 
 ```bash
 curl -i -u otheruser:other-password \
   http://127.0.0.1:8000/api/maps/areas/<AREA_ID>/
 ```
 
-`testuser` が作成した `MapArea` を `otheruser` で取得しようとしているため、`404 Not Found` が返ります。
+`testuser` が作成したメモグリッドを `otheruser` で取得しようとしているため、`404 Not Found` が返ります。
 
 ```bash
 curl -i -u otheruser:other-password \
@@ -328,7 +337,7 @@ curl -i -u otheruser:other-password \
   -d '{"score": 8, "comment": "他ユーザーで採点"}'
 ```
 
-`testuser` が作成した `MapArea` に属する `GridCell` を `otheruser` で採点しようとしているため、`404 Not Found` が返ります。
+`testuser` が作成したメモグリッドに属する `GridCell` を `otheruser` で採点しようとしているため、`404 Not Found` が返ります。
 
 ```bash
 curl -i -u otheruser:other-password \
@@ -382,7 +391,8 @@ curl ではなくブラウザで簡単に確認したい場合は、確認用 de
 このページは開発確認用です。JavaScript で Basic 認証情報を扱うため、本番向けのログイン画面ではありません。
 
 まず、事前準備の手順で確認用ユーザーを作成しておきます。
-既存の `MapArea` や `GridCell` がなくても、demo ページから作成できます。
+既存のメモグリッドや `GridCell` がなくても、demo ページから作成できます。
+API 内部では、メモグリッドを `MapArea` と呼びます。
 その後、開発サーバーを起動します。
 
 ```bash
@@ -405,9 +415,9 @@ password: test-password
 
 確認する流れ:
 
-1. 必要に応じて `MapArea 作成` フォームの値を調整し、`MapArea を作成` を押す。
-2. 作成した `MapArea` が一覧に表示され、選択状態になることを確認する。
-3. MapArea 作成後に自動生成された `GridCell` が、`Score Map` と一覧に表示されることを確認する。
+1. 必要に応じて `メモグリッド作成` フォームの値を調整し、`メモグリッドを作成` を押す。
+2. 作成したメモグリッドが一覧に表示され、選択状態になることを確認する。
+3. メモグリッド作成後に自動生成された `GridCell` が、`Score Map` と一覧に表示されることを確認する。
 4. 必要に応じて `GridCell を再取得` を押し、表示を更新できることを確認する。
 5. 任意の `GridCell` に 1 から 10 の score を入力して `採点` を押す。
 6. 採点後に `average_user_score`、`rating_count`、`calculated_score` が更新されることを確認する。
@@ -420,10 +430,10 @@ password: test-password
 地図画像を使う場合は、利用条件や著作権を確認してください。
 `calculated_score` は大きく表示します。
 `GridCell ID` と `row_index` / `col_index` は、現在は確認用に小さく表示しています。
-表示領域の縦横比は、MapArea の `east - west` と `north - south` から概算します。
+表示領域の縦横比は、メモグリッドとして扱う `MapArea` の `east - west` と `north - south` から概算します。
 ただし、正確な地図投影ではなく、row/col による簡易グリッド配置は維持しています。
 
-demo ページでは、MapArea 作成時に GridCell が自動生成される前提のため、GridCell 自動生成 API を直接実行するボタンは表示していません。
+demo ページでは、メモグリッド作成時に GridCell が自動生成される前提のため、GridCell 自動生成 API を直接実行するボタンは表示していません。
 
 ## 依存関係を追加したいとき
 

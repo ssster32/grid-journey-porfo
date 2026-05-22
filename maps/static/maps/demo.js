@@ -176,7 +176,7 @@ function renderAreas(areas) {
   state.areasById = new Map(areas.map((area) => [Number(area.id), area]));
 
   if (!areas.length) {
-    elements.areasList.textContent = "MapArea がありません。";
+    elements.areasList.textContent = "メモグリッドがありません。";
     return;
   }
 
@@ -310,13 +310,13 @@ function renderGrids(grids) {
 }
 
 async function loadAreas() {
-  setMessage("MapArea 一覧を取得しています。");
+  setMessage("メモグリッド一覧を取得しています。");
   elements.loadAreasButton.disabled = true;
 
   try {
     const data = await apiFetch("/api/maps/areas/");
     renderAreas(data.areas || []);
-    setMessage("MapArea 一覧を取得しました。", "success");
+    setMessage("メモグリッド一覧を取得しました。", "success");
   } catch (error) {
     setMessage(error.message, "error");
   } finally {
@@ -333,7 +333,7 @@ async function createArea(event) {
     return;
   }
 
-  setMessage("MapArea を作成しています。");
+  setMessage("メモグリッドを作成しています。");
   elements.createAreaButton.disabled = true;
 
   try {
@@ -348,7 +348,7 @@ async function createArea(event) {
     state.selectedAreaName = area.name;
     await loadAreas();
     await selectArea(area.id, area.name);
-    setMessage(`MapArea #${area.id} を作成しました。`, "success");
+    setMessage(`メモグリッド #${area.id} を作成しました。`, "success");
   } catch (error) {
     setMessage(error.message, "error");
   } finally {
@@ -374,7 +374,7 @@ async function selectArea(areaId, areaName) {
 
 async function loadGrids() {
   if (!state.selectedAreaId) {
-    renderEmptyGrids("MapArea を選択してください。");
+    renderEmptyGrids("メモグリッドを選択してください。");
     return;
   }
 
