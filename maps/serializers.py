@@ -49,12 +49,14 @@ class MapAreaListSerializer(MapAreaSerializer):
     visibility = serializers.SerializerMethodField()
     display_type = serializers.SerializerMethodField()
     is_owner = serializers.SerializerMethodField()
+    created_by_username = serializers.SerializerMethodField()
 
     class Meta(MapAreaSerializer.Meta):
         fields = MapAreaSerializer.Meta.fields + [
             "visibility",
             "display_type",
             "is_owner",
+            "created_by_username",
         ]
         read_only_fields = fields
 
@@ -71,6 +73,11 @@ class MapAreaListSerializer(MapAreaSerializer):
         if self.get_visibility(obj) == "private":
             return "メモグリッド"
         return "共有メモグリッド"
+
+    def get_created_by_username(self, obj):
+        if obj.created_by is None:
+            return None
+        return obj.created_by.username
 
 
 class UserSummarySerializer(serializers.ModelSerializer):

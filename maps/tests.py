@@ -469,6 +469,15 @@ class MapDemoViewTests(TestCase):
         self.assertContains(response, "score-map-background")
         self.assertContains(response, "map-image-url")
         self.assertContains(response, "score-map-ratio")
+        self.assertContains(response, "共有相手管理")
+        self.assertContains(response, "共有相手一覧を取得")
+        self.assertContains(response, "共有相手 username")
+        self.assertContains(response, "共有相手を追加")
+        self.assertContains(response, "共有を解除")
+        self.assertContains(response, "share-username")
+        self.assertContains(response, "load-shares")
+        self.assertContains(response, "add-share")
+        self.assertContains(response, "shares-list")
 
 
 class TokenAuthenticationTests(TestCase):
@@ -938,6 +947,7 @@ class MapAreaListViewTests(TestCase):
         self.assertEqual(response.data["areas"][1]["id"], area_b.id)
         self.assertEqual(response.data["areas"][0]["name"], "A Area")
         self.assertEqual(response.data["areas"][0]["created_by"], self.user.id)
+        self.assertEqual(response.data["areas"][0]["created_by_username"], self.user.username)
         self.assertEqual(response.data["areas"][0]["visibility"], "private")
         self.assertEqual(response.data["areas"][0]["display_type"], "メモグリッド")
         self.assertIs(response.data["areas"][0]["is_owner"], True)
@@ -970,6 +980,7 @@ class MapAreaListViewTests(TestCase):
         self.assertEqual(area["visibility"], "shared")
         self.assertEqual(area["display_type"], "共有メモグリッド")
         self.assertIs(area["is_owner"], False)
+        self.assertEqual(area["created_by_username"], owner.username)
 
     def test_other_users_map_areas_are_not_included_in_list(self):
         other_user = get_user_model().objects.create_user(
@@ -1116,6 +1127,7 @@ class MapAreaListViewTests(TestCase):
         self.assertEqual(areas[0]["visibility"], "private")
         self.assertEqual(areas[0]["display_type"], "メモグリッド")
         self.assertIs(areas[0]["is_owner"], True)
+        self.assertEqual(areas[0]["created_by_username"], self.user.username)
 
     def test_area_without_map_areas_returns_empty_list(self):
         self.client.force_authenticate(user=self.user)

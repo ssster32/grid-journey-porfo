@@ -156,17 +156,52 @@ label {
 }
 
 .area-button {
+  display: grid;
+  min-height: 58px;
+  align-content: space-between;
+  gap: 8px;
   width: 100%;
   border: 1px solid var(--line);
   background: #ffffff;
   color: var(--text);
   text-align: left;
+  padding: 10px 12px;
 }
 
 .area-button:hover,
 .area-button.is-selected {
   border-color: var(--accent);
   background: var(--surface-soft);
+  color: var(--accent-strong);
+}
+
+.area-button.is-shared {
+  border-color: #a8b4ff;
+  background: #eeeeff;
+}
+
+.area-button.is-shared:hover,
+.area-button.is-shared.is-selected {
+  border-color: #7f8fff;
+  background: #e2e6ff;
+}
+
+.area-button-title {
+  display: block;
+  line-height: 1.25;
+}
+
+.area-button-meta {
+  display: block;
+  justify-self: end;
+  color: var(--muted);
+  font-size: 0.64rem;
+  font-weight: 700;
+  line-height: 1.25;
+  text-align: right;
+}
+
+.area-button.is-selected .area-button-meta {
   color: var(--accent-strong);
 }
 
@@ -202,6 +237,80 @@ label {
 
 .message.is-success {
   color: var(--success);
+}
+
+.share-section {
+  margin-bottom: 18px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px;
+  background: #fbfcfd;
+}
+
+.share-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.share-header h3 {
+  margin: 0 0 4px;
+  font-size: 1rem;
+}
+
+.share-header p {
+  margin-bottom: 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.share-form {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) auto;
+  align-items: end;
+  gap: 10px;
+}
+
+.share-form label {
+  margin-bottom: 0;
+}
+
+.share-message {
+  margin: 10px 0;
+}
+
+.shares-list {
+  display: grid;
+  gap: 8px;
+  color: var(--muted);
+}
+
+.share-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 10px;
+  background: #ffffff;
+  color: var(--text);
+}
+
+.share-item span {
+  display: block;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.share-delete-button {
+  background: var(--danger);
+}
+
+.share-delete-button:hover {
+  background: #7e2c26;
 }
 
 .score-map-section {
@@ -338,7 +447,7 @@ label {
 
 .score-value {
   display: block;
-  font-size: clamp(1.35rem, 4vw, 2.35rem);
+  font-size: clamp(0.9rem, 2.4vw, 1.45rem);
   line-height: 1;
   font-weight: 900;
   letter-spacing: 0;
@@ -354,28 +463,39 @@ label {
 }
 
 .score-low {
-  background: rgba(219, 231, 239, 0.76);
+  background: rgba(219, 231, 239, 0.38);
+}
+
+.score-low .score-value {
+  color: #4d6372;
 }
 
 .score-middle {
-  background: rgba(255, 241, 184, 0.76);
+  background: rgba(255, 241, 184, 0.36);
+}
+
+.score-middle .score-value {
+  color: #9a6b00;
 }
 
 .score-high {
-  background: rgba(191, 231, 196, 0.76);
+  background: rgba(191, 231, 196, 0.34);
+}
+
+.score-high .score-value {
+  color: #25733a;
 }
 
 .score-very-high {
-  background: rgba(23, 111, 92, 0.82);
-  color: #ffffff;
+  background: rgba(23, 111, 92, 0.28);
 }
 
 .score-very-high .score-value {
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.42);
+  color: #0d5f4e;
 }
 
 .score-very-high .score-meta {
-  color: rgba(255, 255, 255, 0.78);
+  color: rgba(31, 41, 51, 0.68);
 }
 
 .score-badge {
@@ -441,6 +561,18 @@ td {
   }
 
   .action-row button {
+    width: 100%;
+  }
+
+  .share-header,
+  .share-form,
+  .share-item {
+    display: grid;
+  }
+
+  .share-header button,
+  .share-form button,
+  .share-delete-button {
     width: 100%;
   }
 

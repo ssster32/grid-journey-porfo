@@ -20,8 +20,15 @@ const elements = {
   areaSource: document.querySelector("#area-source"),
   areasList: document.querySelector("#areas-list"),
   selectedAreaLabel: document.querySelector("#selected-area-label"),
+  selectedShareAreaLabel: document.querySelector("#selected-share-area-label"),
   reloadGridsButton: document.querySelector("#reload-grids-button"),
   message: document.querySelector("#message"),
+  loadSharesButton: document.querySelector("#load-shares"),
+  addShareForm: document.querySelector("#add-share-form"),
+  addShareButton: document.querySelector("#add-share"),
+  shareUsername: document.querySelector("#share-username"),
+  shareMessage: document.querySelector("#share-message"),
+  sharesList: document.querySelector("#shares-list"),
   mapImageUrl: document.querySelector("#map-image-url"),
   scoreMapRatio: document.querySelector("#score-map-ratio"),
   scoreMap: document.querySelector("#score-map"),
@@ -46,6 +53,13 @@ function authHeaders(extraHeaders = {}) {
 function setMessage(text, type = "") {
   elements.message.textContent = text;
   elements.message.className = type ? `message is-${type}` : "message";
+}
+
+function setShareMessage(text, type = "") {
+  elements.shareMessage.textContent = text;
+  elements.shareMessage.className = type
+    ? `message share-message is-${type}`
+    : "message share-message";
 }
 
 function escapeHtml(value) {
@@ -172,6 +186,15 @@ async function apiFetch(url, options = {}) {
   return data;
 }
 
+function requireSelectedAreaForShares() {
+  if (state.selectedAreaId) {
+    return true;
+  }
+
+  setShareMessage("先にメモグリッドを選択してください。", "error");
+  return false;
+}
+
 function renderAreas(areas) {
   state.areasById = new Map(areas.map((area) => [Number(area.id), area]));
 
@@ -181,18 +204,61 @@ function renderAreas(areas) {
   }
 
   elements.areasList.innerHTML = areas
-    .map(
-      (area) => `
+    .map((area) => {
+      const ownerLabel = area.is_owner
+        ? "作成者: 自分"
+        : `作成者: ${area.created_by_username || "不明"}`;
+      const areaClasses = [
+        "area-button",
+        area.id === state.selectedAreaId ? "is-selected" : "",
+        area.visibility === "shared" ? "is-shared" : "",
+      ]
+        .filter(Boolean)
+        .join(" ");
+
+      return `
         <button
-          class="area-button${area.id === state.selectedAreaId ? " is-selected" : ""}"
+          class="${areaClasses}"
           type="button"
           data-area-id="${area.id}"
           data-area-name="${escapeHtml(area.name)}"
         >
-          #${area.id} ${escapeHtml(area.name)}
+          <span class="area-button-title">#${area.id} ${escapeHtml(area.name)}</span>
+          <span class="area-button-meta">
+            ${escapeHtml(area.display_type || "メモグリッド")} / ${ownerLabel}
+          </span>
         </button>
-      `
-    )
+      `;
+    })
+    .join("");
+}
+
+function renderShares(shares) {
+  if (!shares.length) {
+    elements.sharesList.textContent = "共有相手はまだ登録されていません。";
+    return;
+  }
+
+  elements.sharesList.innerHTML = shares
+    .map((share) => {
+      const username = share.user ? share.user.username : "";
+
+      return `
+        <div class="share-item">
+          <div>
+            <strong>${escapeHtml(username)}</strong>
+            <span>share #${escapeHtml(share.id)}</span>
+          </div>
+          <button
+            class="share-delete-button"
+            type="button"
+            data-delete-share="${share.id}"
+          >
+            共有を解除
+          </button>
+        </div>
+      `;
+    })
     .join("");
 }
 
@@ -360,7 +426,12 @@ async function selectArea(areaId, areaName) {
   state.selectedAreaId = Number(areaId);
   state.selectedAreaName = areaName;
   elements.selectedAreaLabel.textContent = `選択中: #${areaId} ${areaName}`;
+  elements.selectedShareAreaLabel.textContent = `選択中: #${areaId} ${areaName}`;
   elements.reloadGridsButton.disabled = false;
+  elements.loadSharesButton.disabled = false;
+  elements.addShareButton.disabled = false;
+  elements.sharesList.textContent = "共有相手はまだ読み込んでいません。";
+  setShareMessage("");
 
   document.querySelectorAll(".area-button").forEach((button) => {
     button.classList.toggle(
@@ -370,6 +441,86 @@ async function selectArea(areaId, areaName) {
   });
 
   await loadGrids();
+}
+
+async function loadShares() {
+  if (!requireSelectedAreaForShares()) {
+    return;
+  }
+
+  setShareMessage("共有相手一覧を取得しています。");
+  elements.loadSharesButton.disabled = true;
+
+  try {
+    const data = await apiFetch(`/api/maps/areas/${state.selectedAreaId}/shares/`);
+    renderShares(data.shares || []);
+    setShareMessage("共有相手一覧を取得しました。", "success");
+  } catch (error) {
+    setShareMessage(
+      `${error.message} 共有相手管理はメモグリッドの作成者だけが利用できます。`,
+      "error"
+    );
+  } finally {
+    elements.loadSharesButton.disabled = false;
+  }
+}
+
+async function addShare(event) {
+  event.preventDefault();
+
+  if (!requireSelectedAreaForShares()) {
+    return;
+  }
+
+  const username = elements.shareUsername.value.trim();
+  if (!username) {
+    setShareMessage("共有相手 username を入力してください。", "error");
+    return;
+  }
+
+  setShareMessage("共有相手を追加しています。");
+  elements.addShareButton.disabled = true;
+
+  try {
+    await apiFetch(`/api/maps/areas/${state.selectedAreaId}/shares/`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ username }),
+    });
+    elements.shareUsername.value = "";
+    await loadShares();
+    setShareMessage(`共有相手 ${username} を追加しました。`, "success");
+  } catch (error) {
+    setShareMessage(
+      `${error.message} 共有相手管理はメモグリッドの作成者だけが利用できます。`,
+      "error"
+    );
+  } finally {
+    elements.addShareButton.disabled = false;
+  }
+}
+
+async function deleteShare(shareId) {
+  if (!requireSelectedAreaForShares()) {
+    return;
+  }
+
+  setShareMessage(`share #${shareId} の共有を解除しています。`);
+
+  try {
+    await apiFetch(`/api/maps/areas/${state.selectedAreaId}/shares/${shareId}/`, {
+      method: "DELETE",
+    });
+    await loadShares();
+    setShareMessage(`share #${shareId} の共有を解除しました。`, "success");
+  } catch (error) {
+    setShareMessage(
+      `${error.message} 共有相手管理はメモグリッドの作成者だけが利用できます。`,
+      "error"
+    );
+  }
 }
 
 async function loadGrids() {
@@ -424,6 +575,8 @@ async function rateGrid(gridId) {
 elements.createAreaForm.addEventListener("submit", createArea);
 elements.loadAreasButton.addEventListener("click", loadAreas);
 elements.reloadGridsButton.addEventListener("click", loadGrids);
+elements.loadSharesButton.addEventListener("click", loadShares);
+elements.addShareForm.addEventListener("submit", addShare);
 elements.mapImageUrl.addEventListener("input", applyScoreMapBackgroundImage);
 
 elements.areasList.addEventListener("click", (event) => {
@@ -442,6 +595,15 @@ elements.gridsBody.addEventListener("click", (event) => {
   }
 
   rateGrid(button.dataset.rateGrid);
+});
+
+elements.sharesList.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-delete-share]");
+  if (!button) {
+    return;
+  }
+
+  deleteShare(button.dataset.deleteShare);
 });
 
 applyScoreMapBackgroundImage();

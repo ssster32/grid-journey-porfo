@@ -461,6 +461,10 @@ password: test-password
 5. 任意の `GridCell` に 1 から 10 の score を入力して `採点` を押す。
 6. 採点後に `average_user_score`、`rating_count`、`calculated_score` が更新されることを確認する。
 7. `calculated_score` に応じて `Score Map` のマス色も更新されることを確認する。
+8. 作成者ユーザーで、`共有相手 username` に `otheruser` を入力して `共有相手を追加` を押す。
+9. `共有相手一覧を取得` を押し、共有相手一覧に `otheruser` が表示されることを確認する。
+10. 必要に応じて `otheruser` でログインし直し、共有メモグリッドを閲覧・採点できることを確認する。
+11. 作成者ユーザーに戻り、`共有を解除` を押して共有相手一覧から消えることを確認する。
 
 `Score Map` は、将来の地図背景に重ねる想定で、一枚の地図状の四角として表示します。
 `Map image URL` に画像 URL を入力すると、Score Map の背景として表示できます。

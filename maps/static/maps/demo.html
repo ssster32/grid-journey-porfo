@@ -97,6 +97,28 @@
 
           <div id="message" class="message" aria-live="polite"></div>
 
+          <section class="share-section" aria-labelledby="shares-heading">
+            <div class="share-header">
+              <div>
+                <h3 id="shares-heading">共有相手管理</h3>
+                <p id="selected-share-area-label">先にメモグリッドを選択してください。</p>
+                <p class="share-note">一覧に表示された共有相手は、共有を解除できます。</p>
+              </div>
+              <button id="load-shares" type="button" disabled>共有相手一覧を取得</button>
+            </div>
+            <form id="add-share-form" class="share-form">
+              <label>
+                共有相手 username
+                <input id="share-username" type="text" autocomplete="off" placeholder="otheruser">
+              </label>
+              <button id="add-share" type="submit" disabled>共有相手を追加</button>
+            </form>
+            <div id="share-message" class="message share-message" aria-live="polite"></div>
+            <div id="shares-list" class="shares-list" aria-live="polite">
+              共有相手はまだ読み込んでいません。
+            </div>
+          </section>
+
           <section class="score-map-section" aria-labelledby="score-map-heading">
             <div class="score-map-header">
               <div>
