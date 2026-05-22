@@ -244,6 +244,81 @@ MapArea 詳細 API:
 この節の既存 `is_public` 方針は、主に `ワールドグリッド` を想定した初期案です。
 今後 `共有メモグリッド` を実装する場合は、特定ユーザーだけを許可する共有メンバー管理も別途設計します。
 
+### 共有メモグリッドの設計メモ
+
+`共有メモグリッド` は、作成者が特定のユーザーにだけ共有する `MapArea` です。
+ワールドグリッドのようにログインユーザー全員へ公開するものではありません。
+
+想定する model 追加:
+
+```python
+class MapAreaShare(models.Model):
+    area = models.ForeignKey(MapArea, on_delete=models.CASCADE, related_name="shares")
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    created_at = models.DateTimeField(auto_now_add=True)
+```
+
+`MapAreaShare` は、どの `MapArea` をどのユーザーに共有しているかを表します。
+同じ `area` と `user` の組み合わせは重複できないようにします。
+
+共有メモグリッドの権限方針:
+
+| ユーザー | 閲覧 | 採点 | 共有相手の管理 | GridCell 自動生成 |
+| --- | --- | --- | --- | --- |
+| 作成者 | 可 | 可 | 可 | 可 |
+| 共有されたユーザー | 可 | 可 | 不可 | 不可 |
+| 共有されていないユーザー | 不可 | 不可 | 不可 | 不可 |
+
+共有されたユーザーは閲覧と採点だけできます。
+編集、削除、共有相手の追加・削除、GridCell 自動生成は作成者だけが実行できる方針です。
+
+MapArea 一覧 API では、共有メモグリッドも判別できる形で返します。
+一覧には少なくとも次のような表示用情報を含める想定です。
+
+```json
+{
+  "areas": [
+    {
+      "id": 1,
+      "name": "自分のメモ",
+      "visibility": "private",
+      "display_type": "メモグリッド",
+      "is_owner": true,
+      "created_by": 3
+    },
+    {
+      "id": 2,
+      "name": "友人から共有されたメモ",
+      "visibility": "shared",
+      "display_type": "共有メモグリッド",
+      "is_owner": false,
+      "created_by": 4
+    }
+  ]
+}
+```
+
+`visibility` の想定値:
+
+| 値 | 意味 |
+| --- | --- |
+| `private` | 自分が作成した個人用メモグリッド |
+| `shared` | 他ユーザーから共有された共有メモグリッド |
+| `world` | ログインユーザー全体用のワールドグリッド |
+
+`display_type` は UI 表示用の呼称です。
+API の内部名は引き続き `MapArea` のままにします。
+
+一覧 API の取得対象は、将来的に次の合算にします。
+
+```text
+自分が作成した MapArea
++ MapAreaShare で自分に共有された MapArea
++ ワールドグリッドとして公開された MapArea
+```
+
+同じ `MapArea` が複数条件に当てはまる場合は重複させず、1 件だけ返します。
+
 ### 想定する model 変更
 
 将来的に `MapArea` に次のようなフィールドを追加する想定です。

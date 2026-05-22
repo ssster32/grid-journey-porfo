@@ -2,133 +2,174 @@
 
 ## 現在のタスク
 
-demo ページと README のユーザー向け表示を MapArea からメモグリッドに変更する
+MapAreaShare model を追加し、共有メモグリッドのデータ構造だけ実装する
 
 ## 目的
 
-ユーザーが作成する個人用の `MapArea` は、広域の地図というより「自分用に範囲を切り出してメモ・採点する単位」に近い。
+将来的に、ユーザー同士で `メモグリッド` を共有できるようにするため、まずは「どの MapArea を、どのユーザーに共有しているか」を保存するデータ構造を追加する。
 
-そのため、ユーザー向け UI と README の説明では `MapArea` ではなく `メモグリッド` と表示する。
-
-ただし、内部実装名・API 名・model 名は当面 `MapArea` のまま変更しない。
+今回はデータ構造だけを追加し、API の挙動変更は行わない。
 
 ## 作業範囲
 
-- demo ページのユーザー向け表示文言を `MapArea` から `メモグリッド` に変更
-- README の手動確認手順・demo ページ説明のユーザー向け文言を `メモグリッド` に変更
-- API_SPEC.md に必要があれば、UI 表示名の補足を短く追記
-- demo ページ表示テストの文言確認を更新
+- `MapAreaShare` model の追加
+- `admin.py` への必要最小限の登録
+- migration の作成
+- model テストの追加
+- API_SPEC.md の実装済みメモ更新が必要であれば最小限追記
 
 ## 変更してよいファイル
 
-- `maps/static/maps/demo.html`
-- `maps/static/maps/demo.js`
+- `maps/models.py`
+- `maps/admin.py`
 - `maps/tests.py`
-- `README.md`
+- `maps/migrations/`
 - `API_SPEC.md`
 - `TASK.md`
 
 ## 変更しないファイル
 
-- `maps/models.py`
-- `maps/migrations/`
-- `maps/serializers.py`
 - `maps/views.py`
+- `maps/serializers.py`
 - `maps/services.py`
 - `maps/urls.py`
 - `config/settings.py`
 - `config/urls.py`
+- `README.md`
 - `requirements.txt`
 
-## 表示方針
+## 仕様
 
-### 変更する文言の例
+### 追加する model
 
-demo ページでは、ユーザーに見える表示を次のように変更する。
+`MapAreaShare` を追加する。
 
-| 変更前 | 変更後 |
-| --- | --- |
-| `MapArea 作成` | `メモグリッド作成` |
-| `MapArea 一覧` | `メモグリッド一覧` |
-| `MapArea を作成` | `メモグリッドを作成` |
-| `MapArea を選択すると...` | `メモグリッドを選択すると...` |
-| `MapArea がありません。` | `メモグリッドがありません。` |
-| `MapArea 一覧を取得しています。` | `メモグリッド一覧を取得しています。` |
-| `MapArea 一覧を取得しました。` | `メモグリッド一覧を取得しました。` |
-| `MapArea #... を作成しました。` | `メモグリッド #... を作成しました。` |
+役割:
 
-### 変更しない文言
+- どの `MapArea` が
+- どのユーザーに
+- 共有されているか
 
-以下は内部実装や API の名前として残してよい。
+を表す。
 
-- JavaScript の変数名
-- API パス
-- serializer / view / test class 名
-- `MapArea` model 名
-- README 内の API 名としての `MapArea`
-- API_SPEC.md の内部実装名としての `MapArea`
+想定フィールド:
 
-README では、必要に応じて次のように補足する。
-
-```text
-画面上では「メモグリッド」と表示していますが、API 内部では従来どおり MapArea と呼びます。
+```python
+class MapAreaShare(models.Model):
+    area = models.ForeignKey(
+        MapArea,
+        on_delete=models.CASCADE,
+        related_name="shares",
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="shared_map_areas",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
 ```
 
-## README 更新方針
+### 制約
 
-README.md の以下の範囲を中心に変更する。
+同じ `area` と `user` の組み合わせは重複できない。
 
-- `実装済み API の手動確認`
-- `MapArea 作成 API と GridCell 自動生成`
-- `確認用 demo ページ`
+```python
+models.UniqueConstraint(
+    fields=["area", "user"],
+    name="unique_map_area_share_per_user",
+)
+```
 
-方針:
+### 並び順
 
-- ユーザー操作として読む部分は `メモグリッド` に寄せる
-- API エンドポイント名や内部仕様の説明では `MapArea` を残す
-- `MapArea` と `メモグリッド` の対応が分かる補足を短く入れる
-- `GridCell` や `Score Map` の呼称は今回は変更しない
+まずは扱いやすさのため、次のような ordering にする。
 
-## API_SPEC 更新方針
+```python
+ordering = ["area", "user", "id"]
+```
 
-すでに用語方針が記載されている場合は、必要最小限の追記にとどめる。
+### 文字列表現
 
-追記する場合の内容:
+`__str__` は、管理画面で見て分かる程度でよい。
 
-- UI 表示では、個人用 `MapArea` を `メモグリッド` と呼ぶ
-- API や model の内部名は `MapArea` のまま
-- このタスクでは API レスポンス形式は変更しない
+例:
+
+```python
+def __str__(self):
+    return f"{self.area} shared with {self.user}"
+```
+
+## admin.py 方針
+
+`MapAreaShare` を Django admin に登録する。
+
+必要最小限でよい。
+
+例:
+
+```python
+@admin.register(MapAreaShare)
+class MapAreaShareAdmin(admin.ModelAdmin):
+    list_display = ["id", "area", "user", "created_at"]
+    search_fields = ["area__name", "user__username"]
+    list_filter = ["created_at"]
+```
+
+既存の admin 設定がある場合は、それに合わせる。
 
 ## テスト方針
 
-`maps/tests.py` の demo ページ表示テストを更新する。
+`maps/tests.py` に model テストを追加する。
 
 確認すること:
 
-- demo ページが `200 OK` で表示される
-- `メモグリッド作成` が表示される
-- `メモグリッド一覧` または `メモグリッド一覧を取得` が表示される
-- `メモグリッドを作成` が表示される
-- `GridCell を再取得` は引き続き表示される
-- `GridCell を自動生成` は引き続き表示されない
-- Score Map 関連の表示は壊れていない
+- `MapAreaShare` を作成できる
+- `area` と `user` が保存される
+- `created_at` が自動で入る
+- `area.shares` から共有情報を取得できる
+- `user.shared_map_areas` から共有情報を取得できる
+- 同じ `area` と `user` の組み合わせを重複作成できない
+- `MapArea` を削除すると、関連する `MapAreaShare` も削除される
+- 共有先ユーザーを削除すると、関連する `MapAreaShare` も削除される
+
+重複制約のテストでは `IntegrityError` を確認する。
+
+## API_SPEC 更新方針
+
+必要であれば、共有メモグリッド設計メモに次を追記する。
+
+- `MapAreaShare` model は実装済み
+- ただし、一覧 API・詳細 API・採点 API の権限にはまだ反映していない
+- この時点では、共有情報を保存するデータ構造だけがある
+
+## 今回は実装しないこと
+
+- 共有メモグリッドを一覧 API に含めること
+- 詳細 API の閲覧権限に共有メモグリッドを含めること
+- GridCell 一覧 API の閲覧権限に共有メモグリッドを含めること
+- 採点 API の権限に共有メモグリッドを含めること
+- 共有相手を追加・削除する API
+- demo ページでの共有メモグリッド表示
+- ワールドグリッド用の `is_public` 実装
 
 ## 確認方法
 
 作業後に以下を実行する。
 
 ```bash
-node --check maps/static/maps/demo.js
+.venv/bin/python manage.py makemigrations maps
 .venv/bin/python manage.py test maps
 .venv/bin/python manage.py check
-git diff --check -- maps/static/maps/demo.html maps/static/maps/demo.js maps/tests.py README.md API_SPEC.md
+git diff --check -- maps/models.py maps/admin.py maps/tests.py maps/migrations API_SPEC.md
 ```
+
+migration の中身も確認し、`MapAreaShare` model 追加と unique 制約だけになっていることを確認する。
 
 ## 注意事項
 
-- `models.py` と migration は変更しないでください。
-- API パスや API レスポンス形式は変更しないでください。
-- `MapArea` という内部実装名を一括リネームしないでください。
-- JavaScript の変数名や関数名は、無理に変更しなくてよいです。
-- `GridCell`、`Score Map`、認証、権限、採点ロジックは変更しないでください。
+- このタスクでは API の挙動を変更しないでください。
+- `maps/views.py`、`maps/serializers.py`、`maps/services.py`、`maps/urls.py` は変更しないでください。
+- 既存 model のフィールド変更はしないでください。
+- 既存 migration を手作業で変更しないでください。
+- migration は `makemigrations` で作成してください。
 - 既存テストを削除して通す対応はしないでください。
