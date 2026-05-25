@@ -5,6 +5,10 @@ const state = {
   selectedGrid: null,
   selectedGridIds: new Set(),
   scoreMapViewMode: "fit",
+  isDraggingSelection: false,
+  dragStartPoint: null,
+  dragCurrentPoint: null,
+  suppressNextCellClick: false,
   areasById: new Map(),
   gridsById: new Map(),
 };
@@ -40,6 +44,7 @@ const elements = {
   scoreMap: document.querySelector("#score-map"),
   scoreMapWrap: document.querySelector(".score-map-wrap"),
   scoreMapStage: document.querySelector(".score-map-stage"),
+  scoreSelectionRect: document.querySelector("#score-selection-rect"),
   selectedGridLabel: document.querySelector("#selected-grid-label"),
   selectedGridCount: document.querySelector("#selected-grid-count"),
   clearSelectedGridsButton: document.querySelector("#clear-selected-grids"),
@@ -51,11 +56,14 @@ const elements = {
   sameScoreInput: document.querySelector("#same-score-input"),
   sameScoreRatingSubmit: document.querySelector("#same-score-rating-submit"),
   selectedGridMessage: document.querySelector("#selected-grid-message"),
+  selectedGridMessageText: document.querySelector("#selected-grid-message-text"),
+  selectedGridLoadingSpinner: document.querySelector("#selected-grid-loading-spinner"),
 };
 
 const FALLBACK_AREA_ASPECT_RATIO = 1.4;
 const MIN_AREA_ASPECT_RATIO = 0.6;
 const MAX_AREA_ASPECT_RATIO = 2.2;
+const DRAG_SELECT_THRESHOLD = 5;
 
 function authHeaders(extraHeaders = {}) {
   const username = elements.username.value.trim();
@@ -80,8 +88,9 @@ function setShareMessage(text, type = "") {
     : "message share-message";
 }
 
-function setSelectedGridMessage(text, type = "") {
-  elements.selectedGridMessage.textContent = text;
+function setSelectedGridMessage(text, type = "", isLoading = false) {
+  elements.selectedGridMessageText.textContent = text;
+  elements.selectedGridLoadingSpinner.hidden = !isLoading;
   elements.selectedGridMessage.className = type
     ? `message selected-grid-message is-${type}`
     : "message selected-grid-message";
@@ -447,6 +456,180 @@ function toggleGridSelection(gridId) {
   highlightSelectedScoreCells();
 }
 
+function stagePointFromEvent(event) {
+  const stageRect = elements.scoreMapStage.getBoundingClientRect();
+  return {
+    x: event.clientX - stageRect.left,
+    y: event.clientY - stageRect.top,
+  };
+}
+
+function selectionRectFromPoints(startPoint, endPoint) {
+  const left = Math.min(startPoint.x, endPoint.x);
+  const top = Math.min(startPoint.y, endPoint.y);
+  const width = Math.abs(endPoint.x - startPoint.x);
+  const height = Math.abs(endPoint.y - startPoint.y);
+
+  return {
+    left,
+    top,
+    right: left + width,
+    bottom: top + height,
+    width,
+    height,
+  };
+}
+
+function dragDistance() {
+  if (!state.dragStartPoint || !state.dragCurrentPoint) {
+    return 0;
+  }
+
+  const xDistance = state.dragCurrentPoint.x - state.dragStartPoint.x;
+  const yDistance = state.dragCurrentPoint.y - state.dragStartPoint.y;
+  return Math.hypot(xDistance, yDistance);
+}
+
+function renderSelectionRect() {
+  if (!state.dragStartPoint || !state.dragCurrentPoint) {
+    return;
+  }
+
+  const rect = selectionRectFromPoints(state.dragStartPoint, state.dragCurrentPoint);
+  elements.scoreSelectionRect.hidden = false;
+  elements.scoreSelectionRect.style.left = `${rect.left}px`;
+  elements.scoreSelectionRect.style.top = `${rect.top}px`;
+  elements.scoreSelectionRect.style.width = `${rect.width}px`;
+  elements.scoreSelectionRect.style.height = `${rect.height}px`;
+}
+
+function hideSelectionRect() {
+  elements.scoreSelectionRect.hidden = true;
+  elements.scoreSelectionRect.style.removeProperty("left");
+  elements.scoreSelectionRect.style.removeProperty("top");
+  elements.scoreSelectionRect.style.removeProperty("width");
+  elements.scoreSelectionRect.style.removeProperty("height");
+}
+
+function cellRectIntersectsSelection(cellRect, selectionRect) {
+  return !(
+    cellRect.right < selectionRect.left ||
+    cellRect.left > selectionRect.right ||
+    cellRect.bottom < selectionRect.top ||
+    cellRect.top > selectionRect.bottom
+  );
+}
+
+function stageRelativeRect(element) {
+  const stageRect = elements.scoreMapStage.getBoundingClientRect();
+  const elementRect = element.getBoundingClientRect();
+
+  return {
+    left: elementRect.left - stageRect.left,
+    top: elementRect.top - stageRect.top,
+    right: elementRect.right - stageRect.left,
+    bottom: elementRect.bottom - stageRect.top,
+  };
+}
+
+function selectGridsInRect(selectionRect) {
+  const selectedCells = Array.from(
+    elements.scoreMap.querySelectorAll(".score-cell[data-grid-id]")
+  ).filter((cell) => {
+    return cellRectIntersectsSelection(stageRelativeRect(cell), selectionRect);
+  });
+
+  if (!selectedCells.length) {
+    return;
+  }
+
+  selectedCells.forEach((cell) => {
+    state.selectedGridIds.add(Number(cell.dataset.gridId));
+  });
+
+  const latestCell = selectedCells[selectedCells.length - 1];
+  const latestGridId = Number(latestCell.dataset.gridId);
+  state.selectedGridId = latestGridId;
+  state.selectedGrid = state.gridsById.get(latestGridId) || null;
+  renderSelectedGrids();
+  highlightSelectedScoreCells();
+}
+
+function canStartDragSelection(event) {
+  if (event.button !== 0 || !state.selectedAreaId) {
+    return false;
+  }
+  if (!elements.scoreMap.querySelector(".score-cell[data-grid-id]")) {
+    return false;
+  }
+  return !event.target.closest("input, button, textarea, select, label");
+}
+
+function startDragSelection(event) {
+  if (!canStartDragSelection(event)) {
+    return;
+  }
+
+  state.isDraggingSelection = true;
+  state.dragStartPoint = stagePointFromEvent(event);
+  state.dragCurrentPoint = state.dragStartPoint;
+  state.suppressNextCellClick = false;
+  elements.scoreMapStage.classList.add("is-dragging-selection");
+  if (elements.scoreMapStage.setPointerCapture) {
+    elements.scoreMapStage.setPointerCapture(event.pointerId);
+  }
+  hideSelectionRect();
+}
+
+function updateDragSelection(event) {
+  if (!state.isDraggingSelection) {
+    return;
+  }
+
+  state.dragCurrentPoint = stagePointFromEvent(event);
+  if (dragDistance() >= DRAG_SELECT_THRESHOLD) {
+    event.preventDefault();
+    renderSelectionRect();
+  }
+}
+
+function finishDragSelection(event) {
+  if (!state.isDraggingSelection) {
+    return;
+  }
+
+  state.dragCurrentPoint = stagePointFromEvent(event);
+  const shouldSelectRange = dragDistance() >= DRAG_SELECT_THRESHOLD;
+  if (
+    elements.scoreMapStage.releasePointerCapture &&
+    elements.scoreMapStage.hasPointerCapture(event.pointerId)
+  ) {
+    elements.scoreMapStage.releasePointerCapture(event.pointerId);
+  }
+  elements.scoreMapStage.classList.remove("is-dragging-selection");
+
+  if (shouldSelectRange) {
+    state.suppressNextCellClick = true;
+    selectGridsInRect(selectionRectFromPoints(state.dragStartPoint, state.dragCurrentPoint));
+    window.setTimeout(() => {
+      state.suppressNextCellClick = false;
+    }, 0);
+  }
+
+  state.isDraggingSelection = false;
+  state.dragStartPoint = null;
+  state.dragCurrentPoint = null;
+  hideSelectionRect();
+}
+
+function cancelDragSelection() {
+  state.isDraggingSelection = false;
+  state.dragStartPoint = null;
+  state.dragCurrentPoint = null;
+  elements.scoreMapStage.classList.remove("is-dragging-selection");
+  hideSelectionRect();
+}
+
 function readAreaForm() {
   return {
     name: elements.areaName.value.trim(),
@@ -461,6 +644,7 @@ function readAreaForm() {
 }
 
 function renderEmptyGrids(message) {
+  cancelDragSelection();
   state.gridsById = new Map();
   clearSelectedGrids();
   applyScoreMapAspectRatio();
@@ -524,6 +708,7 @@ function renderScoreMap(grids) {
 }
 
 function renderGrids(grids) {
+  cancelDragSelection();
   state.gridsById = new Map(grids.map((grid) => [Number(grid.id), grid]));
 
   if (!grids.length) {
@@ -800,7 +985,7 @@ async function submitIndividualRatings(event) {
 
   elements.individualRatingSubmit.disabled = true;
   elements.sameScoreRatingSubmit.disabled = true;
-  setSelectedGridMessage(`${ratings.length} 件の GridCell を採点しています。`);
+  setSelectedGridMessage(`${ratings.length} 件の GridCell を採点しています。`, "", true);
 
   try {
     for (const rating of ratings) {
@@ -832,7 +1017,11 @@ async function submitSameScoreBulkRating(event) {
 
   elements.individualRatingSubmit.disabled = true;
   elements.sameScoreRatingSubmit.disabled = true;
-  setSelectedGridMessage(`${gridIds.length} 件の GridCell を同じ値で採点しています。`);
+  setSelectedGridMessage(
+    `${gridIds.length} 件の GridCell を同じ値で採点しています。`,
+    "",
+    true
+  );
 
   try {
     await submitBulkRating(gridIds, score);
@@ -861,6 +1050,7 @@ elements.ratingModeInputs.forEach((input) => {
 elements.scoreMapViewModeInputs.forEach((input) => {
   input.addEventListener("change", () => {
     state.scoreMapViewMode = readScoreMapViewMode();
+    cancelDragSelection();
     applyScoreMapViewMode();
   });
 });
@@ -876,6 +1066,12 @@ elements.areasList.addEventListener("click", (event) => {
 });
 
 elements.scoreMap.addEventListener("click", (event) => {
+  if (state.suppressNextCellClick) {
+    state.suppressNextCellClick = false;
+    event.preventDefault();
+    return;
+  }
+
   const cell = event.target.closest("[data-grid-id]");
   if (!cell) {
     return;
@@ -883,6 +1079,11 @@ elements.scoreMap.addEventListener("click", (event) => {
 
   toggleGridSelection(cell.dataset.gridId);
 });
+
+elements.scoreMapStage.addEventListener("pointerdown", startDragSelection);
+elements.scoreMapStage.addEventListener("pointermove", updateDragSelection);
+elements.scoreMapStage.addEventListener("pointerup", finishDragSelection);
+elements.scoreMapStage.addEventListener("pointercancel", cancelDragSelection);
 
 elements.scoreMap.addEventListener("keydown", (event) => {
   if (event.key !== "Enter" && event.key !== " ") {
@@ -914,6 +1115,12 @@ elements.sharesList.addEventListener("click", (event) => {
   }
 
   deleteShare(button.dataset.deleteShare);
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    cancelDragSelection();
+  }
 });
 
 applyScoreMapBackgroundImage();

@@ -169,6 +169,7 @@
                 <div id="score-map" class="score-map score-map-grid-layer" aria-live="polite">
                   GridCell はまだ表示されていません。
                 </div>
+                <div id="score-selection-rect" class="score-selection-rect" aria-hidden="true" hidden></div>
               </div>
             </div>
           </section>
@@ -241,7 +242,10 @@
                 <input id="same-score-input" type="number" min="1" max="10" value="5">
               </label>
             </form>
-            <div id="selected-grid-message" class="message selected-grid-message" aria-live="polite"></div>
+            <div id="selected-grid-message" class="message selected-grid-message" aria-live="polite">
+              <span id="selected-grid-message-text"></span>
+              <span id="selected-grid-loading-spinner" class="loading-spinner" aria-hidden="true" hidden></span>
+            </div>
             <div class="selected-grid-footer">
               <p id="selected-grid-note">再採点すると点数が更新されます。</p>
               <button id="clear-selected-grids" type="button" disabled>選択をすべて解除</button>

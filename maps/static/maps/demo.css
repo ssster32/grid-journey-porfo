@@ -444,6 +444,10 @@ label {
   overflow: visible;
 }
 
+.score-map-stage.is-dragging-selection {
+  user-select: none;
+}
+
 .score-map-background {
   position: absolute;
   inset: 0;
@@ -472,6 +476,14 @@ label {
   min-height: 260px;
   gap: 0;
   color: var(--muted);
+}
+
+.score-selection-rect {
+  position: absolute;
+  z-index: 3;
+  border: 2px solid rgba(23, 111, 92, 0.9);
+  background: rgba(23, 111, 92, 0.16);
+  pointer-events: none;
 }
 
 .score-map-stage.is-detail .score-map-grid-layer {
@@ -757,11 +769,29 @@ label {
 }
 
 .selected-grid-message {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   min-height: 0;
   margin-bottom: 0;
 }
 
-.selected-grid-message:empty {
+.loading-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(23, 111, 92, 0.22);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spinner-rotate 0.8s linear infinite;
+}
+
+@keyframes spinner-rotate {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.selected-grid-message:has(#selected-grid-message-text:empty) {
   display: none;
 }
 

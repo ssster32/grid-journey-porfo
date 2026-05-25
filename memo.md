@@ -408,6 +408,34 @@ git diff --check -- maps/static/maps/demo.html maps/static/maps/demo.js maps/sta
 - ブラウザで GridCell 数が多いメモグリッドを開き、全体表示と詳細表示の切り替えを手動確認するとよい。
 - 必要に応じて、GridCell の `north/south/east/west` を使った割合配置方式を検討する。
 
+## 2026-05-25 Score Map ドラッグ範囲選択対応
+
+- Score Map 上でドラッグした範囲内の GridCell をまとめて選択できるようにした。
+- ドラッグ中は `score-selection-rect` で選択範囲を矩形表示する。
+- ドラッグ範囲選択は追加選択として扱い、既存の選択済み GridCell は維持する。
+- クリック選択・クリック解除、選択中 GridCell 一覧、複数選択採点は引き続き動作する。
+- README の demo ページ確認手順に、ドラッグ範囲選択の確認を短く追記した。
+
+確認:
+
+```bash
+node --check maps/static/maps/demo.js
+.venv/bin/python manage.py check
+.venv/bin/python manage.py test maps.tests.MapDemoViewTests
+git diff --check -- maps/static/maps/demo.html maps/static/maps/demo.js maps/static/maps/demo.css maps/tests.py README.md memo.md
+.venv/bin/python manage.py test maps
+```
+
+ブラウザ確認:
+
+- `http://127.0.0.1:8001/api/maps/demo/` で demo ページを開いた。
+- `score-selection-rect` が存在し、初期状態では非表示、`position: absolute`、`pointer-events: none` であることを確認した。
+
+次:
+
+- ブラウザで全体表示・詳細表示それぞれのドラッグ範囲選択を手動確認するとよい。
+- 必要に応じて、Shift クリック選択、範囲外への自動スクロール、矩形選択解除を検討する。
+
 ## 次にやるとよいこと
 
 - Score Map クリック採点をブラウザで手動確認する。
