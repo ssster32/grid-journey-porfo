@@ -436,11 +436,36 @@ git diff --check -- maps/static/maps/demo.html maps/static/maps/demo.js maps/sta
 - ブラウザで全体表示・詳細表示それぞれのドラッグ範囲選択を手動確認するとよい。
 - 必要に応じて、Shift クリック選択、範囲外への自動スクロール、矩形選択解除を検討する。
 
-## 次にやるとよいこと
+## 2026-05-25 Leaflet Map Preview 対応
 
-- Score Map クリック採点をブラウザで手動確認する。
-- 採点パネルの位置や選択中マスの枠線を、見た目に合わせて微調整する。
-- 必要に応じて、共有メモグリッドでも Score Map クリック採点できることを README に短く追記する。
+- demo ページに Leaflet ベースの `Map Preview` を追加した。
+- 選択中メモグリッドの `north/south/east/west` から範囲を作り、Leaflet 上に四角で表示する。
+- 既存の CSS Grid ベースの `Score Map` は残し、GridCell の表示・選択・採点は引き続き Score Map 側で行う。
+- Leaflet と OpenStreetMap タイルは CDN 読み込み。README には開発確認用で、本番利用時はタイル提供元の利用条件を確認する旨を追記した。
+- Map Preview の表示崩れ対策として、Leaflet の pane / tile / SVG を配置する最低限の CSS を `demo.css` 側にも追加した。
+- GridCell 一覧取得後、各 GridCell の `north/south/east/west` を Leaflet の薄い rectangle として Map Preview に重ねるようにした。
+- メモグリッド切り替え時や GridCell が空の時は、古い GridCell 境界を消す。
+
+確認:
+
+```bash
+node --check maps/static/maps/demo.js
+.venv/bin/python manage.py check
+.venv/bin/python manage.py test maps.tests.MapDemoViewTests
+git diff --check -- maps/static/maps/demo.html maps/static/maps/demo.js maps/static/maps/demo.css maps/tests.py README.md memo.md
+.venv/bin/python manage.py test maps
+```
+
+ブラウザ確認:
+
+- `http://127.0.0.1:8001/api/maps/demo/` で demo ページを開いた。
+- `Map Preview` 枠、未選択メッセージ、既存の `Score Map` が表示されることを確認した。
+- この実行環境では外部 CDN が読み込めず、Leaflet の地図描画自体は未確認。
+
+次にやるとよいこと:
+
+- ブラウザでメモグリッド選択時に Map Preview の範囲表示と GridCell 境界が更新されることを確認する。
+- 必要に応じて、Score Map の選択状態を Map Preview 側にも薄く反映するか検討する。
 
 ## 注意点
 

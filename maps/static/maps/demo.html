@@ -4,6 +4,12 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Map Demo</title>
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIINfQPDrl5losgkLA7eNdq+8n2jQb8Y5sk="
+      crossorigin=""
+    >
     <link rel="stylesheet" href="/static/maps/demo.css">
   </head>
   <body>
@@ -174,6 +180,20 @@
             </div>
           </section>
 
+          <section class="map-preview-section" aria-labelledby="map-preview-heading">
+            <div class="map-preview-header">
+              <div>
+                <h3 id="map-preview-heading">Map Preview</h3>
+                <p>選択中のメモグリッド範囲を、Leaflet の地図上で確認します。</p>
+              </div>
+              <p id="map-preview-status" class="map-preview-status">MapArea を選択してください。</p>
+            </div>
+            <div id="map-preview" class="map-preview" aria-label="MapArea bounds preview"></div>
+            <p class="map-preview-note">
+              OpenStreetMap タイルを使う開発確認用の表示です。GridCell 境界は薄い線で表示し、採点操作は Score Map で行います。
+            </p>
+          </section>
+
           <section class="selected-grid-panel" aria-labelledby="selected-grid-heading">
             <section class="rating-mode-section" aria-label="採点方式">
               <div class="selected-grid-title-row">
@@ -255,6 +275,11 @@
       </section>
     </main>
 
+    <script
+      src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+      integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+      crossorigin=""
+    ></script>
     <script src="/static/maps/demo.js"></script>
   </body>
 </html>

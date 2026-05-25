@@ -11,6 +11,9 @@ const state = {
   suppressNextCellClick: false,
   areasById: new Map(),
   gridsById: new Map(),
+  leafletMap: null,
+  mapAreaRectangle: null,
+  gridBoundaryLayer: null,
 };
 
 const elements = {
@@ -45,6 +48,8 @@ const elements = {
   scoreMapWrap: document.querySelector(".score-map-wrap"),
   scoreMapStage: document.querySelector(".score-map-stage"),
   scoreSelectionRect: document.querySelector("#score-selection-rect"),
+  mapPreview: document.querySelector("#map-preview"),
+  mapPreviewStatus: document.querySelector("#map-preview-status"),
   selectedGridLabel: document.querySelector("#selected-grid-label"),
   selectedGridCount: document.querySelector("#selected-grid-count"),
   clearSelectedGridsButton: document.querySelector("#clear-selected-grids"),
@@ -154,6 +159,152 @@ function mapAreaAspectRatio(area) {
 
 function selectedArea() {
   return state.areasById.get(state.selectedAreaId) || null;
+}
+
+function leafletAvailable() {
+  return typeof window.L !== "undefined";
+}
+
+function mapAreaBounds(area) {
+  const north = Number(area.north);
+  const south = Number(area.south);
+  const east = Number(area.east);
+  const west = Number(area.west);
+
+  if (
+    !Number.isFinite(north) ||
+    !Number.isFinite(south) ||
+    !Number.isFinite(east) ||
+    !Number.isFinite(west) ||
+    north <= south ||
+    east <= west
+  ) {
+    return null;
+  }
+
+  return [
+    [south, west],
+    [north, east],
+  ];
+}
+
+function gridCellBounds(grid) {
+  return mapAreaBounds(grid);
+}
+
+function initMapPreview() {
+  if (state.leafletMap || !elements.mapPreview) {
+    return;
+  }
+
+  if (!leafletAvailable()) {
+    elements.mapPreviewStatus.textContent = "Leaflet を読み込めませんでした。";
+    return;
+  }
+
+  state.leafletMap = window.L.map(elements.mapPreview, {
+    scrollWheelZoom: false,
+  }).setView([35.69, 139.7], 11);
+
+  window.L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom: 19,
+    attribution:
+      '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+  }).addTo(state.leafletMap);
+}
+
+function clearMapGridBoundaries() {
+  if (state.gridBoundaryLayer) {
+    state.gridBoundaryLayer.clearLayers();
+  }
+}
+
+function mapGridBoundaryLayer() {
+  if (!state.leafletMap) {
+    return null;
+  }
+  if (!state.gridBoundaryLayer) {
+    state.gridBoundaryLayer = window.L.layerGroup().addTo(state.leafletMap);
+  }
+  return state.gridBoundaryLayer;
+}
+
+function updateMapGridBoundaries(grids) {
+  clearMapGridBoundaries();
+
+  if (!grids.length) {
+    return;
+  }
+
+  initMapPreview();
+  if (!state.leafletMap) {
+    return;
+  }
+
+  const boundaryLayer = mapGridBoundaryLayer();
+  if (!boundaryLayer) {
+    return;
+  }
+
+  grids.forEach((grid) => {
+    const bounds = gridCellBounds(grid);
+    if (!bounds) {
+      return;
+    }
+
+    window.L.rectangle(bounds, {
+      color: "#2c7da0",
+      weight: 1,
+      opacity: 0.32,
+      fill: false,
+      interactive: false,
+      className: "map-preview-grid-boundary",
+    }).addTo(boundaryLayer);
+  });
+
+  if (state.mapAreaRectangle) {
+    state.mapAreaRectangle.bringToFront();
+  }
+}
+
+function updateMapPreview() {
+  if (!elements.mapPreviewStatus) {
+    return;
+  }
+
+  const area = selectedArea();
+  if (!area) {
+    elements.mapPreviewStatus.textContent = "MapArea を選択してください。";
+    return;
+  }
+
+  const bounds = mapAreaBounds(area);
+  if (!bounds) {
+    elements.mapPreviewStatus.textContent = "MapArea の範囲を地図表示できません。";
+    return;
+  }
+
+  initMapPreview();
+  if (!state.leafletMap) {
+    return;
+  }
+
+  if (state.mapAreaRectangle) {
+    state.mapAreaRectangle.remove();
+  }
+
+  state.mapAreaRectangle = window.L.rectangle(bounds, {
+    color: "#176f5c",
+    weight: 2,
+    fillColor: "#176f5c",
+    fillOpacity: 0.12,
+  }).addTo(state.leafletMap);
+  state.leafletMap.fitBounds(bounds, { padding: [20, 20] });
+  elements.mapPreviewStatus.textContent = `選択中 MapArea: #${area.id} ${area.name}`;
+
+  window.setTimeout(() => {
+    state.leafletMap.invalidateSize();
+  }, 0);
 }
 
 function applyScoreMapAspectRatio() {
@@ -646,6 +797,7 @@ function readAreaForm() {
 function renderEmptyGrids(message) {
   cancelDragSelection();
   state.gridsById = new Map();
+  clearMapGridBoundaries();
   clearSelectedGrids();
   applyScoreMapAspectRatio();
   elements.scoreMap.textContent = message;
@@ -717,6 +869,7 @@ function renderGrids(grids) {
   }
 
   renderScoreMap(grids);
+  updateMapGridBoundaries(grids);
   pruneMissingSelectedGrids();
   if (state.selectedGridId && state.gridsById.has(state.selectedGridId)) {
     state.selectedGrid = state.gridsById.get(state.selectedGridId);
@@ -736,6 +889,7 @@ async function loadAreas() {
   try {
     const data = await apiFetch("/api/maps/areas/");
     renderAreas(data.areas || []);
+    updateMapPreview();
     setMessage("メモグリッド一覧を取得しました。", "success");
   } catch (error) {
     setMessage(error.message, "error");
@@ -787,6 +941,7 @@ async function selectArea(areaId, areaName) {
   elements.addShareButton.disabled = false;
   elements.sharesList.textContent = "共有相手はまだ読み込んでいません。";
   setShareMessage("");
+  clearMapGridBoundaries();
 
   document.querySelectorAll(".area-button").forEach((button) => {
     button.classList.toggle(
@@ -795,6 +950,7 @@ async function selectArea(areaId, areaName) {
     );
   });
 
+  updateMapPreview();
   await loadGrids();
 }
 
@@ -1125,4 +1281,5 @@ document.addEventListener("keydown", (event) => {
 
 applyScoreMapBackgroundImage();
 applyScoreMapViewMode();
+updateMapPreview();
 updateRatingMode();
