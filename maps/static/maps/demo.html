@@ -97,10 +97,12 @@
 
           <div id="message" class="message" aria-live="polite"></div>
 
-          <section class="share-section" aria-labelledby="shares-heading">
+          <details class="share-section">
+            <summary class="share-summary" id="shares-heading">
+              共有相手管理
+            </summary>
             <div class="share-header">
               <div>
-                <h3 id="shares-heading">共有相手管理</h3>
                 <p id="selected-share-area-label">先にメモグリッドを選択してください。</p>
                 <p class="share-note">一覧に表示された共有相手は、共有を解除できます。</p>
               </div>
@@ -117,7 +119,7 @@
             <div id="shares-list" class="shares-list" aria-live="polite">
               共有相手はまだ読み込んでいません。
             </div>
-          </section>
+          </details>
 
           <section class="score-map-section" aria-labelledby="score-map-heading">
             <div class="score-map-header">
@@ -150,16 +152,51 @@
           </section>
 
           <section class="selected-grid-panel" aria-labelledby="selected-grid-heading">
-            <div>
+            <div class="selected-grid-header">
               <h3 id="selected-grid-heading">選択中のマス</h3>
               <p id="selected-grid-label">GridCell を選択してください。</p>
+              <p id="selected-grid-count">選択数: 0</p>
             </div>
-            <form id="selected-grid-rating-form" class="selected-grid-rating-form">
+            <button id="clear-selected-grids" type="button" disabled>選択をすべて解除</button>
+
+            <section class="rating-mode-section" aria-label="採点方式">
+              <h4>採点方式</h4>
+              <div class="rating-mode-options">
+                <label>
+                  <input
+                    id="multi-rating-mode-individual"
+                    type="radio"
+                    name="multi-rating-mode"
+                    value="individual"
+                    checked
+                  >
+                  個別に入力し、まとめて採点
+                </label>
+                <label>
+                  <input
+                    id="multi-rating-mode-same"
+                    type="radio"
+                    name="multi-rating-mode"
+                    value="same"
+                  >
+                  選択グリッドを全て同じ値で採点
+                </label>
+              </div>
+            </section>
+
+            <form id="individual-rating-form" class="multi-rating-form">
+              <div id="selected-grids-list" class="selected-grid-list" aria-live="polite">
+                GridCell を選択してください。
+              </div>
+              <button id="individual-rating-submit" type="submit" disabled>まとめて採点する</button>
+            </form>
+
+            <form id="same-score-rating-form" class="multi-rating-form">
               <label>
-                score
-                <input id="selected-grid-score" type="number" min="1" max="10" value="5">
+                共通 score
+                <input id="same-score-input" type="number" min="1" max="10" value="5">
               </label>
-              <button id="selected-grid-rate-button" type="submit" disabled>採点する</button>
+              <button id="same-score-rating-submit" type="submit" disabled>同じ値で採点する</button>
             </form>
             <div id="selected-grid-message" class="message selected-grid-message" aria-live="polite"></div>
           </section>

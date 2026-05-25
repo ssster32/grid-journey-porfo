@@ -1,13 +1,18 @@
-# Codex タスク: Score Map のマスをクリックして採点できるようにする
+# Codex タスク: Score Map で複数グリッドを選択して採点できるようにする
 
 ## 担当ロール
 
 今回は **Frontend Developer** と **Tester** として作業してください。
 
-確認用 `demo` ページの Score Map を改善し、Score Map 上のマスをクリックして GridCell を選択し、選択中の GridCell を demo ページ内の採点パネルから採点できるようにしてください。
+確認用 `demo` ページの Score Map を改善し、複数の GridCell を選択してまとめて採点できるようにしてください。
+
+採点方式は次の2種類を選べるようにします。
+
+1. 個別に入力し、まとめて採点
+2. 選択グリッドを全て同じ値で採点
 
 この demo ページは開発確認用です。
-本番向けの完成UIではなく、既存APIの動作確認と今後の地図UI検証をしやすくするためのページとして実装してください。
+本番向けの完成 UI ではなく、既存 API の動作確認と今後の地図 UI 検証をしやすくするためのページとして実装してください。
 
 ## 作業前に必ず読むファイル
 
@@ -25,47 +30,89 @@
 - `maps/tests.py`
 - `maps/views.py`
 - `maps/urls.py`
+- `maps/serializers.py`
 
 特に、以下を確認してください。
 
-- demo ページの既存HTML構成
 - `demo.js` の `state`
+- `selectedGridId`
+- `selectedGrid`
+- `gridsById`
+- `selectGrid(gridId)`
+- `clearSelectedGrid()`
+- `renderSelectedGrid()`
 - `renderScoreMap(grids)`
 - `renderGrids(grids)`
-- `loadGrids()`
-- `rateGrid(gridId)`
-- 既存のテーブル側採点処理
-- Score Map の既存CSS
-- `MapDemoViewTests` の書き方
+- `submitRating(gridId, score, comment)`
+- `rateSelectedGrid(event)`
+- 既存の Score Map クリック選択処理
+- 既存の単体採点パネル
+- 既存の一括採点 API
+- `BulkGridRatingSerializer`
+- `BulkGridRatingCreateViewTests`
+- `MapDemoViewTests`
 
 ## 今回の目的
 
-現在の demo ページでは、Score Map に GridCell のスコアを表示できます。
+現在の demo ページでは、Score Map のマスを1つクリックして選択し、選択中の GridCell を採点できます。
 
-今回の目的は、Score Map を単なる表示用ではなく、次の操作ができる確認UIにすることです。
+今回の目的は、Score Map 上で複数の GridCell を選択し、次の2種類の方式で採点できるようにすることです。
 
-1. Score Map 上のマスをクリックする
-2. クリックした GridCell が選択状態になる
-3. demo ページ内の採点パネルに選択中 GridCell の情報が表示される
-4. 採点パネルから score を入力して採点できる
-5. 採点成功後、GridCell 一覧と Score Map が再読み込みされる
-6. 可能であれば、採点後も同じ GridCell の選択状態を維持する
+### 採点方式1: 個別に入力し、まとめて採点
+
+選択した GridCell ごとに score 入力欄を表示し、それぞれ別の score を入力して、まとめて採点できるようにします。
+
+例:
+
+```text
+GridCell #1: 8
+GridCell #2: 5
+GridCell #3: 10
+```
+
+この方式では、既存の単体採点 API を複数回呼び出して構いません。
+
+```text
+POST /api/maps/grids/{grid_id}/ratings/
+```
+
+### 採点方式2: 選択グリッドを全て同じ値で採点
+
+選択した GridCell 全てに同じ score を付けます。
+
+例:
+
+```text
+GridCell #1, #2, #3 をすべて 7 点で採点
+```
+
+この方式では、既存の一括採点 API を使ってください。
+
+```text
+POST /api/maps/grids/bulk-ratings/
+```
 
 ## 今回やること
 
-- Score Map の各マスをクリック可能にする
-- 選択中 GridCell を管理する state を追加する
-- 選択中 GridCell の情報を表示する採点パネルを demo ページに追加する
-- 採点パネルから既存の採点APIを呼べるようにする
-- 採点後に GridCell 一覧と Score Map を更新する
-- 選択中の Score Map マスに選択中スタイルを付ける
-- メモグリッド切り替え時に選択中 GridCell をリセットする
+- Score Map で複数の GridCell を選択できるようにする
+- 選択中 GridCell を単数ではなく複数管理できる state を追加する
+- 複数選択中の GridCell 一覧を demo ページに表示する
+- 採点方式を選択できる UI を追加する
+- 「個別に入力し、まとめて採点」用の入力 UI を追加する
+- 「選択グリッドを全て同じ値で採点」用の入力 UI を追加する
+- 選択中 GridCell の選択解除をできるようにする
+- 選択をすべて解除できるようにする
+- 採点成功後に GridCell 一覧と Score Map を再読み込みする
+- 再読み込み後も、存在する GridCell は選択状態を維持する
 - 必要に応じて `MapDemoViewTests` に表示確認を追加する
 - 必要に応じて `README.md` の demo ページ確認手順を更新する
+- `memo.md` に作業内容と確認結果を追記する
 
-## 対象API
+## 対象 API
 
-既存の採点APIを使用してください。
+### 単体採点 API
+
+個別入力方式では、既存の単体採点 API を複数回呼び出してください。
 
 ```text
 POST /api/maps/grids/{grid_id}/ratings/
@@ -76,11 +123,30 @@ POST /api/maps/grids/{grid_id}/ratings/
 ```json
 {
   "score": 8,
-  "comment": "demo page rating"
+  "comment": "demo page multi rating"
 }
 ```
 
-既存のテーブル側採点処理で使っているAPIと同じものを使ってください。
+### 一括採点 API
+
+同じ値でまとめて採点する方式では、既存の一括採点 API を使ってください。
+
+```text
+POST /api/maps/grids/bulk-ratings/
+```
+
+リクエスト例:
+
+```json
+{
+  "grid_ids": [1, 2, 3],
+  "score": 7,
+  "comment": "demo page bulk rating"
+}
+```
+
+一括採点 API は、権限外または存在しない GridCell が1件でも含まれる場合、全体を失敗させる想定です。
+一部だけ成功させる実装にはしないでください。
 
 ## 変更してよいファイル
 
@@ -110,174 +176,237 @@ POST /api/maps/grids/{grid_id}/ratings/
 - `config/urls.py`
 - `requirements.txt`
 
-採点APIは既に実装済みの前提です。
-API側に明らかな不具合を見つけた場合は、勝手に大きく修正せず、原因と修正方針を説明してから最小限の修正にしてください。
+単体採点 API と一括採点 API は既に実装済みの前提です。
+API 側に明らかな不具合を見つけた場合は、勝手に大きく修正せず、原因と修正方針を説明してから最小限の修正にしてください。
 
 ## UI 方針
 
-demo ページ内に、選択中 GridCell を採点するためのパネルを追加してください。
+現在の `選択中のマス` パネルを、複数選択に対応したパネルへ拡張してください。
 
 表示名は、ユーザー向けに分かりやすくするため、次のような文言を使ってください。
 
 ```text
 選択中のマス
-GridCell を選択してください。
 選択中 GridCell
-行
-列
-現在のスコア
-採点する
-score
+選択数
+選択をすべて解除
+採点方式
+個別に入力し、まとめて採点
+選択グリッドを全て同じ値で採点
+まとめて採点する
+同じ値で採点する
 ```
 
-内部名として `GridCell` を使うのは構いません。
+内部名として `GridCell`、`bulkRating`、`selectedGridIds` などを使うのは構いません。
 画面表示でも、開発確認用ページなので `GridCell` という語は使って構いません。
 
 ## UI の具体要件
 
-### 1. Score Map のマスをクリック可能にする
+### 1. Score Map の複数選択
 
-`renderScoreMap(grids)` で生成している `.score-cell` に、クリック判定用の data 属性を追加してください。
+Score Map のマスをクリックすると、その GridCell の選択状態を切り替えてください。
 
-例:
+- 未選択のマスをクリック → 選択する
+- 選択済みのマスをクリック → 選択解除する
 
-```html
-<div
-  class="score-cell ..."
-  data-grid-id="..."
->
+既存の単体選択のように、クリックしたら他の選択が消える挙動ではなく、複数選択できる挙動にしてください。
+
+キーボード操作も既存方針を維持してください。
+
+- `Enter`
+- `Space`
+
+で選択状態を切り替えられるようにしてください。
+
+### 2. state を複数選択対応にする
+
+既存の `state` は単体選択向けです。
+
+現在のような状態:
+
+```javascript
+selectedGridId: null,
+selectedGrid: null,
 ```
 
-必要に応じて、行・列・スコアなども data 属性に入れて構いません。
+を残すか置き換えるかは既存コードとの相性で判断してください。
 
-```html
-data-grid-row="..."
-data-grid-col="..."
-data-grid-score="..."
+推奨は、複数選択用に次を追加する形です。
+
+```javascript
+selectedGridIds: new Set(),
 ```
 
-ただし、実際の選択中 GridCell 情報は、できるだけ `state` か読み込み済みの `grids` から取得してください。
-
-### 2. 選択中 GridCell 用の state を追加する
-
-既存の `state` に、選択中 GridCell を表す値を追加してください。
+必要であれば、選択中 GridCell の配列を取得する helper を追加してください。
 
 例:
 
 ```javascript
-const state = {
-  selectedAreaId: null,
-  selectedAreaName: "",
-  selectedGridId: null,
-  selectedGrid: null,
-  areasById: new Map(),
-  gridsById: new Map(),
-};
+function selectedGrids() {
+  return Array.from(state.selectedGridIds)
+    .map((gridId) => state.gridsById.get(gridId))
+    .filter(Boolean);
+}
 ```
 
-既存の構成に合わせて、より自然な名前があればそちらを優先してください。
+既存の `selectedGridId` / `selectedGrid` を残す場合は、最後に選択した GridCell を表す用途に限定してください。
+ただし、実装が複雑になる場合は、複数選択用の state に整理して構いません。
 
-### 3. GridCell 読み込み時に参照用 Map を作る
+### 3. 選択状態のCSS
 
-`renderGrids(grids)` または `loadGrids()` の中で、GridCell ID から GridCell を取得できるようにしてください。
+選択中の Score Map マスには、引き続き `.is-selected` を付けてください。
 
-例:
+複数の `.score-cell` が同時に `.is-selected` になる想定です。
 
-```javascript
-state.gridsById = new Map(grids.map((grid) => [Number(grid.id), grid]));
-```
+既存の色分けを壊さないようにしてください。
 
-これにより、Score Map のクリック時に対象 GridCell の詳細を取得しやすくしてください。
-
-### 4. 採点パネルを追加する
-
-`demo.html` に、Score Map の近くか GridCell 一覧の上あたりに、採点パネルを追加してください。
-
-最低限、次の要素を置いてください。
-
-- 選択中 GridCell の表示エリア
-- score 入力欄
-- 採点ボタン
-- メッセージ表示エリア
-
-例として、以下のようなUIを想定します。
-
-```html
-<section class="panel score-rating-panel">
-  <h2>選択中のマス</h2>
-  <p id="selected-grid-label">GridCell を選択してください。</p>
-
-  <form id="selected-grid-rating-form">
-    <label for="selected-grid-score">score</label>
-    <input id="selected-grid-score" type="number" min="1" max="10" value="5">
-    <button id="selected-grid-rate-button" type="submit" disabled>採点する</button>
-  </form>
-
-  <p id="selected-grid-message" class="message"></p>
-</section>
-```
-
-既存HTMLの構造・class名に合わせて調整してください。
-
-### 5. 選択中 GridCell の情報を表示する
-
-Score Map のマスをクリックしたら、採点パネルに次の情報を表示してください。
-
-- GridCell ID
-- row_index
-- col_index
-- initial_score
-- average_user_score
-- rating_count
-- calculated_score
-
-表示例:
-
-```text
-選択中 GridCell #12 / row 2 / col 3 / 現在のスコア 7.5
-```
-
-長くなりすぎる場合は、複数行に分けても構いません。
-
-### 6. 選択中スタイルを付ける
-
-選択中の Score Map マスには、分かりやすいCSSを追加してください。
+必要であれば、複数選択中に分かりやすい表示を追加してください。
 
 例:
 
 ```css
 .score-cell.is-selected {
-  outline: 3px solid currentColor;
+  outline: 3px solid rgba(23, 111, 92, 0.86);
   outline-offset: -3px;
 }
 ```
 
-既存の色分けを壊さないようにしてください。
-色指定は既存CSSの雰囲気に合わせてください。
+既存CSSがある場合は、それを活かしてください。
 
-### 7. 採点パネルから採点できるようにする
+### 4. 選択中 GridCell 一覧の表示
 
-採点パネルのフォーム送信時に、選択中 GridCell に対して採点APIを呼んでください。
+採点パネル内に、選択中 GridCell の一覧を表示してください。
 
-既存の `rateGrid(gridId)` を再利用できるなら再利用してください。
-ただし、現在の `rateGrid(gridId)` はテーブル内の `[data-score-for="${gridId}"]` を参照しているため、必要に応じて次のように分離してください。
+最低限、各 GridCell について次を表示してください。
+
+- GridCell ID
+- row_index
+- col_index
+- calculated_score
+- 個別採点用 score 入力欄
+- 選択解除ボタン
+
+表示例:
+
+```text
+#1 / row 0 / col 0 / 現在のスコア 5.5 / score [8] / 選択解除
+#2 / row 0 / col 1 / 現在のスコア 3.0 / score [5] / 選択解除
+```
+
+選択中 GridCell がない場合は、次のようなメッセージを表示してください。
+
+```text
+GridCell を選択してください。
+```
+
+### 5. 選択数の表示
+
+選択中の GridCell 数を表示してください。
+
+例:
+
+```text
+選択数: 3
+```
+
+### 6. 選択をすべて解除
+
+選択中 GridCell をすべて解除するボタンを追加してください。
+
+表示例:
+
+```text
+選択をすべて解除
+```
+
+未選択時は disabled にしてください。
+
+### 7. 採点方式の選択 UI
+
+採点方式を選択できる UI を追加してください。
+
+実装しやすい形式で構いませんが、推奨は radio button です。
+
+例:
+
+```html
+<label>
+  <input type="radio" name="multi-rating-mode" value="individual" checked>
+  個別に入力し、まとめて採点
+</label>
+<label>
+  <input type="radio" name="multi-rating-mode" value="same">
+  選択グリッドを全て同じ値で採点
+</label>
+```
+
+選択した方式に応じて、表示する入力欄やボタンを分けてください。
+
+### 8. 個別に入力し、まとめて採点
+
+この方式では、選択中 GridCell ごとの score 入力欄を使って採点してください。
+
+- 各 GridCell ごとに 1〜10 の整数を入力する
+- `まとめて採点する` を押す
+- 各 GridCell に対して単体採点 API を呼ぶ
+
+リクエストは、既存の `submitRating(gridId, score, comment)` を再利用できるなら再利用してください。
+
+ただし、現在の `submitRating()` が毎回 `loadGrids()` を呼ぶ実装の場合、複数回採点時に毎回再読み込みすると非効率です。
+必要であれば、API 呼び出し部分と再読み込み部分を分けてください。
 
 例:
 
 ```javascript
+async function postRating(gridId, score, comment = "demo page rating") {
+  return apiFetch(`/api/maps/grids/${gridId}/ratings/`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ score, comment }),
+  });
+}
+
 async function submitRating(gridId, score, comment = "demo page rating") {
-  // POST /api/maps/grids/{gridId}/ratings/
+  await postRating(gridId, score, comment);
+  await loadGrids();
 }
 ```
 
-その上で、
+個別まとめ採点では、`postRating()` を複数回呼び、最後に1回だけ `loadGrids()` してください。
 
-- テーブル側採点
-- Score Map 採点パネル側採点
+### 9. 選択グリッドを全て同じ値で採点
 
-の両方から `submitRating()` を使う形にするとよいです。
+この方式では、一括採点 API を使ってください。
 
-### 8. 入力値チェック
+- 共通 score 入力欄を表示する
+- `同じ値で採点する` を押す
+- `grid_ids` に選択中 GridCell ID を入れる
+- `score` に共通 score を入れる
+- `POST /api/maps/grids/bulk-ratings/` を呼ぶ
+- 成功後に `loadGrids()` を1回だけ呼ぶ
+
+実装例:
+
+```javascript
+async function submitBulkRating(gridIds, score, comment = "demo page bulk rating") {
+  await apiFetch("/api/maps/grids/bulk-ratings/", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      grid_ids: gridIds,
+      score,
+      comment,
+    }),
+  });
+  await loadGrids();
+}
+```
+
+### 10. 入力値チェック
 
 score は 1〜10 の整数にしてください。
 
@@ -289,9 +418,27 @@ score は 1〜10 の整数にしてください。
 score は 1 から 10 の整数で入力してください。
 ```
 
-### 9. メモグリッド切り替え時の挙動
+個別入力方式では、1件でも不正な score がある場合は、API を呼ばずに全体を止めてください。
 
-メモグリッドを切り替えたときは、選択中 GridCell をリセットしてください。
+例:
+
+```text
+GridCell #12 の score は 1 から 10 の整数で入力してください。
+```
+
+### 11. 選択なしの場合
+
+選択中 GridCell が 0 件の状態で採点しようとした場合は、API を呼ばずにエラーを表示してください。
+
+例:
+
+```text
+採点する GridCell を選択してください。
+```
+
+### 12. メモグリッド切り替え時の挙動
+
+メモグリッドを切り替えたときは、選択中 GridCell をすべてリセットしてください。
 
 表示は次のような状態に戻してください。
 
@@ -301,13 +448,13 @@ GridCell を選択してください。
 
 採点ボタンは disabled にしてください。
 
-### 10. GridCell 再読み込み後の選択状態
+### 13. GridCell 再読み込み後の選択状態
 
 採点後に `loadGrids()` で一覧を再読み込みしてください。
 
-可能であれば、再読み込み後も同じ `selectedGridId` の GridCell を再選択状態にしてください。
+再読み込み後も、選択中 GridCell ID が存在する場合は選択状態を維持してください。
 
-ただし、対象 GridCell が再読み込み後に存在しない場合は、選択状態をリセットしてください。
+ただし、対象 GridCell が再読み込み後に存在しない場合は、その GridCell ID は選択状態から外してください。
 
 ## JavaScript 実装方針
 
@@ -317,40 +464,50 @@ GridCell を選択してください。
 
 - 既存の Basic 認証入力欄を使う
 - 既存の `apiFetch()` を再利用する
-- 既存の `setMessage()` の方針に合わせる
-- 必要であれば、選択中 GridCell 用に `setSelectedGridMessage()` のような関数を追加する
+- 既存の `setMessage()` / `setSelectedGridMessage()` の方針に合わせる
 - 既存のメモグリッド一覧取得を壊さない
 - 既存のメモグリッド作成を壊さない
 - 既存の共有相手管理を壊さない
-- 既存の GridCell テーブル採点を壊さない
 - 既存の Score Map 表示を壊さない
+- 既存の単体クリック採点機能を、複数選択採点へ自然に発展させる
 - `fetch` のエラー処理は既存方針に合わせる
 - 成功後は画面表示を更新する
+- 採点API呼び出し処理は、できるだけ共通化する
 
 追加する関数名は、既存の命名に合わせてください。
 迷う場合は、次のような名前にしてください。
 
 ```javascript
-selectGrid(gridId)
-clearSelectedGrid()
-renderSelectedGrid()
-setSelectedGridMessage(text, type = "")
-submitRating(gridId, score, comment)
-rateSelectedGrid(event)
+selectedGrids()
+toggleGridSelection(gridId)
+clearSelectedGrids()
+removeSelectedGrid(gridId)
+renderSelectedGrids()
+highlightSelectedScoreCells()
+readMultiRatingMode()
+readIndividualScores()
+postRating(gridId, score, comment)
+submitIndividualRatings(event)
+submitSameScoreBulkRating(event)
+submitBulkRating(gridIds, score, comment)
 ```
 
-## 既存のテーブル採点との関係
+## 既存の単体選択UIとの関係
 
-既存のテーブル側採点機能は残してください。
+現在の `選択中のマス` パネルは、単体 GridCell を採点する前提です。
 
-今回の追加後は、採点方法が2つになります。
+今回のタスクでは、このパネルを複数選択対応へ拡張してください。
 
-1. GridCell 一覧テーブルの入力欄から採点
-2. Score Map のマスをクリックして、採点パネルから採点
+既存の単体採点パネルを完全に削除する必要はありませんが、ユーザーが混乱しないようにしてください。
 
-どちらも同じ採点APIを使ってください。
+推奨は、次の形です。
 
-可能であれば、内部的なAPI呼び出し処理は共通化してください。
+- パネル名は `選択中のマス` のまま
+- 未選択時は `GridCell を選択してください。`
+- 1件選択時も複数選択時も同じパネルで扱う
+- 選択中一覧を表示する
+- 採点方式を選べる
+- 1件だけ選択している場合でも、個別入力方式・同じ値方式のどちらでも採点できる
 
 ## CSS 方針
 
@@ -358,26 +515,32 @@ rateSelectedGrid(event)
 
 最低限、次の表示が分かりやすくなるようにしてください。
 
-- Score Map のマスがクリック可能であること
-- hover 時に選択できそうに見えること
-- 選択中マスが分かること
-- 採点パネルが既存のdemo UIに馴染むこと
+- Score Map のマスが複数選択できること
+- 選択中のマスが複数分かること
+- 選択中 GridCell 一覧が見やすいこと
+- 個別入力欄が詰まりすぎないこと
+- 採点方式の選択 UI が分かりやすいこと
 - 採点ボタン disabled 時の見た目が不自然でないこと
+- モバイル幅でも大きく崩れないこと
 
 例:
 
 ```css
-.score-cell {
-  cursor: pointer;
+.selected-grid-list {
+  display: grid;
+  gap: 8px;
 }
 
-.score-cell:hover {
-  filter: brightness(1.08);
+.selected-grid-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 90px auto;
+  gap: 8px;
+  align-items: end;
 }
 
-.score-cell.is-selected {
-  outline: 3px solid currentColor;
-  outline-offset: -3px;
+.rating-mode-options {
+  display: grid;
+  gap: 8px;
 }
 ```
 
@@ -391,27 +554,33 @@ rateSelectedGrid(event)
 
 確認したい文言例:
 
-- `選択中のマス`
-- `GridCell を選択してください`
-- `採点する`
-- `score`
+- `選択数`
+- `選択をすべて解除`
+- `採点方式`
+- `個別に入力し、まとめて採点`
+- `選択グリッドを全て同じ値で採点`
+- `まとめて採点する`
+- `同じ値で採点する`
 
 確認したいHTML要素例:
 
-- `selected-grid-label`
-- `selected-grid-rating-form`
-- `selected-grid-score`
-- `selected-grid-rate-button`
-- `selected-grid-message`
+- `selected-grid-count`
+- `clear-selected-grids`
+- `selected-grids-list`
+- `multi-rating-mode-individual`
+- `multi-rating-mode-same`
+- `same-score-input`
+- `individual-rating-submit`
+- `same-score-rating-submit`
 
 JavaScriptのブラウザ実行テストまでは必須にしません。
-このプロジェクトでは、まず demo ページが表示され、必要なUIが含まれることをDjangoのテストで確認してください。
+このプロジェクトでは、まず demo ページが表示され、必要なUIが含まれることを Django のテストで確認してください。
 
 ただし、`demo.js` の構文チェックは必ず行ってください。
 
 ## README 更新方針
 
-必要であれば、`README.md` の確認用 demo ページ手順に、Score Map クリック採点の確認手順を追記してください。
+必要であれば、`README.md` の確認用 demo ページ手順に、複数選択採点の確認手順を追記してください。
 
 追記する場合は、次のような流れにしてください。
 
@@ -420,11 +589,14 @@ JavaScriptのブラウザ実行テストまでは必須にしません。
 3. メモグリッド一覧を取得する。
 4. メモグリッドを選択する。
 5. Score Map に GridCell が表示されることを確認する。
-6. Score Map の任意のマスをクリックする。
-7. 選択中のマス情報が採点パネルに表示されることを確認する。
-8. score に 1〜10 の整数を入力する。
-9. `採点する` を押す。
-10. 採点後に Score Map と GridCell 一覧が更新されることを確認する。
+6. Score Map の複数のマスをクリックして選択する。
+7. 選択数が増えることを確認する。
+8. `個別に入力し、まとめて採点` を選び、GridCell ごとに score を入力する。
+9. `まとめて採点する` を押し、Score Map と GridCell 一覧が更新されることを確認する。
+10. 再度複数のマスを選択する。
+11. `選択グリッドを全て同じ値で採点` を選び、共通 score を入力する。
+12. `同じ値で採点する` を押し、Score Map と GridCell 一覧が更新されることを確認する。
+13. `選択をすべて解除` で選択状態をリセットできることを確認する。
 
 `README.md` は長くなりすぎないように、demo ページでの確認に必要な分だけ追記してください。
 
@@ -437,14 +609,16 @@ JavaScriptのブラウザ実行テストまでは必須にしません。
 追記例:
 
 ```markdown
-## YYYY-MM-DD Score Map クリック採点対応
+## YYYY-MM-DD Score Map 複数選択採点対応
 
-- Score Map のマスをクリックして GridCell を選択できるようにした。
-- 選択中 GridCell を demo ページ内の採点パネルから採点できるようにした。
-- 採点後に GridCell 一覧と Score Map を再読み込みする。
+- Score Map のマスを複数選択できるようにした。
+- 選択中 GridCell 一覧を demo ページ内に表示するようにした。
+- 採点方式として、個別入力まとめ採点と同じ値での一括採点を選べるようにした。
+- 個別入力まとめ採点では、単体採点 API を複数回呼び、最後に GridCell 一覧を再読み込みする。
+- 同じ値での一括採点では、一括採点 API を使う。
 - 確認: `node --check maps/static/maps/demo.js`
 - 確認: `python manage.py test maps`
-- 次: 必要に応じて Score Map の見た目や地図画像との重ね合わせ精度を調整する。
+- 次: 必要に応じてドラッグ選択や矩形選択を検討する。
 ```
 
 実際に実行したコマンドだけを書いてください。
@@ -453,14 +627,18 @@ JavaScriptのブラウザ実行テストまでは必須にしません。
 ## 今回は実装しないこと
 
 - 採点APIの新規実装
+- 一括採点APIの新規実装
 - GridCell model の変更
-- Rating model の変更
+- GridRating model の変更
 - migration の作成
 - ユーザーごとの採点履歴一覧表示
 - コメント入力欄の本格実装
-- 採点の編集・削除
+- 採点の編集・削除専用 UI
 - Score Map のドラッグ選択
-- 複数マスの一括採点
+- 矩形選択
+- 範囲選択
+- Shift クリック選択
+- Ctrl / Cmd クリック専用操作
 - 地図画像のアップロード
 - 地図画像の座標補正
 - Leaflet や Mapbox などの外部地図ライブラリ導入
@@ -504,21 +682,30 @@ http://127.0.0.1:8000/api/maps/demo/
 - メモグリッドを選択できる
 - GridCell 一覧が表示される
 - Score Map が表示される
-- Score Map のマスをクリックできる
-- クリックしたマスが選択状態になる
-- 採点パネルに選択中 GridCell の情報が表示される
+- Score Map のマスを複数クリックして選択できる
+- 選択済みマスをもう一度クリックすると選択解除できる
+- 選択中マスが複数分かる
+- 選択数が表示される
+- 選択中 GridCell 一覧が表示される
+- 各 GridCell の個別 score 入力欄が表示される
+- 個別入力方式でまとめて採点できる
+- 同じ値方式で一括採点できる
 - score 未入力・範囲外・小数でエラーになる
-- score 1〜10 の整数で採点できる
 - 採点後に Score Map と GridCell 一覧が更新される
-- 既存のテーブル側採点も引き続き動く
-- 共有相手管理が壊れていない
+- 採点後も存在する選択中 GridCell は選択状態を維持する
+- 選択をすべて解除できる
+- メモグリッド切り替え時に選択状態がリセットされる
+- 共有メモグリッドでも、権限がある場合は採点できる
+- 既存の共有相手管理が壊れていない
 
 ## 注意事項
 
 - 既存の demo ページの機能を壊さないでください。
-- 既存のメモグリッド作成、一覧取得、GridCell 表示、テーブル採点、共有相手管理の流れを維持してください。
+- 既存のメモグリッド作成、一覧取得、GridCell 表示、共有相手管理の流れを維持してください。
 - API の認証情報は、既存の username/password 入力欄を使ってください。
-- 採点APIは既存の `/api/maps/grids/{grid_id}/ratings/` を使ってください。
+- 個別入力方式では、既存の単体採点 API を使ってください。
+- 同じ値方式では、既存の一括採点 API を使ってください。
+- 一括採点 API の仕様を demo ページ側で変えないでください。
 - Score Map の見た目は、既存のスコア色分けを維持してください。
 - 選択中マスの見た目は、既存の色分けの邪魔にならないようにしてください。
 - 依存関係は追加しないでください。

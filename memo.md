@@ -346,6 +346,37 @@ git diff --check -- maps/static/maps/demo.html maps/static/maps/demo.js maps/sta
 - `150 tests` 通過。
 - `System check identified no issues`。
 
+## 2026-05-25 Score Map 複数選択採点対応
+
+- Score Map のマスを複数選択できるようにした。
+- 選択済みのマスをもう一度クリックすると、選択解除できるようにした。
+- `選択中のマス` パネルに、選択数、選択中 GridCell 一覧、個別 score 入力欄、選択解除ボタンを表示するようにした。
+- 採点方式として、`個別に入力し、まとめて採点` と `選択グリッドを全て同じ値で採点` を選べるようにした。
+- 個別入力方式では、単体採点 API を複数回呼び、最後に GridCell を再読み込みする。
+- 同じ値方式では、一括採点 API を使う。
+- 下部の表形式採点 UI は使わず、Score Map と選択中マスパネルで採点する流れに寄せた。
+- README の demo ページ確認手順を、複数選択採点の流れに更新した。
+
+確認:
+
+```bash
+node --check maps/static/maps/demo.js
+.venv/bin/python manage.py check
+.venv/bin/python manage.py test maps.tests.MapDemoViewTests
+git diff --check -- maps/static/maps/demo.html maps/static/maps/demo.js maps/static/maps/demo.css maps/tests.py README.md memo.md
+.venv/bin/python manage.py test maps
+```
+
+ブラウザ確認:
+
+- `http://127.0.0.1:8001/api/maps/demo/` で demo ページを開き、複数選択用 UI が表示されることを確認した。
+- 旧単体採点フォームと下部テーブル用 `grids-body` が表示されていないことを確認した。
+
+次:
+
+- ブラウザで Score Map の複数選択、個別入力まとめ採点、同じ値での一括採点を手動確認するとよい。
+- 必要に応じて、ドラッグ選択や矩形選択を検討する。
+
 ## 次にやるとよいこと
 
 - Score Map クリック採点をブラウザで手動確認する。

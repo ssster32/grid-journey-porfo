@@ -3,6 +3,7 @@ const state = {
   selectedAreaName: "",
   selectedGridId: null,
   selectedGrid: null,
+  selectedGridIds: new Set(),
   areasById: new Map(),
   gridsById: new Map(),
 };
@@ -36,9 +37,15 @@ const elements = {
   scoreMapRatio: document.querySelector("#score-map-ratio"),
   scoreMap: document.querySelector("#score-map"),
   selectedGridLabel: document.querySelector("#selected-grid-label"),
-  selectedGridRatingForm: document.querySelector("#selected-grid-rating-form"),
-  selectedGridScore: document.querySelector("#selected-grid-score"),
-  selectedGridRateButton: document.querySelector("#selected-grid-rate-button"),
+  selectedGridCount: document.querySelector("#selected-grid-count"),
+  clearSelectedGridsButton: document.querySelector("#clear-selected-grids"),
+  selectedGridsList: document.querySelector("#selected-grids-list"),
+  individualRatingForm: document.querySelector("#individual-rating-form"),
+  individualRatingSubmit: document.querySelector("#individual-rating-submit"),
+  ratingModeInputs: document.querySelectorAll('input[name="multi-rating-mode"]'),
+  sameScoreRatingForm: document.querySelector("#same-score-rating-form"),
+  sameScoreInput: document.querySelector("#same-score-input"),
+  sameScoreRatingSubmit: document.querySelector("#same-score-rating-submit"),
   selectedGridMessage: document.querySelector("#selected-grid-message"),
 };
 
@@ -276,66 +283,131 @@ function renderShares(shares) {
     .join("");
 }
 
-function clearSelectedGrid() {
-  state.selectedGridId = null;
-  state.selectedGrid = null;
-  elements.selectedGridLabel.textContent = "GridCell を選択してください。";
-  elements.selectedGridRateButton.disabled = true;
-  setSelectedGridMessage("");
-  document.querySelectorAll(".score-cell.is-selected").forEach((cell) => {
-    cell.classList.remove("is-selected");
-  });
+function selectedGrids() {
+  return Array.from(state.selectedGridIds)
+    .map((gridId) => state.gridsById.get(gridId))
+    .filter(Boolean)
+    .sort((a, b) => {
+      if (a.row_index !== b.row_index) {
+        return a.row_index - b.row_index;
+      }
+      return a.col_index - b.col_index;
+    });
 }
 
-function renderSelectedGrid() {
-  const grid = state.selectedGrid;
+function pruneMissingSelectedGrids() {
+  state.selectedGridIds = new Set(
+    Array.from(state.selectedGridIds).filter((gridId) => state.gridsById.has(gridId))
+  );
+}
 
-  if (!grid) {
-    clearSelectedGrid();
+function clearSelectedGrids() {
+  state.selectedGridId = null;
+  state.selectedGrid = null;
+  state.selectedGridIds.clear();
+  renderSelectedGrids();
+  highlightSelectedScoreCells();
+}
+
+function removeSelectedGrid(gridId) {
+  const normalizedGridId = Number(gridId);
+  state.selectedGridIds.delete(normalizedGridId);
+  if (state.selectedGridId === normalizedGridId) {
+    state.selectedGridId = null;
+    state.selectedGrid = null;
+  }
+  renderSelectedGrids();
+  highlightSelectedScoreCells();
+}
+
+function renderSelectedGrids() {
+  const grids = selectedGrids();
+
+  if (!grids.length) {
+    elements.selectedGridLabel.textContent = "GridCell を選択してください。";
+    elements.selectedGridCount.textContent = "選択数: 0";
+    elements.selectedGridsList.textContent = "GridCell を選択してください。";
+    elements.clearSelectedGridsButton.disabled = true;
+    elements.individualRatingSubmit.disabled = true;
+    elements.sameScoreRatingSubmit.disabled = true;
+    setSelectedGridMessage("");
     return;
   }
 
-  const gridSummary = [
-    `選択中のマス #${grid.id}`,
-    `縦 ${Number(grid.row_index) + 1}`,
-    `横 ${Number(grid.col_index) + 1}`,
-    `初期 ${formatNumber(grid.initial_score) || "0"}`,
-    `平均 ${formatNumber(grid.average_user_score) || "0"}`,
-    `件数 ${grid.rating_count}`,
-    `現在のスコア ${formatNumber(grid.calculated_score) || "0"}`,
+  const latestGrid = state.selectedGrid || grids[grids.length - 1];
+  const latestSummary = [
+    `直近の選択 #${latestGrid.id}`,
+    `縦 ${Number(latestGrid.row_index) + 1}`,
+    `横 ${Number(latestGrid.col_index) + 1}`,
+    `現在のスコア ${formatNumber(latestGrid.calculated_score) || "0"}`,
   ].join(" / ");
   elements.selectedGridLabel.innerHTML = `
-    ${escapeHtml(gridSummary)}
+    ${escapeHtml(latestSummary)}
     <br>
     <span>再採点すると点数が更新されます。</span>
   `;
-  elements.selectedGridScore.value = "5";
-  elements.selectedGridRateButton.disabled = false;
+  elements.selectedGridCount.textContent = `選択数: ${grids.length}`;
+  elements.clearSelectedGridsButton.disabled = false;
+  elements.individualRatingSubmit.disabled = false;
+  elements.sameScoreRatingSubmit.disabled = false;
+  elements.selectedGridsList.innerHTML = grids
+    .map((grid) => {
+      const score = formatNumber(grid.calculated_score) || "0";
+      return `
+        <div class="selected-grid-item">
+          <div class="selected-grid-item-summary">
+            <strong>#${grid.id}</strong>
+            <span>縦 ${Number(grid.row_index) + 1} / 横 ${Number(grid.col_index) + 1}</span>
+            <span>現在のスコア ${escapeHtml(score)}</span>
+          </div>
+          <label>
+            score
+            <input
+              type="number"
+              min="1"
+              max="10"
+              value="5"
+              data-individual-score-for="${grid.id}"
+            >
+          </label>
+          <button type="button" data-remove-selected-grid="${grid.id}">
+            選択解除
+          </button>
+        </div>
+      `;
+    })
+    .join("");
   setSelectedGridMessage("");
 }
 
-function highlightSelectedScoreCell() {
+function highlightSelectedScoreCells() {
   document.querySelectorAll(".score-cell").forEach((cell) => {
     cell.classList.toggle(
       "is-selected",
-      Number(cell.dataset.gridId) === state.selectedGridId
+      state.selectedGridIds.has(Number(cell.dataset.gridId))
     );
   });
 }
 
-function selectGrid(gridId) {
+function toggleGridSelection(gridId) {
   const normalizedGridId = Number(gridId);
   const grid = state.gridsById.get(normalizedGridId);
 
   if (!grid) {
-    clearSelectedGrid();
+    removeSelectedGrid(normalizedGridId);
     return;
   }
 
+  if (state.selectedGridIds.has(normalizedGridId)) {
+    removeSelectedGrid(normalizedGridId);
+    return;
+  }
+
+  state.selectedGridIds.add(normalizedGridId);
   state.selectedGridId = normalizedGridId;
   state.selectedGrid = grid;
-  renderSelectedGrid();
-  highlightSelectedScoreCell();
+  renderSelectedGrids();
+  highlightSelectedScoreCells();
 }
 
 function readAreaForm() {
@@ -353,7 +425,7 @@ function readAreaForm() {
 
 function renderEmptyGrids(message) {
   state.gridsById = new Map();
-  clearSelectedGrid();
+  clearSelectedGrids();
   applyScoreMapAspectRatio();
   elements.scoreMap.textContent = message;
   elements.scoreMap.style.setProperty("--score-map-cols", 1);
@@ -415,13 +487,16 @@ function renderGrids(grids) {
   }
 
   renderScoreMap(grids);
+  pruneMissingSelectedGrids();
   if (state.selectedGridId && state.gridsById.has(state.selectedGridId)) {
     state.selectedGrid = state.gridsById.get(state.selectedGridId);
-    renderSelectedGrid();
-    highlightSelectedScoreCell();
   } else {
-    clearSelectedGrid();
+    const [latestSelectedGrid] = selectedGrids();
+    state.selectedGrid = latestSelectedGrid || null;
+    state.selectedGridId = latestSelectedGrid ? latestSelectedGrid.id : null;
   }
+  renderSelectedGrids();
+  highlightSelectedScoreCells();
 }
 
 async function loadAreas() {
@@ -474,7 +549,7 @@ async function createArea(event) {
 async function selectArea(areaId, areaName) {
   state.selectedAreaId = Number(areaId);
   state.selectedAreaName = areaName;
-  clearSelectedGrid();
+  clearSelectedGrids();
   elements.selectedAreaLabel.textContent = `選択中: #${areaId} ${areaName}`;
   elements.selectedShareAreaLabel.textContent = `選択中: #${areaId} ${areaName}`;
   elements.reloadGridsButton.disabled = false;
@@ -600,10 +675,33 @@ function isValidScore(score) {
   return true;
 }
 
-async function submitRating(gridId, score, comment = "demo page rating") {
-  setMessage(`GridCell #${gridId} を採点しています。`);
+function selectedGridIds() {
+  return selectedGrids().map((grid) => grid.id);
+}
 
-  await apiFetch(`/api/maps/grids/${gridId}/ratings/`, {
+function readMultiRatingMode() {
+  const checkedInput = document.querySelector('input[name="multi-rating-mode"]:checked');
+  return checkedInput ? checkedInput.value : "individual";
+}
+
+function updateRatingMode() {
+  const mode = readMultiRatingMode();
+  elements.individualRatingForm.hidden = mode !== "individual";
+  elements.sameScoreRatingForm.hidden = mode !== "same";
+}
+
+function readIndividualScores() {
+  return selectedGrids().map((grid) => {
+    const scoreInput = document.querySelector(`[data-individual-score-for="${grid.id}"]`);
+    return {
+      grid,
+      score: Number(scoreInput.value),
+    };
+  });
+}
+
+async function postRating(gridId, score, comment = "demo page rating") {
+  return apiFetch(`/api/maps/grids/${gridId}/ratings/`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -613,37 +711,94 @@ async function submitRating(gridId, score, comment = "demo page rating") {
       comment,
     }),
   });
+}
+
+async function submitRating(gridId, score, comment = "demo page rating") {
+  setMessage(`GridCell #${gridId} を採点しています。`);
+  await postRating(gridId, score, comment);
+  await loadGrids();
   setMessage(`GridCell #${gridId} を採点しました。`, "success");
+}
+
+async function submitBulkRating(gridIds, score, comment = "demo page bulk rating") {
+  await apiFetch("/api/maps/grids/bulk-ratings/", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      grid_ids: gridIds,
+      score,
+      comment,
+    }),
+  });
   await loadGrids();
 }
 
-async function rateSelectedGrid(event) {
+async function submitIndividualRatings(event) {
   event.preventDefault();
 
-  if (!state.selectedGridId) {
-    setSelectedGridMessage("GridCell を選択してください。", "error");
+  const ratings = readIndividualScores();
+  if (!ratings.length) {
+    setSelectedGridMessage("採点する GridCell を選択してください。", "error");
     return;
   }
 
-  const score = Number(elements.selectedGridScore.value);
+  const invalidRating = ratings.find((rating) => !isValidScore(rating.score));
+  if (invalidRating) {
+    setSelectedGridMessage(
+      `GridCell #${invalidRating.grid.id} の score は 1 から 10 の整数で入力してください。`,
+      "error"
+    );
+    return;
+  }
+
+  elements.individualRatingSubmit.disabled = true;
+  elements.sameScoreRatingSubmit.disabled = true;
+  setSelectedGridMessage(`${ratings.length} 件の GridCell を採点しています。`);
+
+  try {
+    for (const rating of ratings) {
+      await postRating(rating.grid.id, rating.score, "demo page multi rating");
+    }
+    await loadGrids();
+    clearSelectedGrids();
+    setSelectedGridMessage(`${ratings.length} 件の GridCell を採点しました。`, "success");
+  } catch (error) {
+    renderSelectedGrids();
+    setSelectedGridMessage(error.message, "error");
+  }
+}
+
+async function submitSameScoreBulkRating(event) {
+  event.preventDefault();
+
+  const gridIds = selectedGridIds();
+  if (!gridIds.length) {
+    setSelectedGridMessage("採点する GridCell を選択してください。", "error");
+    return;
+  }
+
+  const score = Number(elements.sameScoreInput.value);
   if (!isValidScore(score)) {
     setSelectedGridMessage("score は 1 から 10 の整数で入力してください。", "error");
     return;
   }
 
-  elements.selectedGridRateButton.disabled = true;
-  setSelectedGridMessage(`GridCell #${state.selectedGridId} を採点しています。`);
+  elements.individualRatingSubmit.disabled = true;
+  elements.sameScoreRatingSubmit.disabled = true;
+  setSelectedGridMessage(`${gridIds.length} 件の GridCell を同じ値で採点しています。`);
 
   try {
-    await submitRating(state.selectedGridId, score);
+    await submitBulkRating(gridIds, score);
+    clearSelectedGrids();
     setSelectedGridMessage(
-      `GridCell #${state.selectedGridId} を採点しました。`,
+      `${gridIds.length} 件の GridCell を同じ値で採点しました。`,
       "success"
     );
   } catch (error) {
+    renderSelectedGrids();
     setSelectedGridMessage(error.message, "error");
-  } finally {
-    elements.selectedGridRateButton.disabled = !state.selectedGridId;
   }
 }
 
@@ -652,7 +807,12 @@ elements.loadAreasButton.addEventListener("click", loadAreas);
 elements.reloadGridsButton.addEventListener("click", loadGrids);
 elements.loadSharesButton.addEventListener("click", loadShares);
 elements.addShareForm.addEventListener("submit", addShare);
-elements.selectedGridRatingForm.addEventListener("submit", rateSelectedGrid);
+elements.individualRatingForm.addEventListener("submit", submitIndividualRatings);
+elements.sameScoreRatingForm.addEventListener("submit", submitSameScoreBulkRating);
+elements.clearSelectedGridsButton.addEventListener("click", clearSelectedGrids);
+elements.ratingModeInputs.forEach((input) => {
+  input.addEventListener("change", updateRatingMode);
+});
 elements.mapImageUrl.addEventListener("input", applyScoreMapBackgroundImage);
 
 elements.areasList.addEventListener("click", (event) => {
@@ -670,7 +830,7 @@ elements.scoreMap.addEventListener("click", (event) => {
     return;
   }
 
-  selectGrid(cell.dataset.gridId);
+  toggleGridSelection(cell.dataset.gridId);
 });
 
 elements.scoreMap.addEventListener("keydown", (event) => {
@@ -684,7 +844,16 @@ elements.scoreMap.addEventListener("keydown", (event) => {
   }
 
   event.preventDefault();
-  selectGrid(cell.dataset.gridId);
+  toggleGridSelection(cell.dataset.gridId);
+});
+
+elements.selectedGridsList.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-remove-selected-grid]");
+  if (!button) {
+    return;
+  }
+
+  removeSelectedGrid(button.dataset.removeSelectedGrid);
 });
 
 elements.sharesList.addEventListener("click", (event) => {
@@ -697,3 +866,4 @@ elements.sharesList.addEventListener("click", (event) => {
 });
 
 applyScoreMapBackgroundImage();
+updateRatingMode();
