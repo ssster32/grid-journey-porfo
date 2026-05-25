@@ -4,6 +4,7 @@ const state = {
   selectedGridId: null,
   selectedGrid: null,
   selectedGridIds: new Set(),
+  scoreMapViewMode: "fit",
   areasById: new Map(),
   gridsById: new Map(),
 };
@@ -34,8 +35,11 @@ const elements = {
   shareMessage: document.querySelector("#share-message"),
   sharesList: document.querySelector("#shares-list"),
   mapImageUrl: document.querySelector("#map-image-url"),
+  scoreMapViewModeInputs: document.querySelectorAll('input[name="score-map-view-mode"]'),
   scoreMapRatio: document.querySelector("#score-map-ratio"),
   scoreMap: document.querySelector("#score-map"),
+  scoreMapWrap: document.querySelector(".score-map-wrap"),
+  scoreMapStage: document.querySelector(".score-map-stage"),
   selectedGridLabel: document.querySelector("#selected-grid-label"),
   selectedGridCount: document.querySelector("#selected-grid-count"),
   clearSelectedGridsButton: document.querySelector("#clear-selected-grids"),
@@ -145,11 +149,49 @@ function selectedArea() {
 
 function applyScoreMapAspectRatio() {
   const ratio = mapAreaAspectRatio(selectedArea());
-  elements.scoreMap.parentElement.style.setProperty(
+  elements.scoreMapStage.style.setProperty(
     "--score-map-aspect-ratio",
     ratio.toFixed(3)
   );
   elements.scoreMapRatio.textContent = `area ratio ${ratio.toFixed(2)}`;
+}
+
+function readScoreMapViewMode() {
+  const checkedInput = document.querySelector(
+    'input[name="score-map-view-mode"]:checked'
+  );
+  return checkedInput ? checkedInput.value : "fit";
+}
+
+function applyScoreMapViewMode() {
+  const mode = state.scoreMapViewMode;
+  elements.scoreMapWrap.classList.toggle("is-fit", mode === "fit");
+  elements.scoreMapWrap.classList.toggle("is-detail", mode === "detail");
+  elements.scoreMapStage.classList.toggle("is-fit", mode === "fit");
+  elements.scoreMapStage.classList.toggle("is-detail", mode === "detail");
+}
+
+function applyScoreMapDensity(rowCount, colCount) {
+  const maxSide = Math.max(rowCount, colCount);
+  const cellCount = rowCount * colCount;
+  const densityClasses = [
+    "is-density-normal",
+    "is-density-dense",
+    "is-density-crowded",
+  ];
+
+  elements.scoreMapStage.classList.remove(...densityClasses);
+
+  if (maxSide >= 12 || cellCount >= 96) {
+    elements.scoreMapStage.classList.add("is-density-crowded");
+    return;
+  }
+  if (maxSide >= 7 || cellCount >= 36) {
+    elements.scoreMapStage.classList.add("is-density-dense");
+    return;
+  }
+
+  elements.scoreMapStage.classList.add("is-density-normal");
 }
 
 function cssUrlValue(value) {
@@ -158,16 +200,15 @@ function cssUrlValue(value) {
 
 function applyScoreMapBackgroundImage() {
   const imageUrl = elements.mapImageUrl.value.trim();
-  const stage = elements.scoreMap.parentElement;
 
   if (!imageUrl) {
-    stage.classList.remove("has-map-image");
-    stage.style.removeProperty("--score-map-image");
+    elements.scoreMapStage.classList.remove("has-map-image");
+    elements.scoreMapStage.style.removeProperty("--score-map-image");
     return;
   }
 
-  stage.style.setProperty("--score-map-image", cssUrlValue(imageUrl));
-  stage.classList.add("has-map-image");
+  elements.scoreMapStage.style.setProperty("--score-map-image", cssUrlValue(imageUrl));
+  elements.scoreMapStage.classList.add("has-map-image");
 }
 
 async function readJsonResponse(response) {
@@ -341,11 +382,7 @@ function renderSelectedGrids() {
     `横 ${Number(latestGrid.col_index) + 1}`,
     `現在のスコア ${formatNumber(latestGrid.calculated_score) || "0"}`,
   ].join(" / ");
-  elements.selectedGridLabel.innerHTML = `
-    ${escapeHtml(latestSummary)}
-    <br>
-    <span>再採点すると点数が更新されます。</span>
-  `;
+  elements.selectedGridLabel.textContent = latestSummary;
   elements.selectedGridCount.textContent = `選択数: ${grids.length}`;
   elements.clearSelectedGridsButton.disabled = false;
   elements.individualRatingSubmit.disabled = false;
@@ -430,7 +467,9 @@ function renderEmptyGrids(message) {
   elements.scoreMap.textContent = message;
   elements.scoreMap.style.setProperty("--score-map-cols", 1);
   elements.scoreMap.style.setProperty("--score-map-rows", 1);
-  elements.scoreMap.parentElement.style.setProperty("--score-map-cols", 1);
+  elements.scoreMapStage.style.setProperty("--score-map-rows", 1);
+  elements.scoreMapStage.style.setProperty("--score-map-cols", 1);
+  applyScoreMapDensity(1, 1);
 }
 
 function renderScoreMap(grids) {
@@ -444,15 +483,21 @@ function renderScoreMap(grids) {
     elements.scoreMap.textContent = "row_index / col_index を持つ GridCell がありません。";
     elements.scoreMap.style.setProperty("--score-map-cols", 1);
     elements.scoreMap.style.setProperty("--score-map-rows", 1);
-    elements.scoreMap.parentElement.style.setProperty("--score-map-cols", 1);
+    elements.scoreMapStage.style.setProperty("--score-map-rows", 1);
+    elements.scoreMapStage.style.setProperty("--score-map-cols", 1);
+    applyScoreMapDensity(1, 1);
     return;
   }
 
   const maxRow = Math.max(...positionedGrids.map((grid) => Number(grid.row_index)));
   const maxCol = Math.max(...positionedGrids.map((grid) => Number(grid.col_index)));
-  elements.scoreMap.style.setProperty("--score-map-rows", maxRow + 1);
-  elements.scoreMap.style.setProperty("--score-map-cols", maxCol + 1);
-  elements.scoreMap.parentElement.style.setProperty("--score-map-cols", maxCol + 1);
+  const rowCount = maxRow + 1;
+  const colCount = maxCol + 1;
+  elements.scoreMap.style.setProperty("--score-map-rows", rowCount);
+  elements.scoreMap.style.setProperty("--score-map-cols", colCount);
+  elements.scoreMapStage.style.setProperty("--score-map-rows", rowCount);
+  elements.scoreMapStage.style.setProperty("--score-map-cols", colCount);
+  applyScoreMapDensity(rowCount, colCount);
   elements.scoreMap.innerHTML = positionedGrids
     .map((grid) => {
       const row = Number(grid.row_index) + 1;
@@ -813,6 +858,12 @@ elements.clearSelectedGridsButton.addEventListener("click", clearSelectedGrids);
 elements.ratingModeInputs.forEach((input) => {
   input.addEventListener("change", updateRatingMode);
 });
+elements.scoreMapViewModeInputs.forEach((input) => {
+  input.addEventListener("change", () => {
+    state.scoreMapViewMode = readScoreMapViewMode();
+    applyScoreMapViewMode();
+  });
+});
 elements.mapImageUrl.addEventListener("input", applyScoreMapBackgroundImage);
 
 elements.areasList.addEventListener("click", (event) => {
@@ -866,4 +917,5 @@ elements.sharesList.addEventListener("click", (event) => {
 });
 
 applyScoreMapBackgroundImage();
+applyScoreMapViewMode();
 updateRatingMode();

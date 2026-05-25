@@ -12,7 +12,7 @@
         <p class="eyebrow">API check page</p>
         <h1>Map Demo</h1>
         <p class="lead">
-          確認用の簡易 UI です。既存 API を使ってメモグリッド一覧、GridCell 一覧、単体採点を試せます。
+          確認用の簡易 UI です。既存 API を使ってメモグリッド一覧、GridCell 一覧、複数採点を試せます。
         </p>
       </header>
 
@@ -128,6 +128,28 @@
                 <p>将来の地図背景に重ねる想定の、確認用スコア面です。</p>
               </div>
               <div class="score-map-tools">
+                <div class="score-map-view-mode" aria-label="Score Map 表示モード">
+                  <span>表示モード</span>
+                  <label>
+                    <input
+                      id="score-map-view-mode-fit"
+                      type="radio"
+                      name="score-map-view-mode"
+                      value="fit"
+                      checked
+                    >
+                    全体表示
+                  </label>
+                  <label>
+                    <input
+                      id="score-map-view-mode-detail"
+                      type="radio"
+                      name="score-map-view-mode"
+                      value="detail"
+                    >
+                    詳細表示
+                  </label>
+                </div>
                 <label class="map-image-field">
                   Map image URL
                   <input id="map-image-url" type="text" placeholder="/static/maps/demo-map.png" autocomplete="off">
@@ -144,7 +166,7 @@
             <div class="score-map-wrap">
               <div class="score-map-stage">
                 <div class="score-map-background" aria-hidden="true"></div>
-                <div id="score-map" class="score-map" aria-live="polite">
+                <div id="score-map" class="score-map score-map-grid-layer" aria-live="polite">
                   GridCell はまだ表示されていません。
                 </div>
               </div>
@@ -152,35 +174,58 @@
           </section>
 
           <section class="selected-grid-panel" aria-labelledby="selected-grid-heading">
-            <div class="selected-grid-header">
-              <h3 id="selected-grid-heading">選択中のマス</h3>
-              <p id="selected-grid-label">GridCell を選択してください。</p>
-              <p id="selected-grid-count">選択数: 0</p>
-            </div>
-            <button id="clear-selected-grids" type="button" disabled>選択をすべて解除</button>
-
             <section class="rating-mode-section" aria-label="採点方式">
-              <h4>採点方式</h4>
-              <div class="rating-mode-options">
-                <label>
-                  <input
-                    id="multi-rating-mode-individual"
-                    type="radio"
-                    name="multi-rating-mode"
-                    value="individual"
-                    checked
-                  >
-                  個別に入力し、まとめて採点
-                </label>
-                <label>
-                  <input
-                    id="multi-rating-mode-same"
-                    type="radio"
-                    name="multi-rating-mode"
-                    value="same"
-                  >
-                  選択グリッドを全て同じ値で採点
-                </label>
+              <div class="selected-grid-title-row">
+                <h3 id="selected-grid-heading">選択中のマス</h3>
+                <div class="selected-grid-status">
+                  <p id="selected-grid-label">GridCell を選択してください。</p>
+                  <p id="selected-grid-count">選択数: 0</p>
+                </div>
+              </div>
+              <div class="rating-mode-control-row">
+                <div>
+                  <h4>採点方式</h4>
+                  <div class="rating-mode-options">
+                    <label>
+                      <input
+                        id="multi-rating-mode-individual"
+                        type="radio"
+                        name="multi-rating-mode"
+                        value="individual"
+                        checked
+                      >
+                      個別に入力し、まとめて採点
+                    </label>
+                    <label>
+                      <input
+                        id="multi-rating-mode-same"
+                        type="radio"
+                        name="multi-rating-mode"
+                        value="same"
+                      >
+                      選択グリッドを全て同じ値で採点
+                    </label>
+                  </div>
+                </div>
+                <button
+                  id="individual-rating-submit"
+                  class="rating-mode-submit"
+                  type="submit"
+                  form="individual-rating-form"
+                  disabled
+                >
+                  まとめて採点する
+                </button>
+                <button
+                  id="same-score-rating-submit"
+                  class="rating-mode-submit"
+                  type="submit"
+                  form="same-score-rating-form"
+                  disabled
+                  hidden
+                >
+                  同じ値で採点する
+                </button>
               </div>
             </section>
 
@@ -188,7 +233,6 @@
               <div id="selected-grids-list" class="selected-grid-list" aria-live="polite">
                 GridCell を選択してください。
               </div>
-              <button id="individual-rating-submit" type="submit" disabled>まとめて採点する</button>
             </form>
 
             <form id="same-score-rating-form" class="multi-rating-form">
@@ -196,9 +240,12 @@
                 共通 score
                 <input id="same-score-input" type="number" min="1" max="10" value="5">
               </label>
-              <button id="same-score-rating-submit" type="submit" disabled>同じ値で採点する</button>
             </form>
             <div id="selected-grid-message" class="message selected-grid-message" aria-live="polite"></div>
+            <div class="selected-grid-footer">
+              <p id="selected-grid-note">再採点すると点数が更新されます。</p>
+              <button id="clear-selected-grids" type="button" disabled>選択をすべて解除</button>
+            </div>
           </section>
         </section>
       </section>

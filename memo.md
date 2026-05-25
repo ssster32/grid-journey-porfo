@@ -377,6 +377,37 @@ git diff --check -- maps/static/maps/demo.html maps/static/maps/demo.js maps/sta
 - ブラウザで Score Map の複数選択、個別入力まとめ採点、同じ値での一括採点を手動確認するとよい。
 - 必要に応じて、ドラッグ選択や矩形選択を検討する。
 
+## 2026-05-25 Score Map 表示モード対応
+
+- Score Map に `全体表示` / `詳細表示` を追加した。
+- 初期表示は `全体表示`。
+- 全体表示では、CSS Grid ベースのまま Score Map 全体が表示枠内に収まるようにした。
+- 詳細表示では、1マスの最低サイズを確保し、縦横スクロールで GridCell を確認できるようにした。
+- Score Map 周りを `stage / background / grid-layer` として扱いやすい構造に整理した。
+- GridCell の緯度経度から絶対配置する方式は、次回以降の検討に残した。
+- README の demo ページ確認手順に、表示モードと `grid_size_meters` の扱いを短く追記した。
+
+確認:
+
+```bash
+node --check maps/static/maps/demo.js
+.venv/bin/python manage.py check
+.venv/bin/python manage.py test maps.tests.MapDemoViewTests
+git diff --check -- maps/static/maps/demo.html maps/static/maps/demo.js maps/static/maps/demo.css maps/tests.py README.md memo.md
+.venv/bin/python manage.py test maps
+```
+
+ブラウザ確認:
+
+- `http://127.0.0.1:8001/api/maps/demo/` で demo ページを開いた。
+- `表示モード`、`全体表示`、`詳細表示`、`score-map-grid-layer` が表示されることを確認した。
+- `詳細表示` に切り替えると `score-map-wrap` / `score-map-stage` に `is-detail` が付き、`全体表示` に戻すと `is-fit` が付くことを確認した。
+
+次:
+
+- ブラウザで GridCell 数が多いメモグリッドを開き、全体表示と詳細表示の切り替えを手動確認するとよい。
+- 必要に応じて、GridCell の `north/south/east/west` を使った割合配置方式を検討する。
+
 ## 次にやるとよいこと
 
 - Score Map クリック採点をブラウザで手動確認する。
