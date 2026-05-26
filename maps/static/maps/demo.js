@@ -14,6 +14,7 @@ const state = {
   leafletMap: null,
   mapAreaRectangle: null,
   gridBoundaryLayer: null,
+  extraZoomedAreaIds: new Set(),
 };
 
 const elements = {
@@ -69,6 +70,32 @@ const FALLBACK_AREA_ASPECT_RATIO = 1.4;
 const MIN_AREA_ASPECT_RATIO = 0.6;
 const MAX_AREA_ASPECT_RATIO = 2.2;
 const DRAG_SELECT_THRESHOLD = 5;
+const MAP_PREVIEW_EXTRA_ZOOM = 1;
+const MAP_PREVIEW_MAX_ZOOM = 19;
+const MAP_PREVIEW_EXTRA_ZOOM_MAX_LAT_DIFF = 0.02;
+const MAP_PREVIEW_EXTRA_ZOOM_MAX_LNG_DIFF = 0.02;
+const MAP_PREVIEW_SCORE_STYLES = {
+  low: {
+    color: "#4d6372",
+    fillColor: "#dbe7ef",
+    fillOpacity: 0.28,
+  },
+  middle: {
+    color: "#9a6b00",
+    fillColor: "#fff1b8",
+    fillOpacity: 0.3,
+  },
+  high: {
+    color: "#25733a",
+    fillColor: "#bfe7c4",
+    fillOpacity: 0.28,
+  },
+  veryHigh: {
+    color: "#0d5f4e",
+    fillColor: "#176f5c",
+    fillOpacity: 0.24,
+  },
+};
 
 function authHeaders(extraHeaders = {}) {
   const username = elements.username.value.trim();
@@ -121,21 +148,35 @@ function formatNumber(value) {
   return Number.isInteger(numberValue) ? String(numberValue) : numberValue.toFixed(2);
 }
 
-function scoreClass(score) {
+function scoreLevel(score) {
   const numberScore = Number(score);
   if (!Number.isFinite(numberScore)) {
-    return "score-low";
+    return "low";
   }
   if (numberScore >= 8) {
-    return "score-very-high";
+    return "veryHigh";
   }
   if (numberScore >= 6) {
-    return "score-high";
+    return "high";
   }
   if (numberScore >= 3) {
-    return "score-middle";
+    return "middle";
   }
-  return "score-low";
+  return "low";
+}
+
+function scoreClass(score) {
+  const classes = {
+    low: "score-low",
+    middle: "score-middle",
+    high: "score-high",
+    veryHigh: "score-very-high",
+  };
+  return classes[scoreLevel(score)];
+}
+
+function mapPreviewScoreStyle(score) {
+  return MAP_PREVIEW_SCORE_STYLES[scoreLevel(score)];
 }
 
 function clamp(value, min, max) {
@@ -190,6 +231,40 @@ function mapAreaBounds(area) {
 
 function gridCellBounds(grid) {
   return mapAreaBounds(grid);
+}
+
+function shouldApplyExtraMapPreviewZoom(area) {
+  const latDiff = Math.abs(Number(area.north) - Number(area.south));
+  const lngDiff = Math.abs(Number(area.east) - Number(area.west));
+
+  if (!Number.isFinite(latDiff) || !Number.isFinite(lngDiff)) {
+    return false;
+  }
+
+  return (
+    latDiff <= MAP_PREVIEW_EXTRA_ZOOM_MAX_LAT_DIFF &&
+    lngDiff <= MAP_PREVIEW_EXTRA_ZOOM_MAX_LNG_DIFF
+  );
+}
+
+function applyExtraMapPreviewZoom(area) {
+  const areaId = Number(area.id);
+  if (state.extraZoomedAreaIds.has(areaId)) {
+    return;
+  }
+  if (!shouldApplyExtraMapPreviewZoom(area)) {
+    return;
+  }
+
+  const currentZoom = state.leafletMap.getZoom();
+  if (!Number.isFinite(currentZoom)) {
+    return;
+  }
+
+  state.leafletMap.setZoom(
+    Math.min(currentZoom + MAP_PREVIEW_EXTRA_ZOOM, MAP_PREVIEW_MAX_ZOOM)
+  );
+  state.extraZoomedAreaIds.add(areaId);
 }
 
 function initMapPreview() {
@@ -251,12 +326,14 @@ function updateMapGridBoundaries(grids) {
     if (!bounds) {
       return;
     }
+    const style = mapPreviewScoreStyle(grid.calculated_score);
 
     window.L.rectangle(bounds, {
-      color: "#2c7da0",
+      color: style.color,
       weight: 1,
-      opacity: 0.32,
-      fill: false,
+      opacity: 0.45,
+      fillColor: style.fillColor,
+      fillOpacity: style.fillOpacity,
       interactive: false,
       className: "map-preview-grid-boundary",
     }).addTo(boundaryLayer);
@@ -296,10 +373,10 @@ function updateMapPreview() {
   state.mapAreaRectangle = window.L.rectangle(bounds, {
     color: "#176f5c",
     weight: 2,
-    fillColor: "#176f5c",
-    fillOpacity: 0.12,
+    fill: false,
   }).addTo(state.leafletMap);
   state.leafletMap.fitBounds(bounds, { padding: [20, 20] });
+  applyExtraMapPreviewZoom(area);
   elements.mapPreviewStatus.textContent = `選択中 MapArea: #${area.id} ${area.name}`;
 
   window.setTimeout(() => {

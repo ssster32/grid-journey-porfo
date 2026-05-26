@@ -457,7 +457,7 @@ password: test-password
 1. 必要に応じて `メモグリッド作成` フォームの値を調整し、`メモグリッドを作成` を押す。
 2. 作成したメモグリッドが一覧に表示され、選択状態になることを確認する。
 3. `Map Preview` に、選択中メモグリッドの範囲が四角で表示されることを確認する。
-4. `Map Preview` 上に、`GridCell` 境界が薄い線で表示されることを確認する。
+4. `Map Preview` 上に、`GridCell` 境界が薄い線で表示され、`calculated_score` に応じて薄く色分けされることを確認する。
 5. メモグリッド作成後に自動生成された `GridCell` が、`Score Map` に表示されることを確認する。
 6. 必要に応じて `GridCell を再取得` を押し、表示を更新できることを確認する。
 7. `全体表示` で Score Map 全体が表示枠内に収まることを確認する。
@@ -477,7 +477,12 @@ password: test-password
 
 `Map Preview` は Leaflet と OpenStreetMap タイルを使う、開発確認用の地図表示です。
 本番利用する場合は、地図タイル提供元の利用条件を確認してください。
-現在は選択中メモグリッドの範囲と `GridCell` 境界だけを表示し、`GridCell` の選択や採点操作は `Score Map` で行います。
+現在は選択中メモグリッドの範囲と `GridCell` 境界を表示し、`GridCell` は `calculated_score` に応じて色分けします。
+色分けの基準は `Score Map` と同じです。
+採点後に GridCell 一覧が再読み込みされると、Map Preview 側の色分けも更新されます。
+Map Preview は現時点では表示専用で、`GridCell` の選択や採点操作は `Score Map` で行います。
+選択中メモグリッドの範囲が小さい場合、Map Preview は範囲を確認しやすくするため少し寄って表示します。
+これは表示上のズーム調整であり、`grid_size_meters` や GridCell 生成ロジックは変わりません。
 `Score Map` は、将来の地図背景に重ねる想定で、一枚の地図状の四角として表示します。
 `全体表示` は Score Map 全体を表示枠内に収める表示です。
 `詳細表示` は 1マスの見やすさを優先し、必要に応じて縦横スクロールして確認する表示です。

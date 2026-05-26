@@ -190,8 +190,15 @@
             </div>
             <div id="map-preview" class="map-preview" aria-label="MapArea bounds preview"></div>
             <p class="map-preview-note">
-              OpenStreetMap タイルを使う開発確認用の表示です。GridCell 境界は薄い線で表示し、採点操作は Score Map で行います。
+              OpenStreetMap タイルを使う開発確認用の表示です。GridCell 境界と地図上でのスコア分布を確認できます。
+              色分けは Score Map と同じ基準です。採点操作は Score Map で行います。
             </p>
+            <div class="map-preview-legend" aria-label="Map Preview score legend">
+              <span><i class="legend-box score-low"></i>0-2.99</span>
+              <span><i class="legend-box score-middle"></i>3-5.99</span>
+              <span><i class="legend-box score-high"></i>6-7.99</span>
+              <span><i class="legend-box score-very-high"></i>8+</span>
+            </div>
           </section>
 
           <section class="selected-grid-panel" aria-labelledby="selected-grid-heading">

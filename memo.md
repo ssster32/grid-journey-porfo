@@ -467,6 +467,64 @@ git diff --check -- maps/static/maps/demo.html maps/static/maps/demo.js maps/sta
 - ブラウザでメモグリッド選択時に Map Preview の範囲表示と GridCell 境界が更新されることを確認する。
 - 必要に応じて、Score Map の選択状態を Map Preview 側にも薄く反映するか検討する。
 
+## 2026-05-26 Leaflet Map Preview スコア色分け対応
+
+- Leaflet Map Preview 上の GridCell rectangle を `calculated_score` に応じて色分け表示するようにした。
+- 色分け基準は Score Map と同じく、0-2.99 / 3-5.99 / 6-7.99 / 8+。
+- 地図タイルが見えるように、GridCell rectangle の塗りは薄めにした。
+- Map Preview は引き続き表示専用で、GridCell の選択・採点は Score Map 側で行う。
+- 採点後の `loadGrids()` により、Map Preview 側の色分けも更新される。
+
+確認:
+
+```bash
+node --check maps/static/maps/demo.js
+.venv/bin/python manage.py check
+.venv/bin/python manage.py test maps.tests.MapDemoViewTests
+git diff --check -- maps/static/maps/demo.html maps/static/maps/demo.js maps/static/maps/demo.css maps/tests.py README.md memo.md
+.venv/bin/python manage.py test maps
+```
+
+ブラウザ確認:
+
+- `http://127.0.0.1:8001/api/maps/demo/` で demo ページを開いた。
+- `Map Preview` 枠、色分け説明、凡例、既存の `Score Map` が表示されることを確認した。
+- この実行環境では外部 CDN が読み込めず、Leaflet の地図描画自体は未確認。
+
+次にやるとよいこと:
+
+- Leaflet 上の GridCell クリック選択を、既存の `selectedGridIds` と連動するか検討する。
+- Map Preview の色が濃すぎないか、実ブラウザで地図タイルと合わせて確認する。
+
+## 2026-05-26 Leaflet Map Preview 追加ズーム対応
+
+- MapArea が小さい場合、Leaflet の `fitBounds()` 後に追加で少しズームインするようにした。
+- 追加ズームは緯度差・経度差が一定以下の場合だけ行う。
+- 追加ズーム済みの MapArea ID を記録し、同じ MapArea では追加ズームを一度だけ行う。
+- `MAP_PREVIEW_MAX_ZOOM` を超えないようにした。
+- この変更は表示上の調整であり、`grid_size_meters` や GridCell 生成ロジックは変更していない。
+
+確認:
+
+```bash
+node --check maps/static/maps/demo.js
+.venv/bin/python manage.py check
+.venv/bin/python manage.py test maps.tests.MapDemoViewTests
+git diff --check -- maps/static/maps/demo.js README.md memo.md
+.venv/bin/python manage.py test maps
+```
+
+ブラウザ確認:
+
+- `http://127.0.0.1:8001/api/maps/demo/` で demo ページを開いた。
+- `Map Preview` 枠と既存の `Score Map` が表示されることを確認した。
+- この実行環境では外部 CDN が読み込めず、Leaflet の追加ズーム動作自体は未確認。
+
+次にやるとよいこと:
+
+- 必要に応じて MapArea 外枠の太さや Map Preview の高さを調整する。
+- 実ブラウザで小さめ/広めのメモグリッドを切り替え、寄り具合を確認する。
+
 ## 注意点
 
 - `models.py` と migration は、指示がない限り変更しない。

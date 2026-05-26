@@ -760,6 +760,21 @@ label {
   font-size: 0.82rem;
 }
 
+.map-preview-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.map-preview-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
 .selected-grid-panel {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
