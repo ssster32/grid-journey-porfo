@@ -150,6 +150,12 @@ label {
   font-weight: 700;
 }
 
+.form-note {
+  margin-bottom: 8px;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
 .areas-list {
   display: grid;
   gap: 8px;

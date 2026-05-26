@@ -1,4 +1,5 @@
 import base64
+from math import cos, radians
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
@@ -17,7 +18,13 @@ from .serializers import (
     GridRatingResponseSerializer,
     MapAreaSerializer,
 )
-from .services import generate_grid_cells_for_area, update_grid_cell_score
+from .services import (
+    METERS_PER_DEGREE,
+    calculate_bounds_from_center,
+    generate_grid_cells_for_area,
+    update_grid_cell_score,
+    validate_center_grid_limits,
+)
 
 
 class SerializerTestDataMixin:
@@ -206,27 +213,73 @@ class MapAreaShareModelTests(TestCase):
 
 
 class MapAreaSerializerTests(TestCase):
+    def center_payload(self):
+        return {
+            "name": "Center Area",
+            "description": "center based",
+            "center_lat": 35.695,
+            "center_lng": 139.795,
+            "grid_size_meters": 500,
+            "rows": 6,
+            "cols": 8,
+            "source": "manual",
+        }
+
     def test_valid_map_area_data_is_valid(self):
-        serializer = MapAreaSerializer(
-            data={
-                "name": "Tokyo Station Area",
-                "description": "manual area",
-                "north": 35.7,
-                "south": 35.6,
-                "east": 139.8,
-                "west": 139.7,
-                "grid_size_meters": 500,
-                "source": "manual",
-            }
+        serializer = MapAreaSerializer(data=self.center_payload())
+
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        self.assertIsNotNone(serializer.center_grid_options)
+
+    def test_center_based_map_area_data_is_valid(self):
+        serializer = MapAreaSerializer(data=self.center_payload())
+
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        self.assertIn("north", serializer.validated_data)
+        self.assertIn("south", serializer.validated_data)
+        self.assertIn("east", serializer.validated_data)
+        self.assertIn("west", serializer.validated_data)
+        self.assertGreater(
+            serializer.validated_data["north"],
+            serializer.validated_data["south"],
+        )
+        self.assertGreater(
+            serializer.validated_data["east"],
+            serializer.validated_data["west"],
         )
 
-        self.assertTrue(serializer.is_valid())
+    def test_center_based_input_fields_are_removed_from_validated_data(self):
+        serializer = MapAreaSerializer(data=self.center_payload())
 
-    def test_north_must_be_greater_than_south(self):
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        self.assertNotIn("center_lat", serializer.validated_data)
+        self.assertNotIn("center_lng", serializer.validated_data)
+        self.assertNotIn("rows", serializer.validated_data)
+        self.assertNotIn("cols", serializer.validated_data)
+
+    def test_center_based_map_area_sets_center_grid_options(self):
+        serializer = MapAreaSerializer(data=self.center_payload())
+
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        self.assertEqual(serializer.center_grid_options["rows"], 6)
+        self.assertEqual(serializer.center_grid_options["cols"], 8)
+        self.assertIn("lat_step", serializer.center_grid_options)
+        self.assertIn("lng_step", serializer.center_grid_options)
+
+    def test_center_based_write_only_fields_are_not_in_serializer_data(self):
+        serializer = MapAreaSerializer(data=self.center_payload())
+
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        self.assertNotIn("center_lat", serializer.data)
+        self.assertNotIn("center_lng", serializer.data)
+        self.assertNotIn("rows", serializer.data)
+        self.assertNotIn("cols", serializer.data)
+
+    def test_legacy_bounds_input_is_invalid(self):
         serializer = MapAreaSerializer(
             data={
                 "name": "Tokyo Station Area",
-                "north": 35.6,
+                "north": 35.7,
                 "south": 35.6,
                 "east": 139.8,
                 "west": 139.7,
@@ -235,22 +288,93 @@ class MapAreaSerializerTests(TestCase):
         )
 
         self.assertFalse(serializer.is_valid())
-        self.assertIn("north", serializer.errors)
+        self.assertIn("non_field_errors", serializer.errors)
 
-    def test_east_must_be_greater_than_west(self):
+    def test_legacy_and_center_based_fields_are_invalid(self):
+        payload = {
+            **self.center_payload(),
+            "north": 35.7,
+            "south": 35.6,
+            "east": 139.8,
+            "west": 139.7,
+        }
+        serializer = MapAreaSerializer(data=payload)
+
+        self.assertFalse(serializer.is_valid())
+        self.assertIn("non_field_errors", serializer.errors)
+
+    def test_incomplete_center_based_fields_are_invalid(self):
+        payload = self.center_payload()
+        payload.pop("rows")
+        serializer = MapAreaSerializer(data=payload)
+
+        self.assertFalse(serializer.is_valid())
+        self.assertIn("non_field_errors", serializer.errors)
+
+    def test_incomplete_legacy_fields_are_invalid(self):
         serializer = MapAreaSerializer(
             data={
                 "name": "Tokyo Station Area",
                 "north": 35.7,
                 "south": 35.6,
-                "east": 139.7,
-                "west": 139.7,
                 "grid_size_meters": 500,
             }
         )
 
         self.assertFalse(serializer.is_valid())
-        self.assertIn("east", serializer.errors)
+        self.assertIn("non_field_errors", serializer.errors)
+
+    def test_missing_center_lat_is_invalid(self):
+        payload = self.center_payload()
+        payload.pop("center_lat")
+        serializer = MapAreaSerializer(data=payload)
+
+        self.assertFalse(serializer.is_valid())
+        self.assertIn("non_field_errors", serializer.errors)
+
+    def test_missing_center_lng_is_invalid(self):
+        payload = self.center_payload()
+        payload.pop("center_lng")
+        serializer = MapAreaSerializer(data=payload)
+
+        self.assertFalse(serializer.is_valid())
+        self.assertIn("non_field_errors", serializer.errors)
+
+    def test_missing_cols_is_invalid(self):
+        payload = self.center_payload()
+        payload.pop("cols")
+        serializer = MapAreaSerializer(data=payload)
+
+        self.assertFalse(serializer.is_valid())
+        self.assertIn("non_field_errors", serializer.errors)
+
+    def test_center_based_rows_less_than_or_equal_to_zero_is_invalid(self):
+        payload = {**self.center_payload(), "rows": 0}
+        serializer = MapAreaSerializer(data=payload)
+
+        self.assertFalse(serializer.is_valid())
+        self.assertIn("non_field_errors", serializer.errors)
+
+    def test_center_based_cols_less_than_or_equal_to_zero_is_invalid(self):
+        payload = {**self.center_payload(), "cols": 0}
+        serializer = MapAreaSerializer(data=payload)
+
+        self.assertFalse(serializer.is_valid())
+        self.assertIn("non_field_errors", serializer.errors)
+
+    def test_center_based_invalid_center_lat_is_invalid(self):
+        payload = {**self.center_payload(), "center_lat": 90}
+        serializer = MapAreaSerializer(data=payload)
+
+        self.assertFalse(serializer.is_valid())
+        self.assertIn("non_field_errors", serializer.errors)
+
+    def test_center_based_invalid_center_lng_is_invalid(self):
+        payload = {**self.center_payload(), "center_lng": 181}
+        serializer = MapAreaSerializer(data=payload)
+
+        self.assertFalse(serializer.is_valid())
+        self.assertIn("non_field_errors", serializer.errors)
 
 
 class BulkGridRatingSerializerTests(SerializerTestDataMixin, TestCase):
@@ -353,6 +477,133 @@ class UpdateGridCellScoreTests(SerializerTestDataMixin, TestCase):
         self.assertIsNone(self.grid.score_updated_at)
 
 
+class CalculateBoundsFromCenterTests(TestCase):
+    def test_calculates_bounds_from_center(self):
+        result = calculate_bounds_from_center(
+            center_lat=35.695,
+            center_lng=139.795,
+            grid_size_meters=500,
+            rows=6,
+            cols=8,
+        )
+
+        self.assertGreater(result["north"], result["south"])
+        self.assertGreater(result["east"], result["west"])
+        self.assertAlmostEqual((result["north"] + result["south"]) / 2, 35.695)
+        self.assertAlmostEqual((result["east"] + result["west"]) / 2, 139.795)
+        self.assertEqual(result["rows"], 6)
+        self.assertEqual(result["cols"], 8)
+
+    def test_lat_step_uses_meters_per_degree(self):
+        result = calculate_bounds_from_center(35.695, 139.795, 500, 6, 8)
+
+        self.assertAlmostEqual(result["lat_step"], 500 / METERS_PER_DEGREE)
+
+    def test_rows_define_latitude_height(self):
+        result = calculate_bounds_from_center(35.695, 139.795, 500, 6, 8)
+
+        self.assertAlmostEqual(
+            result["north"] - result["south"],
+            result["lat_step"] * 6,
+        )
+
+    def test_cols_define_longitude_width(self):
+        result = calculate_bounds_from_center(35.695, 139.795, 500, 6, 8)
+
+        self.assertAlmostEqual(
+            result["east"] - result["west"],
+            result["lng_step"] * 8,
+        )
+
+    def test_lng_step_uses_center_lat_cosine_correction(self):
+        result = calculate_bounds_from_center(35.695, 139.795, 500, 6, 8)
+        expected_lng_step = 500 / (METERS_PER_DEGREE * cos(radians(35.695)))
+
+        self.assertAlmostEqual(result["lng_step"], expected_lng_step)
+
+    def test_invalid_center_lat_raises_value_error(self):
+        with self.assertRaises(ValueError):
+            calculate_bounds_from_center(90, 139.795, 500, 6, 8)
+
+    def test_non_finite_center_lat_raises_value_error(self):
+        with self.assertRaises(ValueError):
+            calculate_bounds_from_center(float("inf"), 139.795, 500, 6, 8)
+
+    def test_invalid_center_lng_raises_value_error(self):
+        with self.assertRaises(ValueError):
+            calculate_bounds_from_center(35.695, 181, 500, 6, 8)
+
+    def test_non_finite_center_lng_raises_value_error(self):
+        with self.assertRaises(ValueError):
+            calculate_bounds_from_center(35.695, float("nan"), 500, 6, 8)
+
+    def test_grid_size_meters_less_than_or_equal_to_zero_raises_value_error(self):
+        with self.assertRaises(ValueError):
+            calculate_bounds_from_center(35.695, 139.795, 0, 6, 8)
+
+    def test_rows_less_than_or_equal_to_zero_raises_value_error(self):
+        with self.assertRaises(ValueError):
+            calculate_bounds_from_center(35.695, 139.795, 500, 0, 8)
+
+    def test_cols_less_than_or_equal_to_zero_raises_value_error(self):
+        with self.assertRaises(ValueError):
+            calculate_bounds_from_center(35.695, 139.795, 500, 6, 0)
+
+    def test_non_integer_rows_raises_value_error(self):
+        with self.assertRaises(ValueError):
+            calculate_bounds_from_center(35.695, 139.795, 500, 6.5, 8)
+
+    def test_non_integer_cols_raises_value_error(self):
+        with self.assertRaises(ValueError):
+            calculate_bounds_from_center(35.695, 139.795, 500, 6, 8.5)
+
+
+class ValidateCenterGridLimitsTests(TestCase):
+    def test_general_user_can_use_cell_count_equal_to_limit(self):
+        validate_center_grid_limits(10, 20, 25)
+
+    def test_general_user_cell_count_over_limit_raises_value_error(self):
+        with self.assertRaises(ValueError):
+            validate_center_grid_limits(10, 20, 26)
+
+    def test_general_user_can_use_height_equal_to_limit(self):
+        validate_center_grid_limits(1000, 30, 10)
+
+    def test_general_user_height_over_limit_raises_value_error(self):
+        with self.assertRaises(ValueError):
+            validate_center_grid_limits(1000, 31, 10)
+
+    def test_general_user_can_use_width_equal_to_limit(self):
+        validate_center_grid_limits(1000, 10, 30)
+
+    def test_general_user_width_over_limit_raises_value_error(self):
+        with self.assertRaises(ValueError):
+            validate_center_grid_limits(1000, 10, 31)
+
+    def test_staff_user_is_exempt_from_general_limits(self):
+        validate_center_grid_limits(1000, 100, 100, is_staff=True)
+
+    def test_staff_user_still_needs_positive_grid_size(self):
+        with self.assertRaises(ValueError):
+            validate_center_grid_limits(0, 100, 100, is_staff=True)
+
+    def test_staff_user_still_needs_positive_rows(self):
+        with self.assertRaises(ValueError):
+            validate_center_grid_limits(1000, 0, 100, is_staff=True)
+
+    def test_staff_user_still_needs_positive_cols(self):
+        with self.assertRaises(ValueError):
+            validate_center_grid_limits(1000, 100, 0, is_staff=True)
+
+    def test_non_integer_rows_raises_value_error(self):
+        with self.assertRaises(ValueError):
+            validate_center_grid_limits(1000, 1.5, 100)
+
+    def test_non_integer_cols_raises_value_error(self):
+        with self.assertRaises(ValueError):
+            validate_center_grid_limits(1000, 100, 1.5)
+
+
 class GenerateGridCellsForAreaTests(TestCase):
     def setUp(self):
         self.user = get_user_model().objects.create_user(
@@ -368,6 +619,26 @@ class GenerateGridCellsForAreaTests(TestCase):
             grid_size_meters=11100,
             created_by=self.user,
         )
+
+    def create_center_grid_area(self):
+        bounds = calculate_bounds_from_center(
+            center_lat=35.695,
+            center_lng=139.795,
+            grid_size_meters=500,
+            rows=6,
+            cols=8,
+        )
+        area = MapArea.objects.create(
+            name="Center Grid Area",
+            north=bounds["north"],
+            south=bounds["south"],
+            east=bounds["east"],
+            west=bounds["west"],
+            grid_size_meters=500,
+            created_by=self.user,
+        )
+
+        return area, bounds
 
     def test_map_area_generates_grid_cells(self):
         grid_cells = generate_grid_cells_for_area(self.area)
@@ -396,6 +667,76 @@ class GenerateGridCellsForAreaTests(TestCase):
             self.assertEqual(grid_cell.rating_count, 0)
             self.assertEqual(grid_cell.calculated_score, 0)
             self.assertIsNone(grid_cell.score_updated_at)
+
+    def test_explicit_rows_and_cols_generate_exact_grid_count(self):
+        area, bounds = self.create_center_grid_area()
+
+        grid_cells = generate_grid_cells_for_area(
+            area,
+            rows=bounds["rows"],
+            cols=bounds["cols"],
+            lat_step=bounds["lat_step"],
+            lng_step=bounds["lng_step"],
+        )
+
+        self.assertEqual(len(grid_cells), 48)
+        self.assertEqual(GridCell.objects.filter(area=area).count(), 48)
+
+    def test_explicit_rows_and_cols_generate_expected_indexes(self):
+        area, bounds = self.create_center_grid_area()
+
+        generate_grid_cells_for_area(
+            area,
+            rows=bounds["rows"],
+            cols=bounds["cols"],
+            lat_step=bounds["lat_step"],
+            lng_step=bounds["lng_step"],
+        )
+        row_indexes = set(
+            GridCell.objects.filter(area=area).values_list("row_index", flat=True)
+        )
+        col_indexes = set(
+            GridCell.objects.filter(area=area).values_list("col_index", flat=True)
+        )
+
+        self.assertEqual(row_indexes, set(range(6)))
+        self.assertEqual(col_indexes, set(range(8)))
+
+    def test_explicit_grid_cells_align_to_area_bounds(self):
+        area, bounds = self.create_center_grid_area()
+
+        generate_grid_cells_for_area(
+            area,
+            rows=bounds["rows"],
+            cols=bounds["cols"],
+            lat_step=bounds["lat_step"],
+            lng_step=bounds["lng_step"],
+        )
+        first_grid = GridCell.objects.get(area=area, row_index=0, col_index=0)
+        last_row_grid = GridCell.objects.get(area=area, row_index=5, col_index=0)
+        last_col_grid = GridCell.objects.get(area=area, row_index=0, col_index=7)
+
+        self.assertAlmostEqual(first_grid.north, area.north)
+        self.assertAlmostEqual(first_grid.west, area.west)
+        self.assertAlmostEqual(last_row_grid.south, area.south)
+        self.assertAlmostEqual(last_col_grid.east, area.east)
+
+    def test_explicit_steps_are_reflected_in_grid_bounds(self):
+        area, bounds = self.create_center_grid_area()
+
+        generate_grid_cells_for_area(
+            area,
+            rows=bounds["rows"],
+            cols=bounds["cols"],
+            lat_step=bounds["lat_step"],
+            lng_step=bounds["lng_step"],
+        )
+        grid = GridCell.objects.get(area=area, row_index=1, col_index=1)
+
+        self.assertAlmostEqual(grid.north, area.north - bounds["lat_step"])
+        self.assertAlmostEqual(grid.south, grid.north - bounds["lat_step"])
+        self.assertAlmostEqual(grid.west, area.west + bounds["lng_step"])
+        self.assertAlmostEqual(grid.east, grid.west + bounds["lng_step"])
 
     def test_edge_grid_cells_do_not_exceed_map_area_bounds(self):
         generate_grid_cells_for_area(self.area)
@@ -426,6 +767,88 @@ class GenerateGridCellsForAreaTests(TestCase):
             generate_grid_cells_for_area(self.area)
 
         self.assertEqual(GridCell.objects.filter(area=self.area).count(), 1)
+
+    def test_partial_explicit_grid_args_raise_value_error(self):
+        with self.assertRaises(ValueError):
+            generate_grid_cells_for_area(self.area, rows=6)
+
+        with self.assertRaises(ValueError):
+            generate_grid_cells_for_area(self.area, rows=6, cols=8)
+
+        with self.assertRaises(ValueError):
+            generate_grid_cells_for_area(
+                self.area,
+                rows=6,
+                cols=8,
+                lat_step=0.001,
+            )
+
+        with self.assertRaises(ValueError):
+            generate_grid_cells_for_area(
+                self.area,
+                lat_step=0.001,
+                lng_step=0.001,
+            )
+
+    def test_explicit_rows_less_than_or_equal_to_zero_raises_value_error(self):
+        with self.assertRaises(ValueError):
+            generate_grid_cells_for_area(
+                self.area,
+                rows=0,
+                cols=8,
+                lat_step=0.001,
+                lng_step=0.001,
+            )
+
+    def test_explicit_cols_less_than_or_equal_to_zero_raises_value_error(self):
+        with self.assertRaises(ValueError):
+            generate_grid_cells_for_area(
+                self.area,
+                rows=6,
+                cols=0,
+                lat_step=0.001,
+                lng_step=0.001,
+            )
+
+    def test_explicit_non_integer_rows_raises_value_error(self):
+        with self.assertRaises(ValueError):
+            generate_grid_cells_for_area(
+                self.area,
+                rows=6.5,
+                cols=8,
+                lat_step=0.001,
+                lng_step=0.001,
+            )
+
+    def test_explicit_non_integer_cols_raises_value_error(self):
+        with self.assertRaises(ValueError):
+            generate_grid_cells_for_area(
+                self.area,
+                rows=6,
+                cols=8.5,
+                lat_step=0.001,
+                lng_step=0.001,
+            )
+
+    def test_explicit_lat_step_less_than_or_equal_to_zero_raises_value_error(self):
+        with self.assertRaises(ValueError):
+            generate_grid_cells_for_area(
+                self.area,
+                rows=6,
+                cols=8,
+                lat_step=0,
+                lng_step=0.001,
+            )
+
+    def test_explicit_lng_step_less_than_or_equal_to_zero_raises_value_error(self):
+        with self.assertRaises(ValueError):
+            generate_grid_cells_for_area(
+                self.area,
+                rows=6,
+                cols=8,
+                lat_step=0.001,
+                lng_step=0,
+            )
 
     def test_grid_size_meters_less_than_or_equal_to_zero_raises_value_error(self):
         self.area.grid_size_meters = 0
@@ -461,6 +884,22 @@ class MapDemoViewTests(TestCase):
         self.assertContains(response, "メモグリッド作成")
         self.assertContains(response, "メモグリッド一覧を取得")
         self.assertContains(response, "メモグリッドを作成")
+        self.assertContains(response, "中心緯度")
+        self.assertContains(response, "中心経度")
+        self.assertContains(response, "縦方向のマス数")
+        self.assertContains(response, "横方向のマス数")
+        self.assertContains(response, "center_lat")
+        self.assertContains(response, "center_lng")
+        self.assertContains(response, "rows")
+        self.assertContains(response, "cols")
+        self.assertContains(response, "area-center-lat")
+        self.assertContains(response, "area-center-lng")
+        self.assertContains(response, "area-rows")
+        self.assertContains(response, "area-cols")
+        self.assertNotContains(response, "area-north")
+        self.assertNotContains(response, "area-south")
+        self.assertNotContains(response, "area-east")
+        self.assertNotContains(response, "area-west")
         self.assertNotContains(response, "GridCell を自動生成")
         self.assertContains(response, "GridCell を再取得")
         self.assertContains(response, "Score Map")
@@ -543,11 +982,11 @@ class TokenAuthenticationTests(TestCase):
         self.valid_payload = {
             "name": "Token Test Area",
             "description": "created with token",
-            "north": 35.7,
-            "south": 35.6,
-            "east": 139.8,
-            "west": 139.7,
+            "center_lat": 35.695,
+            "center_lng": 139.795,
             "grid_size_meters": 500,
+            "rows": 6,
+            "cols": 8,
             "source": "token-test",
         }
 
@@ -674,8 +1113,23 @@ class MapAreaCreateViewTests(TestCase):
         self.client = APIClient()
         self.url = reverse("map-area-list-create")
         self.valid_payload = {
-            "name": "Tokyo Station Area",
-            "description": "manual area",
+            "name": "Center API Area",
+            "description": "center based api",
+            "center_lat": 35.695,
+            "center_lng": 139.795,
+            "grid_size_meters": 500,
+            "rows": 6,
+            "cols": 8,
+            "source": "manual",
+        }
+
+    def center_payload(self):
+        return self.valid_payload.copy()
+
+    def legacy_payload(self):
+        return {
+            "name": "Legacy Area",
+            "description": "legacy area",
             "north": 35.7,
             "south": 35.6,
             "east": 139.8,
@@ -691,19 +1145,141 @@ class MapAreaCreateViewTests(TestCase):
         area = MapArea.objects.get(id=response.data["id"])
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
-        self.assertEqual(response.data["name"], "Tokyo Station Area")
-        self.assertEqual(response.data["description"], "manual area")
-        self.assertEqual(response.data["north"], 35.7)
-        self.assertEqual(response.data["south"], 35.6)
-        self.assertEqual(response.data["east"], 139.8)
-        self.assertEqual(response.data["west"], 139.7)
+        self.assertEqual(response.data["name"], "Center API Area")
+        self.assertEqual(response.data["description"], "center based api")
+        self.assertIn("north", response.data)
+        self.assertIn("south", response.data)
+        self.assertIn("east", response.data)
+        self.assertIn("west", response.data)
+        self.assertNotIn("center_lat", response.data)
+        self.assertNotIn("center_lng", response.data)
+        self.assertNotIn("rows", response.data)
+        self.assertNotIn("cols", response.data)
         self.assertEqual(response.data["grid_size_meters"], 500)
         self.assertEqual(response.data["source"], "manual")
         self.assertEqual(response.data["created_by"], self.user.id)
         self.assertIn("created_at", response.data)
         self.assertIn("updated_at", response.data)
         self.assertEqual(area.created_by, self.user)
-        self.assertGreater(GridCell.objects.filter(area=area).count(), 0)
+        self.assertEqual(GridCell.objects.filter(area=area).count(), 48)
+
+    def test_authenticated_user_can_create_center_based_map_area(self):
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.post(self.url, self.center_payload(), format="json")
+        area = MapArea.objects.get(id=response.data["id"])
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertIn("north", response.data)
+        self.assertIn("south", response.data)
+        self.assertIn("east", response.data)
+        self.assertIn("west", response.data)
+        self.assertNotIn("center_lat", response.data)
+        self.assertNotIn("center_lng", response.data)
+        self.assertNotIn("rows", response.data)
+        self.assertNotIn("cols", response.data)
+        self.assertEqual(area.created_by, self.user)
+
+    def test_center_based_map_area_generates_rows_times_cols_grid_cells(self):
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.post(self.url, self.center_payload(), format="json")
+        area = MapArea.objects.get(id=response.data["id"])
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(GridCell.objects.filter(area=area).count(), 48)
+
+    def test_center_based_grid_cells_align_to_area_bounds(self):
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.post(self.url, self.center_payload(), format="json")
+        area = MapArea.objects.get(id=response.data["id"])
+        last_row_grid = GridCell.objects.get(area=area, row_index=5, col_index=0)
+        last_col_grid = GridCell.objects.get(area=area, row_index=0, col_index=7)
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertAlmostEqual(last_row_grid.south, area.south)
+        self.assertAlmostEqual(last_col_grid.east, area.east)
+
+    def test_center_based_created_map_area_grid_cells_can_be_listed_immediately(self):
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.post(self.url, self.center_payload(), format="json")
+        area = MapArea.objects.get(id=response.data["id"])
+        grid_list_url = reverse("grid-cell-list", kwargs={"area_id": area.id})
+        grid_response = self.client.get(grid_list_url)
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(grid_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(grid_response.data["grids"]), 48)
+
+    def test_general_user_cannot_create_center_based_area_over_cell_count_limit(self):
+        self.client.force_authenticate(user=self.user)
+        payload = {**self.center_payload(), "rows": 20, "cols": 26}
+
+        response = self.client.post(self.url, payload, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(
+            response.data["detail"],
+            "一般ユーザーは rows * cols が 500 を超える MapArea を作成できません。",
+        )
+        self.assertEqual(MapArea.objects.count(), 0)
+        self.assertEqual(GridCell.objects.count(), 0)
+
+    def test_general_user_cannot_create_center_based_area_over_height_limit(self):
+        self.client.force_authenticate(user=self.user)
+        payload = {
+            **self.center_payload(),
+            "grid_size_meters": 1000,
+            "rows": 31,
+            "cols": 10,
+        }
+
+        response = self.client.post(self.url, payload, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(
+            response.data["detail"],
+            "一般ユーザーは南北方向が 30000m を超える MapArea を作成できません。",
+        )
+        self.assertEqual(MapArea.objects.count(), 0)
+        self.assertEqual(GridCell.objects.count(), 0)
+
+    def test_general_user_cannot_create_center_based_area_over_width_limit(self):
+        self.client.force_authenticate(user=self.user)
+        payload = {
+            **self.center_payload(),
+            "grid_size_meters": 1000,
+            "rows": 10,
+            "cols": 31,
+        }
+
+        response = self.client.post(self.url, payload, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(
+            response.data["detail"],
+            "一般ユーザーは東西方向が 30000m を超える MapArea を作成できません。",
+        )
+        self.assertEqual(MapArea.objects.count(), 0)
+        self.assertEqual(GridCell.objects.count(), 0)
+
+    def test_staff_user_can_create_center_based_area_over_general_limits(self):
+        self.client.force_authenticate(user=self.staff_user)
+        payload = {
+            **self.center_payload(),
+            "grid_size_meters": 1000,
+            "rows": 31,
+            "cols": 31,
+        }
+
+        response = self.client.post(self.url, payload, format="json")
+        area = MapArea.objects.get(id=response.data["id"])
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(area.created_by, self.staff_user)
+        self.assertEqual(GridCell.objects.filter(area=area).count(), 961)
 
     def test_authenticated_user_create_map_area_generates_grid_cells(self):
         self.client.force_authenticate(user=self.user)
@@ -714,105 +1290,66 @@ class MapAreaCreateViewTests(TestCase):
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertGreater(GridCell.objects.filter(area=area).count(), 0)
 
-    def test_general_user_can_create_map_area_with_latitude_diff_equal_to_20_minutes(
-        self,
-    ):
+    def test_legacy_bounds_input_returns_400(self):
         self.client.force_authenticate(user=self.user)
-        payload = {
-            **self.valid_payload,
-            "north": 35.33333333333333,
-            "south": 35.0,
-            "east": 139.1,
-            "west": 139.0,
-            "grid_size_meters": 50000,
-        }
-
-        response = self.client.post(self.url, payload, format="json")
-        area = MapArea.objects.get(id=response.data["id"])
-
-        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
-        self.assertEqual(area.created_by, self.user)
-        self.assertGreater(GridCell.objects.filter(area=area).count(), 0)
-
-    def test_general_user_can_create_map_area_with_longitude_diff_equal_to_20_minutes(
-        self,
-    ):
-        self.client.force_authenticate(user=self.user)
-        payload = {
-            **self.valid_payload,
-            "north": 35.1,
-            "south": 35.0,
-            "east": 139.33333333333333,
-            "west": 139.0,
-            "grid_size_meters": 50000,
-        }
-
-        response = self.client.post(self.url, payload, format="json")
-        area = MapArea.objects.get(id=response.data["id"])
-
-        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
-        self.assertEqual(area.created_by, self.user)
-        self.assertGreater(GridCell.objects.filter(area=area).count(), 0)
-
-    def test_general_user_cannot_create_map_area_over_20_minutes_latitude(self):
-        self.client.force_authenticate(user=self.user)
-        payload = {
-            **self.valid_payload,
-            "north": 35.34,
-            "south": 35.0,
-            "east": 139.1,
-            "west": 139.0,
-            "grid_size_meters": 50000,
-        }
+        payload = self.legacy_payload()
 
         response = self.client.post(self.url, payload, format="json")
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertEqual(
-            response.data["detail"],
-            "一般ユーザーは緯度差・経度差が20分を超えるMapAreaを作成できません。",
-        )
+        self.assertIn("center_lat/center_lng/grid_size_meters/rows/cols", str(response.data))
         self.assertEqual(MapArea.objects.count(), 0)
         self.assertEqual(GridCell.objects.count(), 0)
 
-    def test_general_user_cannot_create_map_area_over_20_minutes_longitude(self):
+    def test_missing_center_lat_returns_400(
+        self,
+    ):
         self.client.force_authenticate(user=self.user)
-        payload = {
-            **self.valid_payload,
-            "north": 35.1,
-            "south": 35.0,
-            "east": 139.34,
-            "west": 139.0,
-            "grid_size_meters": 50000,
-        }
+        payload = self.valid_payload.copy()
+        payload.pop("center_lat")
 
         response = self.client.post(self.url, payload, format="json")
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertEqual(
-            response.data["detail"],
-            "一般ユーザーは緯度差・経度差が20分を超えるMapAreaを作成できません。",
-        )
+        self.assertIn("center_lat/center_lng/grid_size_meters/rows/cols", str(response.data))
         self.assertEqual(MapArea.objects.count(), 0)
         self.assertEqual(GridCell.objects.count(), 0)
 
-    def test_staff_user_can_create_map_area_over_20_minutes(self):
-        self.client.force_authenticate(user=self.staff_user)
-        payload = {
-            **self.valid_payload,
-            "north": 35.6,
-            "south": 35.0,
-            "east": 139.6,
-            "west": 139.0,
-            "grid_size_meters": 50000,
-        }
+    def test_missing_center_lng_returns_400(self):
+        self.client.force_authenticate(user=self.user)
+        payload = self.valid_payload.copy()
+        payload.pop("center_lng")
 
         response = self.client.post(self.url, payload, format="json")
-        area = MapArea.objects.get(id=response.data["id"])
 
-        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
-        self.assertEqual(area.created_by, self.staff_user)
-        self.assertGreater(GridCell.objects.filter(area=area).count(), 0)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("center_lat/center_lng/grid_size_meters/rows/cols", str(response.data))
+        self.assertEqual(MapArea.objects.count(), 0)
+        self.assertEqual(GridCell.objects.count(), 0)
+
+    def test_missing_rows_returns_400(self):
+        self.client.force_authenticate(user=self.user)
+        payload = self.valid_payload.copy()
+        payload.pop("rows")
+
+        response = self.client.post(self.url, payload, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("center_lat/center_lng/grid_size_meters/rows/cols", str(response.data))
+        self.assertEqual(MapArea.objects.count(), 0)
+        self.assertEqual(GridCell.objects.count(), 0)
+
+    def test_missing_cols_returns_400(self):
+        self.client.force_authenticate(user=self.user)
+        payload = self.valid_payload.copy()
+        payload.pop("cols")
+
+        response = self.client.post(self.url, payload, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("center_lat/center_lng/grid_size_meters/rows/cols", str(response.data))
+        self.assertEqual(MapArea.objects.count(), 0)
+        self.assertEqual(GridCell.objects.count(), 0)
 
     def test_generated_grid_cells_are_linked_to_created_map_area(self):
         self.client.force_authenticate(user=self.user)
@@ -892,28 +1429,6 @@ class MapAreaCreateViewTests(TestCase):
         self.assertEqual(MapArea.objects.count(), 0)
         self.assertEqual(GridCell.objects.count(), 0)
 
-    def test_north_less_than_or_equal_to_south_returns_400(self):
-        self.client.force_authenticate(user=self.user)
-        payload = {**self.valid_payload, "north": 35.6}
-
-        response = self.client.post(self.url, payload, format="json")
-
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn("north", response.data)
-        self.assertEqual(MapArea.objects.count(), 0)
-        self.assertEqual(GridCell.objects.count(), 0)
-
-    def test_east_less_than_or_equal_to_west_returns_400(self):
-        self.client.force_authenticate(user=self.user)
-        payload = {**self.valid_payload, "east": 139.7}
-
-        response = self.client.post(self.url, payload, format="json")
-
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn("east", response.data)
-        self.assertEqual(MapArea.objects.count(), 0)
-        self.assertEqual(GridCell.objects.count(), 0)
-
     def test_grid_size_meters_less_than_or_equal_to_zero_returns_400(self):
         self.client.force_authenticate(user=self.user)
         payload = {**self.valid_payload, "grid_size_meters": 0}
@@ -928,12 +1443,12 @@ class MapAreaCreateViewTests(TestCase):
     def test_missing_required_field_returns_400(self):
         self.client.force_authenticate(user=self.user)
         payload = self.valid_payload.copy()
-        payload.pop("north")
+        payload.pop("center_lat")
 
         response = self.client.post(self.url, payload, format="json")
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn("north", response.data)
+        self.assertIn("non_field_errors", response.data)
         self.assertEqual(MapArea.objects.count(), 0)
         self.assertEqual(GridCell.objects.count(), 0)
 

@@ -2,9 +2,19 @@ from django.contrib.auth import get_user_model
 from rest_framework import serializers
 
 from .models import GridCell, GridRating, MapArea, MapAreaShare
+from .services import calculate_bounds_from_center
 
 
 class MapAreaSerializer(serializers.ModelSerializer):
+    north = serializers.FloatField(read_only=True)
+    south = serializers.FloatField(read_only=True)
+    east = serializers.FloatField(read_only=True)
+    west = serializers.FloatField(read_only=True)
+    center_lat = serializers.FloatField(write_only=True, required=False)
+    center_lng = serializers.FloatField(write_only=True, required=False)
+    rows = serializers.IntegerField(write_only=True, required=False)
+    cols = serializers.IntegerField(write_only=True, required=False)
+
     class Meta:
         model = MapArea
         fields = [
@@ -15,7 +25,11 @@ class MapAreaSerializer(serializers.ModelSerializer):
             "south",
             "east",
             "west",
+            "center_lat",
+            "center_lng",
             "grid_size_meters",
+            "rows",
+            "cols",
             "source",
             "created_by",
             "created_at",
@@ -28,7 +42,56 @@ class MapAreaSerializer(serializers.ModelSerializer):
             "updated_at",
         ]
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.center_grid_options = None
+
     def validate(self, attrs):
+        self.center_grid_options = None
+        legacy_fields = ("north", "south", "east", "west")
+        center_fields = ("center_lat", "center_lng", "rows", "cols")
+        legacy_field_count = sum(field in self.initial_data for field in legacy_fields)
+        center_field_count = sum(field in attrs for field in center_fields)
+        uses_center_input = center_field_count == len(center_fields)
+
+        if legacy_field_count:
+            raise serializers.ValidationError(
+                "north/south/east/west は作成入力では指定できません。"
+                "center_lat/center_lng/grid_size_meters/rows/cols を指定してください。"
+            )
+        if not uses_center_input:
+            raise serializers.ValidationError(
+                "MapArea 作成には center_lat/center_lng/grid_size_meters/rows/cols "
+                "をすべて指定してください。"
+            )
+
+        if attrs["grid_size_meters"] <= 0:
+            raise serializers.ValidationError(
+                {"grid_size_meters": "grid_size_meters は 0 より大きい値にしてください。"}
+            )
+
+        try:
+            bounds = calculate_bounds_from_center(
+                center_lat=attrs.pop("center_lat"),
+                center_lng=attrs.pop("center_lng"),
+                grid_size_meters=attrs["grid_size_meters"],
+                rows=attrs.pop("rows"),
+                cols=attrs.pop("cols"),
+            )
+        except ValueError as exc:
+            raise serializers.ValidationError({"non_field_errors": str(exc)})
+
+        attrs["north"] = bounds["north"]
+        attrs["south"] = bounds["south"]
+        attrs["east"] = bounds["east"]
+        attrs["west"] = bounds["west"]
+        self.center_grid_options = {
+            "rows": bounds["rows"],
+            "cols": bounds["cols"],
+            "lat_step": bounds["lat_step"],
+            "lng_step": bounds["lng_step"],
+        }
+
         if attrs["north"] <= attrs["south"]:
             raise serializers.ValidationError(
                 {"north": "north は south より大きい値にしてください。"}
@@ -36,10 +99,6 @@ class MapAreaSerializer(serializers.ModelSerializer):
         if attrs["east"] <= attrs["west"]:
             raise serializers.ValidationError(
                 {"east": "east は west より大きい値にしてください。"}
-            )
-        if attrs["grid_size_meters"] <= 0:
-            raise serializers.ValidationError(
-                {"grid_size_meters": "grid_size_meters は 0 より大きい値にしてください。"}
             )
 
         return attrs

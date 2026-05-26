@@ -43,6 +43,13 @@
 
           <section class="panel" aria-labelledby="create-area-heading">
             <h2 id="create-area-heading">メモグリッド作成</h2>
+            <p class="form-note">
+              MapArea の範囲は、中心座標・1マスの大きさ・縦横のマス数から自動計算されます。
+              north / south / east / west は作成後にサーバー側で計算されます。
+            </p>
+            <p class="form-note">
+              一般ユーザーは最大500マス、南北30,000m、東西30,000mまで作成できます。
+            </p>
             <form id="create-area-form" class="area-form">
               <label>
                 Name
@@ -54,25 +61,25 @@
               </label>
               <div class="field-grid">
                 <label>
-                  North
-                  <input id="area-north" type="number" step="0.000001" value="35.7">
+                  中心緯度 center_lat
+                  <input id="area-center-lat" type="number" step="any" value="35.695">
                 </label>
                 <label>
-                  South
-                  <input id="area-south" type="number" step="0.000001" value="35.69">
+                  中心経度 center_lng
+                  <input id="area-center-lng" type="number" step="any" value="139.795">
                 </label>
                 <label>
-                  East
-                  <input id="area-east" type="number" step="0.000001" value="139.8">
+                  縦方向のマス数 rows
+                  <input id="area-rows" type="number" min="1" step="1" value="6">
                 </label>
                 <label>
-                  West
-                  <input id="area-west" type="number" step="0.000001" value="139.79">
+                  横方向のマス数 cols
+                  <input id="area-cols" type="number" min="1" step="1" value="8">
                 </label>
               </div>
               <label>
                 Grid size meters
-                <input id="area-grid-size" type="number" min="1" value="500">
+                <input id="area-grid-size" type="number" min="1" step="1" value="500">
               </label>
               <label>
                 Source

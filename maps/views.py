@@ -21,7 +21,11 @@ from .serializers import (
     GridRatingCreateSerializer,
     GridRatingResponseSerializer,
 )
-from .services import generate_grid_cells_for_area, update_grid_cell_score
+from .services import (
+    generate_grid_cells_for_area,
+    update_grid_cell_score,
+    validate_center_grid_limits,
+)
 
 
 API_AUTHENTICATION_CLASSES = [
@@ -29,19 +33,6 @@ API_AUTHENTICATION_CLASSES = [
     BasicAuthentication,
     SessionAuthentication,
 ]
-MAX_GENERAL_USER_AREA_DEGREES = 20 / 60
-AREA_SIZE_COMPARISON_EPSILON = 1e-12
-AREA_SIZE_LIMIT_ERROR_MESSAGE = (
-    "一般ユーザーは緯度差・経度差が20分を超えるMapAreaを作成できません。"
-)
-
-
-def is_area_too_large_for_general_user(validated_data):
-    latitude_diff = validated_data["north"] - validated_data["south"]
-    longitude_diff = validated_data["east"] - validated_data["west"]
-    limit = MAX_GENERAL_USER_AREA_DEGREES + AREA_SIZE_COMPARISON_EPSILON
-
-    return latitude_diff > limit or longitude_diff > limit
 
 
 def get_viewable_map_area_or_404(user, area_id):
@@ -105,19 +96,41 @@ class MapAreaListCreateView(APIView):
     def post(self, request):
         serializer = MapAreaSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        center_grid_options = serializer.center_grid_options
 
-        if not request.user.is_staff and is_area_too_large_for_general_user(
-            serializer.validated_data
-        ):
+        if center_grid_options is None:
             return Response(
-                {"detail": AREA_SIZE_LIMIT_ERROR_MESSAGE},
+                {
+                    "detail": (
+                        "MapArea 作成には center_lat/center_lng/"
+                        "grid_size_meters/rows/cols が必要です。"
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            validate_center_grid_limits(
+                grid_size_meters=serializer.validated_data["grid_size_meters"],
+                rows=center_grid_options["rows"],
+                cols=center_grid_options["cols"],
+                is_staff=request.user.is_staff,
+            )
+        except ValueError as error:
+            return Response(
+                {"detail": str(error)},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
         try:
             with transaction.atomic():
                 area = serializer.save(created_by=request.user)
-                generate_grid_cells_for_area(area)
+                generate_grid_cells_for_area(
+                    area,
+                    rows=center_grid_options["rows"],
+                    cols=center_grid_options["cols"],
+                    lat_step=center_grid_options["lat_step"],
+                    lng_step=center_grid_options["lng_step"],
+                )
         except ValueError as error:
             return Response(
                 {"detail": str(error)},

@@ -1,15 +1,13 @@
-# Codex タスク: MapArea 作成方式を中心座標 + グリッドサイズ + 行列数に変更するための設計を整理する
+# Codex タスク: demoページのMapArea作成フォームを中心座標方式に変更する
 
 ## 担当ロール
 
-今回は **Architect** として作業してください。
+今回は **Frontend Developer** と **Tester** として作業してください。
 
-このタスクでは、実装は行わず、設計整理だけを行ってください。
+demoページの MapArea 作成フォームを、従来の `north / south / east / west` 入力方式から、中心座標方式に変更してください。
 
-現在の MapArea 作成方式は、`north / south / east / west` の端の緯度経度を直接入力する方式です。  
-しかし、ユーザー向けには分かりにくく、MapArea の範囲が `grid_size_meters` で割り切れない場合に、端の GridCell が半端なサイズになる問題があります。
-
-そこで、今後は次のような作成方式に変更したいです。
+現在、MapArea 作成 API は中心座標方式に一本化されています。  
+作成リクエストでは、以下を送る必要があります。
 
 ```text
 center_lat
@@ -19,119 +17,280 @@ rows
 cols
 ```
 
-このタスクでは、その変更に向けて、影響範囲・設計方針・実装手順・テスト方針を整理してください。
+`north / south / east / west` は、作成後にサーバー側で計算される保存値・レスポンス値です。  
+demoページの作成フォームでは、今後 `north / south / east / west` を直接入力させないでください。
 
 ## レート制限節約の方針
 
 今回はレート制限節約を優先してください。
 
-- いきなり実装しないでください。
-- リポジトリ全体を広く読みすぎないでください。
-- まず指定ファイルだけを確認してください。
-- 必要以上に大きな差分を作らないでください。
-- 不明点があっても、推測で実装に進まず、設計メモとして整理してください。
-- 出力は長すぎないようにしてください。
-- 次回実装タスクに使える形で、要点を整理してください。
+- 変更範囲を必要最小限にしてください。
+- バックエンド API は変更しないでください。
+- model / serializer / view / service は原則変更しないでください。
+- README.md / API_SPEC.md / memo.md は変更しないでください。
+- 必要なファイルだけ読んでください。
+- 大きな設計変更はしないでください。
+- 実装後の報告は短くしてください。
 
 ## 作業前に読むファイル
 
-まず、次のファイルだけを確認してください。
+まず、次のファイルを確認してください。
 
 - `AGENTS.md`
 - `RULES.md`
-- `API_SPEC.md`
-- `README.md`
-- `TASK.md`
-- `memo.md`
-- `maps/models.py`
-- `maps/serializers.py`
-- `maps/services.py`
-- `maps/views.py`
-- `maps/tests.py`
-
-必要がある場合のみ、次を追加で確認してください。
-
 - `maps/static/maps/demo.html`
 - `maps/static/maps/demo.js`
 - `maps/static/maps/demo.css`
+- `maps/tests.py`
 
-demo ページの詳細実装は、今回は深追いしないでください。
+必要がある場合のみ、次を確認してください。
+
+- `maps/serializers.py`
+- `maps/views.py`
+- `API_SPEC.md`
+
+今回は、以下のファイルは原則として読まなくてよいです。
+
+- `maps/models.py`
+- `maps/services.py`
+- `README.md`
+- `memo.md`
 
 ## 今回の目的
 
-MapArea 作成方式を、現在の端座標指定から、中心座標指定へ移行するための設計を整理します。
+demoページの MapArea 作成フォームを、現在のAPI仕様に合わせます。
 
-現在の方式:
-
-```json
-{
-  "name": "Demo Area",
-  "north": 35.7,
-  "south": 35.69,
-  "east": 139.8,
-  "west": 139.79,
-  "grid_size_meters": 500
-}
-```
-
-検討したい方式:
+現在のAPIでは、MapArea作成時に次のようなリクエストを送ります。
 
 ```json
 {
-  "name": "Demo Area",
+  "name": "Center API Area",
+  "description": "center based api",
   "center_lat": 35.695,
   "center_lng": 139.795,
   "grid_size_meters": 500,
   "rows": 6,
-  "cols": 8
+  "cols": 8,
+  "source": "manual"
 }
 ```
 
-この方式では、サーバー側で `north / south / east / west` を計算し、MapArea と GridCell を生成します。
+従来のように、次を直接送ってはいけません。
+
+```json
+{
+  "north": 35.7,
+  "south": 35.6,
+  "east": 139.8,
+  "west": 139.7
+}
+```
+
+demoページでも、この仕様に合わせてフォームと送信payloadを変更してください。
 
 ## 今回やること
 
-次の内容を設計メモとして整理してください。
-
-1. 現在の MapArea 作成処理の流れ
-2. 現在の GridCell 生成処理の流れ
-3. 中心座標方式に変更した場合の入力項目
-4. 保存する model 項目を変更する必要があるか
-5. 既存の `north / south / east / west` 方式を残すべきか
-6. `center_lat / center_lng / rows / cols` を serializer でどう扱うか
-7. `north / south / east / west` の計算方法
-8. `rows / cols` を使って GridCell を生成する方法
-9. 端の GridCell が半端にならないようにする方針
-10. 既存 API との互換性
-11. demo ページのフォーム変更方針
-12. README / API_SPEC.md の更新方針
-13. テスト追加・修正方針
-14. 実装を小さく分ける場合のタスク分割案
+- demoページの MapArea 作成フォームから `north / south / east / west` 入力欄を削除または非表示にする
+- demoページの MapArea 作成フォームに `center_lat / center_lng / rows / cols` 入力欄を追加する
+- `grid_size_meters` 入力欄は維持する
+- `name / description / source` 入力欄は維持する
+- MapArea 作成時の JavaScript payload を中心座標方式に変更する
+- 作成後の MapArea 表示・Map Preview・Score Map は、APIレスポンスの `north / south / east / west` を引き続き使う
+- demoページ内の説明文を中心座標方式に合わせる
+- `MapDemoViewTests` を更新する
+- 既存の Score Map、Leaflet Map Preview、GridCell選択、複数採点、共有相手管理を壊さない
 
 ## 今回やらないこと
 
-- 実装
+- バックエンド API の変更
+- `MapAreaSerializer` の変更
+- `MapAreaListCreateView` の変更
+- `generate_grid_cells_for_area()` の変更
 - model の変更
-- serializer の変更
-- service の変更
-- view の変更
 - migration の作成
-- demo ページの変更
-- README の大幅更新
-- API_SPEC.md の大幅更新
-- テストコードの変更
-- Leaflet 表示の変更
-- Score Map の変更
+- README.md の更新
+- API_SPEC.md の更新
+- memo.md の更新
+- Leaflet 上でのGridCellクリック選択
+- Leaflet 上でのGridCellドラッグ選択
+- Score Map の描画方式変更
+- MapArea 作成後レスポンス形式の変更
 
-今回は、あくまで設計整理のみです。
+## 変更してよいファイル
 
-## 設計時の前提
+- `maps/static/maps/demo.html`
+- `maps/static/maps/demo.js`
+- `maps/static/maps/demo.css`
+- `maps/tests.py`
 
-できれば、次の方針を優先してください。
+## 変更しないファイル
 
-### 1. MapArea model は当面そのまま維持する
+- `maps/models.py`
+- `maps/serializers.py`
+- `maps/views.py`
+- `maps/services.py`
+- `maps/urls.py`
+- `README.md`
+- `API_SPEC.md`
+- `memo.md`
+- `requirements.txt`
+- `config/settings.py`
+- `config/urls.py`
 
-既存の `MapArea` model には、現在どおり次を保存します。
+## フォーム変更方針
+
+### 残す入力欄
+
+既存のMapArea作成フォームから、次の入力欄は維持してください。
+
+```text
+name
+description
+grid_size_meters
+source
+```
+
+ラベルは既存の雰囲気に合わせて構いません。
+
+例:
+
+```text
+名前
+説明
+1マスの大きさ（m）
+source
+```
+
+### 削除または非表示にする入力欄
+
+次の入力欄は、作成フォームから削除または非表示にしてください。
+
+```text
+north
+south
+east
+west
+```
+
+可能であれば、単に非表示にするのではなく、フォーム入力欄としては削除してください。
+
+ただし、作成後の表示やMap Preview用の説明で `north / south / east / west` が出ることは問題ありません。  
+削除したいのは、ユーザーが作成時に直接入力する欄です。
+
+### 追加する入力欄
+
+次の入力欄を追加してください。
+
+```text
+center_lat
+center_lng
+rows
+cols
+```
+
+ユーザー向けラベル例:
+
+```text
+中心緯度
+中心経度
+縦方向のマス数
+横方向のマス数
+```
+
+input の id / name は、既存命名に合わせてください。  
+迷う場合は、次の id を使ってください。
+
+```text
+area-center-lat
+area-center-lng
+area-rows
+area-cols
+```
+
+### 入力例
+
+初期値や placeholder を入れる場合は、次のような値を使ってください。
+
+```text
+center_lat: 35.695
+center_lng: 139.795
+grid_size_meters: 500
+rows: 6
+cols: 8
+```
+
+この組み合わせでは、GridCell が `6 * 8 = 48` 個生成される想定です。
+
+## 説明文の追加・修正
+
+MapArea 作成フォーム付近に、中心座標方式の説明を短く入れてください。
+
+例:
+
+```text
+MapArea の範囲は、中心座標・1マスの大きさ・縦横のマス数から自動計算されます。
+north / south / east / west は作成後にサーバー側で計算されます。
+```
+
+一般ユーザー制限も、短く表示してください。
+
+例:
+
+```text
+一般ユーザーは最大500マス、南北30,000m、東西30,000mまで作成できます。
+```
+
+長くなりすぎる場合は、補足文として小さめに表示してください。
+
+## demo.js の変更方針
+
+### 1. MapArea 作成payloadを中心座標方式に変更する
+
+現在、MapArea作成時に `north / south / east / west` をpayloadに含めている場合は、それを削除してください。
+
+変更後のpayload例:
+
+```javascript
+const payload = {
+  name: ...,
+  description: ...,
+  center_lat: Number(...),
+  center_lng: Number(...),
+  grid_size_meters: Number(...),
+  rows: Number(...),
+  cols: Number(...),
+  source: ...,
+};
+```
+
+`rows / cols` は整数として扱ってください。
+
+例:
+
+```javascript
+rows: parseInt(..., 10),
+cols: parseInt(..., 10),
+```
+
+既存の実装スタイルに合わせて、`Number()` でも問題ありません。  
+ただし、小数の `rows / cols` を送らないようにしてください。
+
+### 2. north/south/east/west を送らない
+
+作成リクエストのpayloadに、以下を含めないでください。
+
+```text
+north
+south
+east
+west
+```
+
+API側では、これらを作成入力に含めると400になります。
+
+### 3. 作成後の表示処理は維持する
+
+作成成功後のAPIレスポンスには、引き続き以下が含まれます。
 
 ```text
 north
@@ -141,195 +300,221 @@ west
 grid_size_meters
 ```
 
-`center_lat / center_lng / rows / cols` は、まずは作成リクエスト用の入力値として扱い、保存項目として追加するかどうかは検討してください。
+そのため、以下の処理は基本的に維持してください。
 
-保存が必要な理由が弱い場合は、model 変更を避ける方針を優先してください。
+- MapArea一覧表示
+- MapArea詳細表示
+- Leaflet Map Preview の MapArea rectangle 表示
+- GridCell境界表示
+- Score Map 表示
+- Score Map の縦横比計算
 
-### 2. 既存の north/south/east/west 方式は互換用に残す
+作成後に `north / south / east / west` を表示・利用することは問題ありません。
 
-既存の API やテストを壊しにくくするため、すぐに削除せず、当面は互換用として残す方針を検討してください。
+### 4. 入力値の基本チェック
 
-理想は、作成 API が次の2方式を受け付ける形です。
+demo側では、最低限ブラウザのinput属性で補助してください。
 
-```text
-A. 従来方式: north / south / east / west / grid_size_meters
-B. 新方式: center_lat / center_lng / grid_size_meters / rows / cols
+推奨:
+
+```html
+<input type="number" step="any" id="area-center-lat">
+<input type="number" step="any" id="area-center-lng">
+<input type="number" min="1" step="1" id="area-rows">
+<input type="number" min="1" step="1" id="area-cols">
+<input type="number" min="1" step="1" id="area-grid-size-meters">
 ```
 
-ただし、両方が同時に指定された場合の扱いも設計してください。
+厳密なバリデーションはAPI側で行うため、demo.js内で過剰に複雑な検証はしなくて構いません。
+
+## UI上の注意
+
+中心座標方式は、ユーザーにとって意味が分かりやすいようにしてください。
+
+特に、`rows` と `cols` が何を意味するか分かるようにします。
 
 例:
 
 ```text
-両方指定された場合は 400 Bad Request にする
+縦方向のマス数 rows
+横方向のマス数 cols
 ```
 
-### 3. 中心座標方式では、MapArea の範囲を grid_size_meters の倍数にする
-
-新方式では、MapArea の実サイズを次のように考えます。
+または、
 
 ```text
-南北方向の長さ = grid_size_meters * rows
-東西方向の長さ = grid_size_meters * cols
+rows: 南北方向に並べるマス数
+cols: 東西方向に並べるマス数
 ```
 
-これにより、端の GridCell が半端なサイズにならないようにします。
+フォームが狭くなる場合は、説明を短くしてください。
 
-### 4. 経度方向の距離補正を検討する
+## 既存機能との関係
 
-緯度方向は、おおまかに次の換算でよいです。
+今回の変更後も、次の機能は壊さないでください。
 
-```text
-1度 ≒ 111000m
-```
-
-経度方向は、緯度によって距離が変わるため、中心緯度を使って次の補正を検討してください。
-
-```text
-1度 ≒ 111000m * cos(center_lat)
-```
-
-ただし、現在の既存実装との整合性や、実装コストも考慮してください。
-
-### 5. rows / cols のバリデーションを設計する
-
-`rows` と `cols` は、正の整数にしてください。
-
-検討する制限例:
-
-```text
-rows >= 1
-cols >= 1
-rows * cols が大きすぎる場合は 400 Bad Request
-一般ユーザーは既存の 20分制限、または新しいセル数制限の対象
-管理者は一部制限を緩和
-```
-
-既存の 20分制限と、新方式でのサイズ制限をどう整理するか検討してください。
-
-## 出力してほしい内容
-
-作業後、次の形式で設計メモを出力してください。
-
-```markdown
-# MapArea 作成方式変更 設計メモ
-
-## 現状
-
-- ...
-
-## 課題
-
-- ...
-
-## 推奨方針
-
-- ...
-
-## 入力仕様案
-
-### 従来方式
-
-```json
-{
-  "north": 35.7,
-  "south": 35.69,
-  "east": 139.8,
-  "west": 139.79,
-  "grid_size_meters": 500
-}
-```
-
-### 新方式
-
-```json
-{
-  "center_lat": 35.695,
-  "center_lng": 139.795,
-  "grid_size_meters": 500,
-  "rows": 6,
-  "cols": 8
-}
-```
-
-## north/south/east/west 計算方針
-
-- ...
-
-## GridCell 生成方針
-
-- ...
-
-## serializer 方針
-
-- ...
-
-## service 方針
-
-- ...
-
-## view 方針
-
-- ...
-
-## 既存 API 互換性
-
-- ...
-
-## demo ページ変更方針
-
-- ...
-
-## README / API_SPEC.md 更新方針
-
-- ...
+- メモグリッド作成
+- メモグリッド一覧取得
+- メモグリッド選択
+- GridCell一覧取得
+- Score Map表示
+- 全体表示 / 詳細表示切り替え
+- Score Mapのクリック選択
+- Score Mapのドラッグ範囲選択
+- 選択済みマスのクリック解除
+- 選択中GridCell一覧表示
+- 選択をすべて解除
+- 個別に入力し、まとめて採点
+- 選択グリッドを全て同じ値で採点
+- Leaflet Map Preview の MapArea rectangle 表示
+- Leaflet Map Preview の GridCell 境界表示
+- Leaflet Map Preview の GridCell スコア色分け
+- 共有相手一覧取得
+- 共有相手追加
+- 共有解除
 
 ## テスト方針
 
-- ...
+`maps/tests.py` の `MapDemoViewTests` を更新してください。
 
-## 実装タスク分割案
+### 追加または確認する文言・id
 
-1. ...
-2. ...
-3. ...
-
-## 注意点
-
-- ...
-```
-
-## 実装タスク分割案に含めてほしい候補
-
-最後に、次回以降の実装タスクとして、少なくとも次のように分割してください。
+最低限、demoページに以下が含まれることを確認してください。
 
 ```text
-1. center_lat / center_lng / rows / cols から MapArea 範囲を計算する helper を追加する
-2. MapArea 作成 serializer で中心座標方式を受け付ける
-3. GridCell 生成処理を rows / cols 方式に対応させる
-4. API_SPEC.md と README を更新する
-5. demo ページの MapArea 作成フォームを中心座標方式に変更する
-6. 既存の north/south/east/west 方式を互換用として残すか、段階的に非推奨化する
+中心緯度
+中心経度
+縦方向のマス数
+横方向のマス数
+center_lat
+center_lng
+rows
+cols
 ```
 
-## 確認方法
+実装上のidに合わせて、以下のようなidも確認してください。
 
-今回は設計整理のみなので、原則としてテスト実行は不要です。
+```text
+area-center-lat
+area-center-lng
+area-rows
+area-cols
+```
 
-ただし、ファイルを変更した場合は次を実行してください。
+もしラベル表記を変えた場合は、実装に合わせてテストを調整してください。
+
+### 削除確認
+
+作成フォーム用の古い入力欄idが残っていないことを確認してください。
+
+例:
+
+```text
+area-north
+area-south
+area-east
+area-west
+```
+
+注意:
+
+ページ全体から `north` や `south` という文字列を完全に消すテストはしないでください。  
+作成後の表示や説明、Map Preview処理で `north / south / east / west` という文字列が残る可能性があるためです。
+
+確認するなら、古い入力欄idが残っていないことに絞ってください。
+
+### 維持するテスト
+
+既存のdemoページ確認項目は、必要なものを維持してください。
+
+特に、以下は引き続き確認してください。
+
+- `Map Demo`
+- `メモグリッド作成`
+- `メモグリッド一覧を取得`
+- `メモグリッドを作成`
+- `Score Map`
+- `Map Preview`
+- `Leaflet`
+- `共有相手管理`
+- `選択中のマス`
+- `採点方式`
+
+## 手動確認方針
+
+実装後、開発サーバーを起動してdemoページを確認してください。
 
 ```bash
 source .venv/bin/activate
+python manage.py runserver
+```
+
+ブラウザで開くURL:
+
+```text
+http://127.0.0.1:8000/api/maps/demo/
+```
+
+手動確認では、次を確認してください。
+
+- demoページが表示される
+- MapArea作成フォームに中心緯度・中心経度・縦方向のマス数・横方向のマス数がある
+- north/south/east/west を直接入力するフォームがない
+- `center_lat=35.695`
+- `center_lng=139.795`
+- `grid_size_meters=500`
+- `rows=6`
+- `cols=8`
+- 上記でメモグリッドを作成できる
+- 作成後、MapArea一覧に追加される
+- 作成後、GridCellを取得できる
+- GridCellが48件表示される
+- Score Mapが表示される
+- Leaflet Map PreviewにMapAreaとGridCell境界が表示される
+- 既存の採点・複数選択・共有相手管理が壊れていない
+- ブラウザコンソールに重大なJavaScriptエラーが出ていない
+
+## 確認方法
+
+作業後、次を実行してください。
+
+```bash
+source .venv/bin/activate
+node --check maps/static/maps/demo.js
 python manage.py check
-git diff --check
+python manage.py test maps.tests.MapDemoViewTests
+git diff --check -- maps/static/maps/demo.html maps/static/maps/demo.js maps/static/maps/demo.css maps/tests.py
+```
+
+可能であれば、次も実行してください。
+
+```bash
+python manage.py test maps
 ```
 
 ## 注意事項
 
-- 今回は実装しないでください。
-- 今回は設計整理だけにしてください。
-- レート制限節約のため、読むファイルと出力を必要最小限にしてください。
-- 既存の API / demo ページ / Leaflet / Score Map を変更しないでください。
-- 既存の `north / south / east / west` 方式をすぐに消す前提にしないでください。
-- model 変更や migration が本当に必要か慎重に検討してください。
-- 初心者が後から読んでも、次に何を実装すればよいか分かるように整理してください。
+- 今回はdemoページの作成フォーム変更に集中してください。
+- バックエンドAPIは変更しないでください。
+- README.md / API_SPEC.md / memo.md には触れないでください。
+- `north / south / east / west` は作成入力としては使わないでください。
+- `north / south / east / west` はレスポンス値・表示値としては引き続き使って構いません。
+- Map PreviewやScore Mapの内部処理で `north / south / east / west` を使うことは問題ありません。
+- `center_lat / center_lng / rows / cols` は作成リクエスト用です。
+- 既存のGridCell選択・採点・共有機能を壊さないでください。
+- レート制限節約のため、必要最小限のファイルだけを変更してください。
+- 実装後の報告は、変更点と実行した確認コマンドだけを短くまとめてください。
+
+
+## 手動での確認結果
+レート制限中に手動で行った確認作業の結果です。
+
+- Token取得: OK
+- 中心座標方式POST: OK
+- 作成レスポンスに north/south/east/west が含まれる: OK
+- 作成レスポンスに center_lat/center_lng/rows/cols が含まれない: OK
+- GridCell一覧GETで48件取得: OK
+- 従来方式 north/south/east/west POST が400になる: OK
+- rows*cols > 500 が400になる: OK
+- 南北30000m超過が400になる: OK
+- 東西30000m超過が400になる: OK
