@@ -24,6 +24,7 @@
 | `POST` | `/api/maps/areas/` | 地図範囲を登録する | 必要 |
 | `GET` | `/api/maps/areas/` | 地図範囲一覧を取得する | 必要 |
 | `GET` | `/api/maps/areas/{area_id}/` | 地図範囲詳細を取得する | 必要 |
+| `DELETE` | `/api/maps/areas/{area_id}/` | 地図範囲を削除する | 必要 |
 | `POST` | `/api/maps/grids/{grid_id}/ratings/` | 1 つのグリッドを採点する | 必要 |
 | `POST` | `/api/maps/grids/bulk-ratings/` | 複数グリッドをまとめて採点する | 必要 |
 | `GET` | `/api/maps/areas/{area_id}/grids/` | 点数付きグリッド一覧を取得する | 必要 |
@@ -1385,6 +1386,56 @@ GET /api/maps/areas/{area_id}/
 | 未ログイン | `401 Unauthorized` |
 | `area_id` が存在しない | `404 Not Found` |
 | `area_id` が自分に共有されていない | `404 Not Found` |
+
+### MapArea 削除 API
+
+```text
+DELETE /api/maps/areas/{area_id}/
+```
+
+指定した `MapArea` を削除する API です。
+ユーザー向けには、メモグリッド削除として扱います。
+
+削除できるのは、その `MapArea` の作成者本人だけです。
+共有されたユーザーは閲覧・採点はできますが、MapArea 本体は削除できません。
+
+#### 認証
+
+ログイン必須です。
+
+#### URL パラメータ
+
+| 名前 | 型 | 内容 |
+| --- | --- | --- |
+| `area_id` | integer | 削除対象の `MapArea` ID |
+
+#### リクエスト
+
+リクエストボディはありません。
+
+#### レスポンス
+
+削除成功時はレスポンスボディを返しません。
+
+#### ステータスコード
+
+| 状況 | ステータス |
+| --- | --- |
+| 削除成功 | `204 No Content` |
+| 未ログイン | `401 Unauthorized` |
+| `area_id` が存在しない | `404 Not Found` |
+| 作成者以外が削除しようとした | `404 Not Found` |
+| 共有されたユーザーが削除しようとした | `404 Not Found` |
+| `created_by=None` の `MapArea` を削除しようとした | `404 Not Found` |
+
+#### 削除される関連データ
+
+`MapArea` を削除すると、関連する `GridCell`、`GridRating`、`MapAreaShare` も cascade により削除されます。
+
+初心者向け補足:
+
+- cascade は、親データを削除したときに、それに紐づく子データも一緒に削除する DB の扱いです。
+- 今回は model の `on_delete=models.CASCADE` を使うため、削除用の migration は不要です。
 
 ## 現在のモデル
 

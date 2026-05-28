@@ -155,6 +155,12 @@ class MapAreaDetailView(APIView):
             status=status.HTTP_200_OK,
         )
 
+    def delete(self, request, area_id):
+        area = get_owned_map_area_or_404(request.user, area_id)
+        area.delete()
+
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
 
 class MapAreaShareListCreateView(APIView):
     authentication_classes = API_AUTHENTICATION_CLASSES

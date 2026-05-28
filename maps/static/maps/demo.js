@@ -14,6 +14,12 @@ const state = {
   leafletMap: null,
   mapAreaRectangle: null,
   gridBoundaryLayer: null,
+  mapGridRectanglesById: new Map(),
+  isLeafletDragSelecting: false,
+  leafletDragSelectStartLatLng: null,
+  leafletDragSelectStartPoint: null,
+  leafletDragSelectRectangle: null,
+  suppressNextMapGridClick: false,
   extraZoomedAreaIds: new Set(),
 };
 
@@ -233,6 +239,14 @@ function gridCellBounds(grid) {
   return mapAreaBounds(grid);
 }
 
+function gridCellLatLngBounds(grid) {
+  const bounds = gridCellBounds(grid);
+  if (!bounds || !leafletAvailable()) {
+    return null;
+  }
+  return window.L.latLngBounds(bounds);
+}
+
 function shouldApplyExtraMapPreviewZoom(area) {
   const latDiff = Math.abs(Number(area.north) - Number(area.south));
   const lngDiff = Math.abs(Number(area.east) - Number(area.west));
@@ -286,12 +300,18 @@ function initMapPreview() {
     attribution:
       '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
   }).addTo(state.leafletMap);
+
+  state.leafletMap.on("mousedown", startLeafletDragSelection);
+  state.leafletMap.on("mousemove", updateLeafletDragSelection);
+  state.leafletMap.on("mouseup", finishLeafletDragSelection);
 }
 
 function clearMapGridBoundaries() {
+  cancelLeafletDragSelection();
   if (state.gridBoundaryLayer) {
     state.gridBoundaryLayer.clearLayers();
   }
+  state.mapGridRectanglesById.clear();
 }
 
 function mapGridBoundaryLayer() {
@@ -327,17 +347,31 @@ function updateMapGridBoundaries(grids) {
       return;
     }
     const style = mapPreviewScoreStyle(grid.calculated_score);
+    const gridId = Number(grid.id);
 
-    window.L.rectangle(bounds, {
+    const rectangle = window.L.rectangle(bounds, {
       color: style.color,
       weight: 1,
       opacity: 0.45,
       fillColor: style.fillColor,
       fillOpacity: style.fillOpacity,
-      interactive: false,
+      interactive: true,
       className: "map-preview-grid-boundary",
-    }).addTo(boundaryLayer);
+    });
+
+    rectangle.on("click", () => {
+      if (state.suppressNextMapGridClick) {
+        state.suppressNextMapGridClick = false;
+        return;
+      }
+
+      toggleGridSelection(gridId);
+    });
+    rectangle.addTo(boundaryLayer);
+    state.mapGridRectanglesById.set(gridId, rectangle);
   });
+
+  highlightSelectedMapGridBoundaries();
 
   if (state.mapAreaRectangle) {
     state.mapAreaRectangle.bringToFront();
@@ -351,12 +385,14 @@ function updateMapPreview() {
 
   const area = selectedArea();
   if (!area) {
+    clearMapAreaPreview();
     elements.mapPreviewStatus.textContent = "MapArea を選択してください。";
     return;
   }
 
   const bounds = mapAreaBounds(area);
   if (!bounds) {
+    clearMapAreaPreview();
     elements.mapPreviewStatus.textContent = "MapArea の範囲を地図表示できません。";
     return;
   }
@@ -381,6 +417,189 @@ function updateMapPreview() {
 
   window.setTimeout(() => {
     state.leafletMap.invalidateSize();
+  }, 0);
+}
+
+function clearMapAreaPreview() {
+  if (state.mapAreaRectangle) {
+    state.mapAreaRectangle.remove();
+    state.mapAreaRectangle = null;
+  }
+
+  clearMapGridBoundaries();
+
+  if (elements.mapPreviewStatus) {
+    elements.mapPreviewStatus.textContent = "MapArea を選択してください。";
+  }
+}
+
+function setLeafletDraggingEnabled(isEnabled) {
+  if (!state.leafletMap || !state.leafletMap.dragging) {
+    return;
+  }
+
+  if (isEnabled) {
+    state.leafletMap.dragging.enable();
+    return;
+  }
+
+  state.leafletMap.dragging.disable();
+}
+
+function clearLeafletDragSelectionRectangle() {
+  if (!state.leafletDragSelectRectangle) {
+    return;
+  }
+
+  state.leafletDragSelectRectangle.remove();
+  state.leafletDragSelectRectangle = null;
+}
+
+function cancelLeafletDragSelection() {
+  if (state.isLeafletDragSelecting) {
+    setLeafletDraggingEnabled(true);
+  }
+
+  state.isLeafletDragSelecting = false;
+  state.leafletDragSelectStartLatLng = null;
+  state.leafletDragSelectStartPoint = null;
+  clearLeafletDragSelectionRectangle();
+
+  if (elements.mapPreview) {
+    elements.mapPreview.classList.remove("is-leaflet-drag-selecting");
+  }
+}
+
+function leafletDragDistance(currentLatLng) {
+  if (!state.leafletMap || !state.leafletDragSelectStartPoint || !currentLatLng) {
+    return 0;
+  }
+
+  const currentPoint = state.leafletMap.latLngToContainerPoint(currentLatLng);
+  const xDistance = currentPoint.x - state.leafletDragSelectStartPoint.x;
+  const yDistance = currentPoint.y - state.leafletDragSelectStartPoint.y;
+
+  return Math.hypot(xDistance, yDistance);
+}
+
+function leafletSelectionBounds(startLatLng, currentLatLng) {
+  if (!startLatLng || !currentLatLng || !leafletAvailable()) {
+    return null;
+  }
+
+  return window.L.latLngBounds(startLatLng, currentLatLng);
+}
+
+function updateLeafletDragSelectionRectangle(bounds) {
+  if (!state.leafletMap || !bounds) {
+    return;
+  }
+
+  if (!state.leafletDragSelectRectangle) {
+    state.leafletDragSelectRectangle = window.L.rectangle(bounds, {
+      color: "#176f5c",
+      weight: 2,
+      opacity: 0.9,
+      dashArray: "4 4",
+      fillColor: "#176f5c",
+      fillOpacity: 0.12,
+      interactive: false,
+      className: "map-preview-drag-selection",
+    }).addTo(state.leafletMap);
+    return;
+  }
+
+  state.leafletDragSelectRectangle.setBounds(bounds);
+  state.leafletDragSelectRectangle.bringToFront();
+}
+
+function selectMapGridCellsInBounds(selectionBounds) {
+  if (!selectionBounds) {
+    return 0;
+  }
+
+  let selectedCount = 0;
+  let latestSelectedGrid = null;
+
+  state.gridsById.forEach((grid, gridId) => {
+    const bounds = gridCellLatLngBounds(grid);
+    if (!bounds || !selectionBounds.intersects(bounds)) {
+      return;
+    }
+
+    if (!state.selectedGridIds.has(gridId)) {
+      selectedCount += 1;
+    }
+    state.selectedGridIds.add(gridId);
+    latestSelectedGrid = grid;
+  });
+
+  if (latestSelectedGrid) {
+    state.selectedGridId = Number(latestSelectedGrid.id);
+    state.selectedGrid = latestSelectedGrid;
+  }
+
+  renderSelectedGrids();
+  highlightSelectedScoreCells();
+  highlightSelectedMapGridBoundaries();
+
+  return selectedCount;
+}
+
+function startLeafletDragSelection(event) {
+  if (
+    !event.originalEvent.shiftKey ||
+    !state.leafletMap ||
+    !event.latlng ||
+    !state.gridsById.size
+  ) {
+    return;
+  }
+
+  event.originalEvent.preventDefault();
+  state.isLeafletDragSelecting = true;
+  state.leafletDragSelectStartLatLng = event.latlng;
+  state.leafletDragSelectStartPoint = state.leafletMap.latLngToContainerPoint(
+    event.latlng
+  );
+  elements.mapPreview.classList.add("is-leaflet-drag-selecting");
+  setLeafletDraggingEnabled(false);
+}
+
+function updateLeafletDragSelection(event) {
+  if (!state.isLeafletDragSelecting || !event.latlng) {
+    return;
+  }
+
+  event.originalEvent.preventDefault();
+  const bounds = leafletSelectionBounds(state.leafletDragSelectStartLatLng, event.latlng);
+  if (leafletDragDistance(event.latlng) < DRAG_SELECT_THRESHOLD) {
+    clearLeafletDragSelectionRectangle();
+    return;
+  }
+
+  updateLeafletDragSelectionRectangle(bounds);
+}
+
+function finishLeafletDragSelection(event) {
+  if (!state.isLeafletDragSelecting) {
+    return;
+  }
+
+  event.originalEvent.preventDefault();
+  const bounds = leafletSelectionBounds(state.leafletDragSelectStartLatLng, event.latlng);
+  const distance = leafletDragDistance(event.latlng);
+
+  cancelLeafletDragSelection();
+
+  if (distance < DRAG_SELECT_THRESHOLD || !bounds) {
+    return;
+  }
+
+  selectMapGridCellsInBounds(bounds);
+  state.suppressNextMapGridClick = true;
+  window.setTimeout(() => {
+    state.suppressNextMapGridClick = false;
   }, 0);
 }
 
@@ -514,19 +733,34 @@ function renderAreas(areas) {
       ]
         .filter(Boolean)
         .join(" ");
+      const deleteButton = area.is_owner
+        ? `
+          <button
+            class="area-delete-button"
+            type="button"
+            data-delete-area-id="${area.id}"
+            data-delete-area-name="${escapeHtml(area.name)}"
+          >
+            削除
+          </button>
+        `
+        : "";
 
       return `
-        <button
-          class="${areaClasses}"
-          type="button"
-          data-area-id="${area.id}"
-          data-area-name="${escapeHtml(area.name)}"
-        >
-          <span class="area-button-title">#${area.id} ${escapeHtml(area.name)}</span>
-          <span class="area-button-meta">
-            ${escapeHtml(area.display_type || "メモグリッド")} / ${ownerLabel}
-          </span>
-        </button>
+        <div class="area-item">
+          <button
+            class="${areaClasses}"
+            type="button"
+            data-area-id="${area.id}"
+            data-area-name="${escapeHtml(area.name)}"
+          >
+            <span class="area-button-title">#${area.id} ${escapeHtml(area.name)}</span>
+            <span class="area-button-meta">
+              ${escapeHtml(area.display_type || "メモグリッド")} / ${ownerLabel}
+            </span>
+          </button>
+          ${deleteButton}
+        </div>
       `;
     })
     .join("");
@@ -585,6 +819,7 @@ function clearSelectedGrids() {
   state.selectedGridIds.clear();
   renderSelectedGrids();
   highlightSelectedScoreCells();
+  highlightSelectedMapGridBoundaries();
 }
 
 function removeSelectedGrid(gridId) {
@@ -596,6 +831,7 @@ function removeSelectedGrid(gridId) {
   }
   renderSelectedGrids();
   highlightSelectedScoreCells();
+  highlightSelectedMapGridBoundaries();
 }
 
 function renderSelectedGrids() {
@@ -663,6 +899,36 @@ function highlightSelectedScoreCells() {
   });
 }
 
+function highlightSelectedMapGridBoundaries() {
+  state.mapGridRectanglesById.forEach((rectangle, gridId) => {
+    const grid = state.gridsById.get(gridId);
+    if (!grid) {
+      return;
+    }
+
+    const style = mapPreviewScoreStyle(grid.calculated_score);
+    const isSelected = state.selectedGridIds.has(gridId);
+
+    rectangle.setStyle({
+      color: isSelected ? "#176f5c" : style.color,
+      weight: isSelected ? 3 : 1,
+      opacity: isSelected ? 0.95 : 0.45,
+      fillColor: style.fillColor,
+      fillOpacity: isSelected
+        ? Math.min(style.fillOpacity + 0.18, 0.55)
+        : style.fillOpacity,
+    });
+
+    if (isSelected) {
+      rectangle.bringToFront();
+    }
+  });
+
+  if (state.mapAreaRectangle) {
+    state.mapAreaRectangle.bringToFront();
+  }
+}
+
 function toggleGridSelection(gridId) {
   const normalizedGridId = Number(gridId);
   const grid = state.gridsById.get(normalizedGridId);
@@ -682,6 +948,7 @@ function toggleGridSelection(gridId) {
   state.selectedGrid = grid;
   renderSelectedGrids();
   highlightSelectedScoreCells();
+  highlightSelectedMapGridBoundaries();
 }
 
 function stagePointFromEvent(event) {
@@ -781,6 +1048,7 @@ function selectGridsInRect(selectionRect) {
   state.selectedGrid = state.gridsById.get(latestGridId) || null;
   renderSelectedGrids();
   highlightSelectedScoreCells();
+  highlightSelectedMapGridBoundaries();
 }
 
 function canStartDragSelection(event) {
@@ -957,6 +1225,7 @@ function renderGrids(grids) {
   }
   renderSelectedGrids();
   highlightSelectedScoreCells();
+  highlightSelectedMapGridBoundaries();
 }
 
 async function loadAreas() {
@@ -1004,6 +1273,55 @@ async function createArea(event) {
     setMessage(error.message, "error");
   } finally {
     elements.createAreaButton.disabled = false;
+  }
+}
+
+function clearSelectedAreaStateAfterDelete() {
+  state.selectedAreaId = null;
+  state.selectedAreaName = "";
+  state.selectedGridId = null;
+  state.selectedGrid = null;
+  state.selectedGridIds.clear();
+  state.gridsById = new Map();
+
+  elements.selectedAreaLabel.textContent =
+    "メモグリッドを選択すると、自動生成済みの GridCell を表示します。";
+  elements.selectedShareAreaLabel.textContent = "先にメモグリッドを選択してください。";
+  elements.reloadGridsButton.disabled = true;
+  elements.loadSharesButton.disabled = true;
+  elements.addShareButton.disabled = true;
+  elements.sharesList.textContent = "共有相手はまだ読み込んでいません。";
+
+  setShareMessage("");
+  renderEmptyGrids("メモグリッドを選択してください。");
+  clearMapAreaPreview();
+}
+
+async function deleteArea(areaId, areaName) {
+  const confirmed = window.confirm(
+    `メモグリッド「${areaName}」を削除します。関連するGridCell、採点、共有設定も削除されます。よろしいですか？`
+  );
+
+  if (!confirmed) {
+    return;
+  }
+
+  const normalizedAreaId = Number(areaId);
+  setMessage(`メモグリッド #${normalizedAreaId} を削除しています。`);
+
+  try {
+    await apiFetch(`/api/maps/areas/${normalizedAreaId}/`, {
+      method: "DELETE",
+    });
+
+    if (normalizedAreaId === state.selectedAreaId) {
+      clearSelectedAreaStateAfterDelete();
+    }
+
+    await loadAreas();
+    setMessage(`メモグリッド #${normalizedAreaId} を削除しました。`, "success");
+  } catch (error) {
+    setMessage(error.message, "error");
   }
 }
 
@@ -1290,6 +1608,17 @@ elements.scoreMapViewModeInputs.forEach((input) => {
 elements.mapImageUrl.addEventListener("input", applyScoreMapBackgroundImage);
 
 elements.areasList.addEventListener("click", (event) => {
+  const deleteButton = event.target.closest("[data-delete-area-id]");
+  if (deleteButton) {
+    event.preventDefault();
+    event.stopPropagation();
+    deleteArea(
+      deleteButton.dataset.deleteAreaId,
+      deleteButton.dataset.deleteAreaName
+    );
+    return;
+  }
+
   const button = event.target.closest("[data-area-id]");
   if (!button) {
     return;
@@ -1353,6 +1682,7 @@ elements.sharesList.addEventListener("click", (event) => {
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
     cancelDragSelection();
+    cancelLeafletDragSelection();
   }
 });
 

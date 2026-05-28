@@ -91,6 +91,9 @@
 
           <section class="panel" aria-labelledby="areas-heading">
             <h2 id="areas-heading">メモグリッド</h2>
+            <p class="form-note">
+              自分が作成したメモグリッドは一覧から削除できます。共有メモグリッドは削除できません。
+            </p>
             <div id="areas-list" class="areas-list" aria-live="polite">
               まだ読み込んでいません。
             </div>
@@ -198,7 +201,9 @@
             <div id="map-preview" class="map-preview" aria-label="MapArea bounds preview"></div>
             <p class="map-preview-note">
               OpenStreetMap タイルを使う開発確認用の表示です。GridCell 境界と地図上でのスコア分布を確認できます。
-              色分けは Score Map と同じ基準です。採点操作は Score Map で行います。
+              色分けは Score Map と同じ基準です。GridCell は Score Map と Map Preview のどちらからでも選択できます。
+              Map Preview では Shift + ドラッグで範囲選択できます。
+              採点操作は「選択中のマス」パネルで行います。
             </p>
             <div class="map-preview-legend" aria-label="Map Preview score legend">
               <span><i class="legend-box score-low"></i>0-2.99</span>

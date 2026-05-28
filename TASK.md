@@ -1,127 +1,101 @@
-# Codex タスク: demoページのMapArea作成フォームを中心座標方式に変更する
+# Codex タスク: Map Preview上でShift+ドラッグ範囲選択時に勝手にズームする現象を修正する
 
 ## 担当ロール
 
 今回は **Frontend Developer** と **Tester** として作業してください。
 
-demoページの MapArea 作成フォームを、従来の `north / south / east / west` 入力方式から、中心座標方式に変更してください。
+demoページの Leaflet Map Preview 上で、Shift + ドラッグによるGridCell範囲選択を行う際に、地図が勝手にズームしてしまう現象を修正してください。
 
-現在、MapArea 作成 API は中心座標方式に一本化されています。  
-作成リクエストでは、以下を送る必要があります。
+調査結果では、原因は Leaflet 標準機能の `boxZoom` が有効なままになっているためである可能性が高いです。
 
-```text
-center_lat
-center_lng
-grid_size_meters
-rows
-cols
-```
-
-`north / south / east / west` は、作成後にサーバー側で計算される保存値・レスポンス値です。  
-demoページの作成フォームでは、今後 `north / south / east / west` を直接入力させないでください。
+Leaflet には、Shift + ドラッグした範囲へズームする標準機能があります。  
+今回のdemoでは、Shift + ドラッグをGridCellの範囲選択として使っているため、Leaflet標準のbox zoomと独自の範囲選択処理が衝突している可能性があります。
 
 ## レート制限節約の方針
 
 今回はレート制限節約を優先してください。
 
-- 変更範囲を必要最小限にしてください。
-- バックエンド API は変更しないでください。
-- model / serializer / view / service は原則変更しないでください。
+- 変更範囲を最小限にしてください。
+- バックエンドAPIは変更しないでください。
+- model / serializer / view / service は変更しないでください。
 - README.md / API_SPEC.md / memo.md は変更しないでください。
-- 必要なファイルだけ読んでください。
-- 大きな設計変更はしないでください。
+- Leaflet範囲選択の大規模な作り直しはしないでください。
+- まずは `boxZoom: false` の追加を第一候補として修正してください。
 - 実装後の報告は短くしてください。
 
 ## 作業前に読むファイル
 
-まず、次のファイルを確認してください。
+まず、次のファイルだけを確認してください。
 
 - `AGENTS.md`
 - `RULES.md`
-- `maps/static/maps/demo.html`
 - `maps/static/maps/demo.js`
-- `maps/static/maps/demo.css`
 - `maps/tests.py`
 
 必要がある場合のみ、次を確認してください。
 
-- `maps/serializers.py`
-- `maps/views.py`
-- `API_SPEC.md`
+- `maps/static/maps/demo.html`
+- `maps/static/maps/demo.css`
 
 今回は、以下のファイルは原則として読まなくてよいです。
 
 - `maps/models.py`
+- `maps/serializers.py`
+- `maps/views.py`
 - `maps/services.py`
 - `README.md`
+- `API_SPEC.md`
 - `memo.md`
 
 ## 今回の目的
 
-demoページの MapArea 作成フォームを、現在のAPI仕様に合わせます。
+Leaflet Map Preview 上で、Shift + ドラッグによるGridCell範囲選択を行ったとき、地図がLeaflet標準のbox zoomで勝手にズームしないようにします。
 
-現在のAPIでは、MapArea作成時に次のようなリクエストを送ります。
+期待する挙動:
 
-```json
-{
-  "name": "Center API Area",
-  "description": "center based api",
-  "center_lat": 35.695,
-  "center_lng": 139.795,
-  "grid_size_meters": 500,
-  "rows": 6,
-  "cols": 8,
-  "source": "manual"
-}
+```text
+Shift + Map Preview 上でドラッグ
+↓
+GridCell範囲選択用の矩形が表示される
+↓
+ドラッグ終了時に範囲内のGridCellが選択される
+↓
+地図のズームレベルは勝手に変わらない
 ```
 
-従来のように、次を直接送ってはいけません。
-
-```json
-{
-  "north": 35.7,
-  "south": 35.6,
-  "east": 139.8,
-  "west": 139.7
-}
-```
-
-demoページでも、この仕様に合わせてフォームと送信payloadを変更してください。
+Shiftを押していない通常ドラッグでは、これまで通り地図を移動できる状態を維持してください。
 
 ## 今回やること
 
-- demoページの MapArea 作成フォームから `north / south / east / west` 入力欄を削除または非表示にする
-- demoページの MapArea 作成フォームに `center_lat / center_lng / rows / cols` 入力欄を追加する
-- `grid_size_meters` 入力欄は維持する
-- `name / description / source` 入力欄は維持する
-- MapArea 作成時の JavaScript payload を中心座標方式に変更する
-- 作成後の MapArea 表示・Map Preview・Score Map は、APIレスポンスの `north / south / east / west` を引き続き使う
-- demoページ内の説明文を中心座標方式に合わせる
-- `MapDemoViewTests` を更新する
-- 既存の Score Map、Leaflet Map Preview、GridCell選択、複数採点、共有相手管理を壊さない
+- Leaflet Map Preview 初期化時に、Leaflet標準のbox zoomを無効化する
+- Shift + ドラッグ範囲選択時に、地図が勝手にズームしないことを確認する
+- 既存のMap Preview表示を壊さない
+- 既存のLeaflet GridCellクリック選択を壊さない
+- 既存のLeaflet Shift + ドラッグ範囲選択を壊さない
+- 既存のScore Mapクリック選択・ドラッグ範囲選択を壊さない
+- 必要に応じて、MapDemoViewTestsに静的確認を追加する
 
 ## 今回やらないこと
 
-- バックエンド API の変更
-- `MapAreaSerializer` の変更
-- `MapAreaListCreateView` の変更
-- `generate_grid_cells_for_area()` の変更
-- model の変更
-- migration の作成
+- Leaflet範囲選択処理の全面的な作り直し
+- Leaflet上での通常ドラッグ範囲選択
+- Leaflet上での直接採点UI
+- Score Mapの削除
+- Map Previewの設計変更
+- バックエンドAPIの変更
 - README.md の更新
 - API_SPEC.md の更新
 - memo.md の更新
-- Leaflet 上でのGridCellクリック選択
-- Leaflet 上でのGridCellドラッグ選択
-- Score Map の描画方式変更
-- MapArea 作成後レスポンス形式の変更
 
 ## 変更してよいファイル
 
-- `maps/static/maps/demo.html`
 - `maps/static/maps/demo.js`
-- `maps/static/maps/demo.css`
 - `maps/tests.py`
+
+必要がある場合のみ、最小限で以下を変更して構いません。
+
+- `maps/static/maps/demo.html`
+- `maps/static/maps/demo.css`
 
 ## 変更しないファイル
 
@@ -137,308 +111,102 @@ demoページでも、この仕様に合わせてフォームと送信payloadを
 - `config/settings.py`
 - `config/urls.py`
 
-## フォーム変更方針
+## 調査結果メモ
 
-### 残す入力欄
-
-既存のMapArea作成フォームから、次の入力欄は維持してください。
-
-```text
-name
-description
-grid_size_meters
-source
-```
-
-ラベルは既存の雰囲気に合わせて構いません。
-
-例:
-
-```text
-名前
-説明
-1マスの大きさ（m）
-source
-```
-
-### 削除または非表示にする入力欄
-
-次の入力欄は、作成フォームから削除または非表示にしてください。
-
-```text
-north
-south
-east
-west
-```
-
-可能であれば、単に非表示にするのではなく、フォーム入力欄としては削除してください。
-
-ただし、作成後の表示やMap Preview用の説明で `north / south / east / west` が出ることは問題ありません。  
-削除したいのは、ユーザーが作成時に直接入力する欄です。
-
-### 追加する入力欄
-
-次の入力欄を追加してください。
-
-```text
-center_lat
-center_lng
-rows
-cols
-```
-
-ユーザー向けラベル例:
-
-```text
-中心緯度
-中心経度
-縦方向のマス数
-横方向のマス数
-```
-
-input の id / name は、既存命名に合わせてください。  
-迷う場合は、次の id を使ってください。
-
-```text
-area-center-lat
-area-center-lng
-area-rows
-area-cols
-```
-
-### 入力例
-
-初期値や placeholder を入れる場合は、次のような値を使ってください。
-
-```text
-center_lat: 35.695
-center_lng: 139.795
-grid_size_meters: 500
-rows: 6
-cols: 8
-```
-
-この組み合わせでは、GridCell が `6 * 8 = 48` 個生成される想定です。
-
-## 説明文の追加・修正
-
-MapArea 作成フォーム付近に、中心座標方式の説明を短く入れてください。
-
-例:
-
-```text
-MapArea の範囲は、中心座標・1マスの大きさ・縦横のマス数から自動計算されます。
-north / south / east / west は作成後にサーバー側で計算されます。
-```
-
-一般ユーザー制限も、短く表示してください。
-
-例:
-
-```text
-一般ユーザーは最大500マス、南北30,000m、東西30,000mまで作成できます。
-```
-
-長くなりすぎる場合は、補足文として小さめに表示してください。
-
-## demo.js の変更方針
-
-### 1. MapArea 作成payloadを中心座標方式に変更する
-
-現在、MapArea作成時に `north / south / east / west` をpayloadに含めている場合は、それを削除してください。
-
-変更後のpayload例:
+Leaflet Map Preview は、現在 `initMapPreview()` 付近で以下のように作成されている可能性があります。
 
 ```javascript
-const payload = {
-  name: ...,
-  description: ...,
-  center_lat: Number(...),
-  center_lng: Number(...),
-  grid_size_meters: Number(...),
-  rows: Number(...),
-  cols: Number(...),
-  source: ...,
-};
+state.leafletMap = window.L.map(elements.mapPreview, {
+  scrollWheelZoom: false,
+}).setView([35.69, 139.7], 11);
 ```
 
-`rows / cols` は整数として扱ってください。
+この設定では、`boxZoom` が明示的に無効化されていません。
+
+Leafletの標準では、Shift + ドラッグで範囲ズームする `boxZoom` が有効です。  
+今回のdemoでは、Shift + ドラッグを独自のGridCell範囲選択に使っているため、Leaflet標準のbox zoomが同時に動いてしまう可能性があります。
+
+また、現在のShift + ドラッグ選択処理では、通常の地図移動用draggingは止めているはずです。
+
+```javascript
+setLeafletDraggingEnabled(false);
+```
+
+ただし、これは通常の地図移動を止めているだけで、Leaflet標準の `boxZoom` までは止めていない可能性があります。
+
+そのため、第一候補として、Leaflet map作成時に `boxZoom: false` を追加してください。
+
+## 実装方針
+
+### 1. Leaflet map作成時に boxZoom を無効化する
+
+`initMapPreview()` など、Leaflet mapを作成している箇所を確認してください。
+
+修正例:
+
+```javascript
+state.leafletMap = window.L.map(elements.mapPreview, {
+  scrollWheelZoom: false,
+  boxZoom: false,
+}).setView([35.69, 139.7], 11);
+```
+
+既存のオプションが他にもある場合は、それを維持したうえで `boxZoom: false` を追加してください。
+
+### 2. 既存のShift + ドラッグ範囲選択処理は維持する
+
+以下のような既存処理は、基本的に大きく変えないでください。
+
+```javascript
+state.leafletMap.on("mousedown", startLeafletDragSelection);
+state.leafletMap.on("mousemove", updateLeafletDragSelection);
+state.leafletMap.on("mouseup", finishLeafletDragSelection);
+```
+
+また、通常の地図移動を一時停止する既存処理も、必要であれば維持してください。
+
+```javascript
+setLeafletDraggingEnabled(false);
+```
+
+今回の主目的は、Leaflet標準のbox zoomとの衝突を止めることです。
+
+### 3. 必要なら初期化後にも boxZoom を disable する
+
+`boxZoom: false` で十分なはずですが、既存コードの構造上うまく効かない場合のみ、初期化後に明示的に無効化してください。
 
 例:
 
 ```javascript
-rows: parseInt(..., 10),
-cols: parseInt(..., 10),
+if (state.leafletMap.boxZoom) {
+  state.leafletMap.boxZoom.disable();
+}
 ```
 
-既存の実装スタイルに合わせて、`Number()` でも問題ありません。  
-ただし、小数の `rows / cols` を送らないようにしてください。
+ただし、まずは `L.map()` のoptionで `boxZoom: false` を指定する方法を優先してください。
 
-### 2. north/south/east/west を送らない
+### 4. fitBounds() / applyExtraMapPreviewZoom() は原則変更しない
 
-作成リクエストのpayloadに、以下を含めないでください。
+`updateMapPreview()` 内にある `fitBounds()` や `applyExtraMapPreviewZoom()` は、メモグリッド選択時や初期表示時のズーム調整用です。
 
-```text
-north
-south
-east
-west
-```
+今回の現象はShift + ドラッグ中の勝手なズームなので、これらを直接原因として扱うより、まずはbox zoomを止める方針にしてください。
 
-API側では、これらを作成入力に含めると400になります。
-
-### 3. 作成後の表示処理は維持する
-
-作成成功後のAPIレスポンスには、引き続き以下が含まれます。
-
-```text
-north
-south
-east
-west
-grid_size_meters
-```
-
-そのため、以下の処理は基本的に維持してください。
-
-- MapArea一覧表示
-- MapArea詳細表示
-- Leaflet Map Preview の MapArea rectangle 表示
-- GridCell境界表示
-- Score Map 表示
-- Score Map の縦横比計算
-
-作成後に `north / south / east / west` を表示・利用することは問題ありません。
-
-### 4. 入力値の基本チェック
-
-demo側では、最低限ブラウザのinput属性で補助してください。
-
-推奨:
-
-```html
-<input type="number" step="any" id="area-center-lat">
-<input type="number" step="any" id="area-center-lng">
-<input type="number" min="1" step="1" id="area-rows">
-<input type="number" min="1" step="1" id="area-cols">
-<input type="number" min="1" step="1" id="area-grid-size-meters">
-```
-
-厳密なバリデーションはAPI側で行うため、demo.js内で過剰に複雑な検証はしなくて構いません。
-
-## UI上の注意
-
-中心座標方式は、ユーザーにとって意味が分かりやすいようにしてください。
-
-特に、`rows` と `cols` が何を意味するか分かるようにします。
-
-例:
-
-```text
-縦方向のマス数 rows
-横方向のマス数 cols
-```
-
-または、
-
-```text
-rows: 南北方向に並べるマス数
-cols: 東西方向に並べるマス数
-```
-
-フォームが狭くなる場合は、説明を短くしてください。
-
-## 既存機能との関係
-
-今回の変更後も、次の機能は壊さないでください。
-
-- メモグリッド作成
-- メモグリッド一覧取得
-- メモグリッド選択
-- GridCell一覧取得
-- Score Map表示
-- 全体表示 / 詳細表示切り替え
-- Score Mapのクリック選択
-- Score Mapのドラッグ範囲選択
-- 選択済みマスのクリック解除
-- 選択中GridCell一覧表示
-- 選択をすべて解除
-- 個別に入力し、まとめて採点
-- 選択グリッドを全て同じ値で採点
-- Leaflet Map Preview の MapArea rectangle 表示
-- Leaflet Map Preview の GridCell 境界表示
-- Leaflet Map Preview の GridCell スコア色分け
-- 共有相手一覧取得
-- 共有相手追加
-- 共有解除
+明らかに必要がある場合を除き、`fitBounds()` や `applyExtraMapPreviewZoom()` の挙動は変更しないでください。
 
 ## テスト方針
 
-`maps/tests.py` の `MapDemoViewTests` を更新してください。
+Djangoのview testでは実際のLeaflet操作までは確認できません。
 
-### 追加または確認する文言・id
-
-最低限、demoページに以下が含まれることを確認してください。
+そのため、`MapDemoViewTests` では必要に応じて、以下のような静的確認を追加してください。
 
 ```text
-中心緯度
-中心経度
-縦方向のマス数
-横方向のマス数
-center_lat
-center_lng
-rows
-cols
+boxZoom
+boxZoom: false
 ```
 
-実装上のidに合わせて、以下のようなidも確認してください。
+既存のテストがHTMLのみを確認しており、JS内の文字列確認がない場合は、無理にテストを追加しなくても構いません。
 
-```text
-area-center-lat
-area-center-lng
-area-rows
-area-cols
-```
-
-もしラベル表記を変えた場合は、実装に合わせてテストを調整してください。
-
-### 削除確認
-
-作成フォーム用の古い入力欄idが残っていないことを確認してください。
-
-例:
-
-```text
-area-north
-area-south
-area-east
-area-west
-```
-
-注意:
-
-ページ全体から `north` や `south` という文字列を完全に消すテストはしないでください。  
-作成後の表示や説明、Map Preview処理で `north / south / east / west` という文字列が残る可能性があるためです。
-
-確認するなら、古い入力欄idが残っていないことに絞ってください。
-
-### 維持するテスト
-
-既存のdemoページ確認項目は、必要なものを維持してください。
-
-特に、以下は引き続き確認してください。
-
-- `Map Demo`
-- `メモグリッド作成`
-- `メモグリッド一覧を取得`
-- `メモグリッドを作成`
-- `Score Map`
-- `Map Preview`
-- `Leaflet`
-- `共有相手管理`
-- `選択中のマス`
-- `採点方式`
+既に `demo.js` の内容を確認するテストがある場合は、`boxZoom` に関する確認を追加してください。
 
 ## 手動確認方針
 
@@ -458,20 +226,16 @@ http://127.0.0.1:8000/api/maps/demo/
 手動確認では、次を確認してください。
 
 - demoページが表示される
-- MapArea作成フォームに中心緯度・中心経度・縦方向のマス数・横方向のマス数がある
-- north/south/east/west を直接入力するフォームがない
-- `center_lat=35.695`
-- `center_lng=139.795`
-- `grid_size_meters=500`
-- `rows=6`
-- `cols=8`
-- 上記でメモグリッドを作成できる
-- 作成後、MapArea一覧に追加される
-- 作成後、GridCellを取得できる
-- GridCellが48件表示される
-- Score Mapが表示される
-- Leaflet Map PreviewにMapAreaとGridCell境界が表示される
-- 既存の採点・複数選択・共有相手管理が壊れていない
+- メモグリッドを作成または選択できる
+- Map PreviewにMapArea範囲とGridCell境界が表示される
+- Map Preview上のGridCellクリック選択が引き続き動く
+- Shift + ドラッグで範囲選択矩形が表示される
+- Shift + ドラッグ終了時、範囲内のGridCellがまとめて選択される
+- Shift + ドラッグしても、Leaflet標準の範囲ズームが発生しない
+- Shift + ドラッグ後、地図のズームレベルが勝手に変わらない
+- Shiftなしの通常ドラッグでは、これまで通り地図移動できる
+- Score Map側のクリック選択・ドラッグ範囲選択が壊れていない
+- 採点後、Score MapとMap Previewの色分けが更新される
 - ブラウザコンソールに重大なJavaScriptエラーが出ていない
 
 ## 確認方法
@@ -483,7 +247,7 @@ source .venv/bin/activate
 node --check maps/static/maps/demo.js
 python manage.py check
 python manage.py test maps.tests.MapDemoViewTests
-git diff --check -- maps/static/maps/demo.html maps/static/maps/demo.js maps/static/maps/demo.css maps/tests.py
+git diff --check -- maps/static/maps/demo.js maps/tests.py
 ```
 
 可能であれば、次も実行してください。
@@ -494,27 +258,13 @@ python manage.py test maps
 
 ## 注意事項
 
-- 今回はdemoページの作成フォーム変更に集中してください。
+- 今回はLeaflet標準のbox zoom無効化に集中してください。
+- 範囲選択処理を大きく作り直さないでください。
+- `fitBounds()` や `applyExtraMapPreviewZoom()` は原則変更しないでください。
+- Shiftなしの通常ドラッグによる地図移動は維持してください。
+- Shift + ドラッグによるGridCell範囲選択は維持してください。
+- Score Map側のドラッグ範囲選択は壊さないでください。
+- README.md / API_SPEC.md / memo.md は変更しないでください。
 - バックエンドAPIは変更しないでください。
-- README.md / API_SPEC.md / memo.md には触れないでください。
-- `north / south / east / west` は作成入力としては使わないでください。
-- `north / south / east / west` はレスポンス値・表示値としては引き続き使って構いません。
-- Map PreviewやScore Mapの内部処理で `north / south / east / west` を使うことは問題ありません。
-- `center_lat / center_lng / rows / cols` は作成リクエスト用です。
-- 既存のGridCell選択・採点・共有機能を壊さないでください。
 - レート制限節約のため、必要最小限のファイルだけを変更してください。
 - 実装後の報告は、変更点と実行した確認コマンドだけを短くまとめてください。
-
-
-## 手動での確認結果
-レート制限中に手動で行った確認作業の結果です。
-
-- Token取得: OK
-- 中心座標方式POST: OK
-- 作成レスポンスに north/south/east/west が含まれる: OK
-- 作成レスポンスに center_lat/center_lng/rows/cols が含まれない: OK
-- GridCell一覧GETで48件取得: OK
-- 従来方式 north/south/east/west POST が400になる: OK
-- rows*cols > 500 が400になる: OK
-- 南北30000m超過が400になる: OK
-- 東西30000m超過が400になる: OK

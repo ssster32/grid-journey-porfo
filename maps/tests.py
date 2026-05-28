@@ -3,6 +3,7 @@ from math import cos, radians
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
+from django.contrib.staticfiles import finders
 from django.db import IntegrityError, transaction
 from django.test import TestCase
 from django.urls import reverse
@@ -884,6 +885,8 @@ class MapDemoViewTests(TestCase):
         self.assertContains(response, "メモグリッド作成")
         self.assertContains(response, "メモグリッド一覧を取得")
         self.assertContains(response, "メモグリッドを作成")
+        self.assertContains(response, "自分が作成したメモグリッドは一覧から削除できます")
+        self.assertContains(response, "共有メモグリッドは削除できません")
         self.assertContains(response, "中心緯度")
         self.assertContains(response, "中心経度")
         self.assertContains(response, "縦方向のマス数")
@@ -922,6 +925,9 @@ class MapDemoViewTests(TestCase):
         self.assertContains(response, "GridCell 境界")
         self.assertContains(response, "地図上でのスコア分布")
         self.assertContains(response, "色分けは Score Map と同じ基準")
+        self.assertContains(response, "Score Map と Map Preview のどちらからでも選択できます")
+        self.assertContains(response, "Shift + ドラッグ")
+        self.assertContains(response, "範囲選択")
         self.assertContains(response, "map-preview-legend")
         self.assertContains(response, "map-preview")
         self.assertContains(response, "map-preview-status")
@@ -964,6 +970,23 @@ class MapDemoViewTests(TestCase):
         self.assertNotContains(response, "selected-grid-rate-button")
         self.assertNotContains(response, "grids-body")
         self.assertNotContains(response, "data-rate-grid")
+
+    def test_demo_static_files_include_area_delete_ui(self):
+        demo_js_path = finders.find("maps/demo.js")
+        demo_css_path = finders.find("maps/demo.css")
+
+        with open(demo_js_path, encoding="utf-8") as demo_js_file:
+            demo_js = demo_js_file.read()
+        with open(demo_css_path, encoding="utf-8") as demo_css_file:
+            demo_css = demo_css_file.read()
+
+        self.assertIn("deleteArea", demo_js)
+        self.assertIn("clearSelectedAreaStateAfterDelete", demo_js)
+        self.assertIn("clearMapAreaPreview", demo_js)
+        self.assertIn("area-delete-button", demo_js)
+        self.assertIn("data-delete-area-id", demo_js)
+        self.assertIn("関連するGridCell、採点、共有設定も削除されます", demo_js)
+        self.assertIn(".area-delete-button", demo_css)
 
 
 class TokenAuthenticationTests(TestCase):
@@ -1841,6 +1864,90 @@ class MapAreaDetailViewTests(TestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["id"], no_creator_area.id)
         self.assertIsNone(response.data["created_by"])
+
+    def test_owner_can_delete_map_area(self):
+        shared_user = get_user_model().objects.create_user(
+            username="shareduser",
+            password="test-password",
+        )
+        grid = GridCell.objects.create(
+            area=self.area,
+            row_index=0,
+            col_index=0,
+            north=35.7,
+            south=35.69,
+            east=139.8,
+            west=139.79,
+            calculated_score=5,
+        )
+        GridRating.objects.create(grid=grid, user=self.user, score=8)
+        MapAreaShare.objects.create(area=self.area, user=shared_user)
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.delete(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertFalse(MapArea.objects.filter(id=self.area.id).exists())
+        self.assertFalse(GridCell.objects.filter(id=grid.id).exists())
+        self.assertFalse(GridRating.objects.filter(grid_id=grid.id).exists())
+        self.assertFalse(MapAreaShare.objects.filter(area_id=self.area.id).exists())
+
+    def test_unauthenticated_user_cannot_delete_map_area(self):
+        response = self.client.delete(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertTrue(MapArea.objects.filter(id=self.area.id).exists())
+
+    def test_unknown_area_id_delete_returns_404(self):
+        self.client.force_authenticate(user=self.user)
+        url = reverse("map-area-detail", kwargs={"area_id": 999999})
+
+        response = self.client.delete(url)
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_other_user_cannot_delete_map_area(self):
+        other_user = get_user_model().objects.create_user(
+            username="otheruser",
+            password="test-password",
+        )
+        self.client.force_authenticate(user=other_user)
+
+        response = self.client.delete(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertTrue(MapArea.objects.filter(id=self.area.id).exists())
+
+    def test_shared_user_cannot_delete_map_area(self):
+        shared_user = get_user_model().objects.create_user(
+            username="shareduser",
+            password="test-password",
+        )
+        MapAreaShare.objects.create(area=self.area, user=shared_user)
+        self.client.force_authenticate(user=shared_user)
+
+        response = self.client.delete(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertTrue(MapArea.objects.filter(id=self.area.id).exists())
+
+    def test_map_area_without_creator_delete_returns_404(self):
+        no_creator_area = MapArea.objects.create(
+            name="No Creator Delete Area",
+            north=36.7,
+            south=36.6,
+            east=140.8,
+            west=140.7,
+            grid_size_meters=1000,
+            created_by=None,
+        )
+        self.client.force_authenticate(user=self.user)
+        url = reverse("map-area-detail", kwargs={"area_id": no_creator_area.id})
+
+        response = self.client.delete(url)
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertTrue(MapArea.objects.filter(id=no_creator_area.id).exists())
 
 
 class MapAreaShareManagementViewTests(TestCase):
