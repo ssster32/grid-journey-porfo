@@ -166,10 +166,6 @@
                     詳細表示
                   </label>
                 </div>
-                <label class="map-image-field">
-                  Map image URL
-                  <input id="map-image-url" type="text" placeholder="/static/maps/demo-map.png" autocomplete="off">
-                </label>
                 <p id="score-map-ratio" class="score-map-ratio">area ratio fallback</p>
                 <div class="score-legend" aria-label="score legend">
                   <span><i class="legend-box score-low"></i>0-2.99</span>
@@ -205,11 +201,16 @@
               Map Preview では Shift + ドラッグで範囲選択できます。
               採点操作は「選択中のマス」パネルで行います。
             </p>
-            <div class="map-preview-legend" aria-label="Map Preview score legend">
-              <span><i class="legend-box score-low"></i>0-2.99</span>
-              <span><i class="legend-box score-middle"></i>3-5.99</span>
-              <span><i class="legend-box score-high"></i>6-7.99</span>
-              <span><i class="legend-box score-very-high"></i>8+</span>
+            <div class="map-preview-footer">
+              <div class="map-preview-legend" aria-label="Map Preview score legend">
+                <span><i class="legend-box score-low"></i>0-2.99</span>
+                <span><i class="legend-box score-middle"></i>3-5.99</span>
+                <span><i class="legend-box score-high"></i>6-7.99</span>
+                <span><i class="legend-box score-very-high"></i>8+</span>
+              </div>
+              <div class="selected-grid-external-actions">
+                <button id="clear-selected-grids" type="button" disabled>選択をすべて解除</button>
+              </div>
             </div>
           </section>
 
@@ -287,7 +288,6 @@
             </div>
             <div class="selected-grid-footer">
               <p id="selected-grid-note">再採点すると点数が更新されます。</p>
-              <button id="clear-selected-grids" type="button" disabled>選択をすべて解除</button>
             </div>
           </section>
         </section>

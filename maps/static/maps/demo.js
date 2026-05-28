@@ -48,7 +48,6 @@ const elements = {
   shareUsername: document.querySelector("#share-username"),
   shareMessage: document.querySelector("#share-message"),
   sharesList: document.querySelector("#shares-list"),
-  mapImageUrl: document.querySelector("#map-image-url"),
   scoreMapViewModeInputs: document.querySelectorAll('input[name="score-map-view-mode"]'),
   scoreMapRatio: document.querySelector("#score-map-ratio"),
   scoreMap: document.querySelector("#score-map"),
@@ -293,6 +292,7 @@ function initMapPreview() {
 
   state.leafletMap = window.L.map(elements.mapPreview, {
     scrollWheelZoom: false,
+    boxZoom: false,
   }).setView([35.69, 139.7], 11);
 
   window.L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
@@ -648,23 +648,6 @@ function applyScoreMapDensity(rowCount, colCount) {
   }
 
   elements.scoreMapStage.classList.add("is-density-normal");
-}
-
-function cssUrlValue(value) {
-  return `url("${value.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}")`;
-}
-
-function applyScoreMapBackgroundImage() {
-  const imageUrl = elements.mapImageUrl.value.trim();
-
-  if (!imageUrl) {
-    elements.scoreMapStage.classList.remove("has-map-image");
-    elements.scoreMapStage.style.removeProperty("--score-map-image");
-    return;
-  }
-
-  elements.scoreMapStage.style.setProperty("--score-map-image", cssUrlValue(imageUrl));
-  elements.scoreMapStage.classList.add("has-map-image");
 }
 
 async function readJsonResponse(response) {
@@ -1605,8 +1588,6 @@ elements.scoreMapViewModeInputs.forEach((input) => {
     applyScoreMapViewMode();
   });
 });
-elements.mapImageUrl.addEventListener("input", applyScoreMapBackgroundImage);
-
 elements.areasList.addEventListener("click", (event) => {
   const deleteButton = event.target.closest("[data-delete-area-id]");
   if (deleteButton) {
@@ -1686,7 +1667,6 @@ document.addEventListener("keydown", (event) => {
   }
 });
 
-applyScoreMapBackgroundImage();
 applyScoreMapViewMode();
 updateMapPreview();
 updateRatingMode();

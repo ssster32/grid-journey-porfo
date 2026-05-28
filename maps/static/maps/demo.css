@@ -414,18 +414,6 @@ label {
   min-height: auto;
 }
 
-.map-image-field {
-  width: min(320px, 100%);
-  margin: 0;
-  color: var(--muted);
-  text-align: left;
-}
-
-.map-image-field input {
-  min-height: 36px;
-  font-size: 0.88rem;
-}
-
 .score-map-ratio {
   margin: 0;
   color: var(--muted);
@@ -481,15 +469,6 @@ label {
     linear-gradient(90deg, rgba(23, 111, 92, 0.08) 1px, transparent 1px),
     linear-gradient(0deg, rgba(23, 111, 92, 0.08) 1px, transparent 1px);
   background-size: auto, 32px 32px, 32px 32px;
-}
-
-.score-map-stage.has-map-image .score-map-background {
-  background:
-    linear-gradient(rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0.16)),
-    var(--score-map-image);
-  background-position: center;
-  background-repeat: no-repeat;
-  background-size: 100% 100%;
 }
 
 .score-map {
@@ -795,11 +774,18 @@ label {
   font-size: 0.82rem;
 }
 
+.map-preview-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 8px;
+}
+
 .map-preview-legend {
   display: flex;
   flex-wrap: wrap;
   gap: 8px 12px;
-  margin-top: 8px;
   color: var(--muted);
   font-size: 0.82rem;
 }
@@ -808,6 +794,11 @@ label {
   display: inline-flex;
   align-items: center;
   gap: 5px;
+}
+
+.selected-grid-external-actions {
+  display: flex;
+  justify-content: flex-end;
 }
 
 .selected-grid-panel {
@@ -868,10 +859,6 @@ label {
 }
 
 .selected-grid-footer {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 10px;
   grid-column: 1 / -1;
   border-top: 1px solid var(--line);
   padding-top: 6px;
@@ -895,7 +882,6 @@ label {
 }
 
 #clear-selected-grids {
-  justify-self: end;
   min-width: 128px;
   min-height: 32px;
   padding: 4px 14px;
@@ -1058,11 +1044,19 @@ label {
     text-align: left;
   }
 
+  .map-preview-footer {
+    display: grid;
+  }
+
   .selected-grid-panel,
   .selected-grid-item,
   .selected-grid-title-row,
   .selected-grid-footer {
     grid-template-columns: 1fr;
+  }
+
+  .selected-grid-external-actions {
+    justify-content: stretch;
   }
 
   #selected-grid-label,
