@@ -1,5 +1,7 @@
 # 引き継ぎメモ
 
+更新日: 2026-05-28
+
 ## プロジェクト概要
 
 - Django REST Framework を使った地図採点 API。
@@ -33,22 +35,23 @@
 
 直近確認時点では、未コミット差分がある。
 
-主な未コミット差分:
+```text
+ M TASK.md
+ M maps/static/maps/demo.css
+ M maps/static/maps/demo.js
+ M maps/tests.py
+```
 
-- `README.md`
-- `TASK.md`
-- `maps/serializers.py`
-- `maps/static/maps/demo.html`
-- `maps/static/maps/demo.css`
-- `maps/static/maps/demo.js`
-- `maps/tests.py`
-- `memo.md`
+補足:
 
-直近の作業では、共有相手管理 API 実装後に demo ページから共有相手を追加・削除できる UI を追加し、その後メモグリッド一覧と Score Map の見た目を調整した。
+- `TASK.md` はユーザーがタスク指示を管理しているため、明示依頼がない限り編集しない。
+- `maps/static/maps/demo.css` には、直近までの UI 調整差分が残っている。
+- 直近タスクでは `maps/static/maps/demo.js` と `maps/tests.py` を変更した。
+- `models.py` と migration は直近タスクでは変更していない。
 
-## 実装済みモデル
+## 現在の主な実装状態
 
-`MapAreaShare` まで実装済み。
+### model
 
 実装済み:
 
@@ -59,7 +62,6 @@
 - `MapAreaShare`
   - どの `MapArea` をどのユーザーに共有しているかを表す。
   - `area` と `user` の組み合わせは一意。
-  - `area.shares` と `user.shared_map_areas` から参照できる。
 - `GridCell`
   - `MapArea` を一定距離幅で分割した 1 マス。
   - `area`, `row_index`, `col_index` の組み合わせで一意。
@@ -75,11 +77,11 @@
 - `maps/migrations/0002_gridrating.py`
 - `maps/migrations/0003_mapareashare.py`
 
-## 認証
+### 認証
 
 現在の地図 API はログイン必須。
 
-各 API view では基本的に次を使う。
+主に次を使う。
 
 ```python
 authentication_classes = [
@@ -99,23 +101,26 @@ permission_classes = [IsAuthenticated]
 
 JWT 認証はまだ実装しない方針。
 
-## 実装済み service
+### service
 
-### `generate_grid_cells_for_area(map_area)`
+実装済み:
 
-- `MapArea` の緯度経度範囲と `grid_size_meters` から `GridCell` を自動生成する。
-- 1 度を約 111000m として計算している。
-- `ceil()` を使い、端の半端な範囲も 1 マスとして生成する。
-- 既に対象 `MapArea` に `GridCell` がある場合は `ValueError` を返す。
-- `bulk_create()` でまとめて DB に保存する。
-- 地球の丸みや緯度による経度距離の違いはまだ考慮していない。
-
-### `update_grid_cell_score(grid_cell)`
-
-- 対象 `GridCell` の `GridRating` を集計する。
-- 採点がある場合は平均点と採点数を保存する。
-- `calculated_score` は `(initial_score + average_user_score) / 2`。
-- 採点が 0 件なら `calculated_score = initial_score` に戻す。
+- `calculate_bounds_from_center()`
+  - `center_lat` / `center_lng` / `grid_size_meters` / `rows` / `cols` から `north` / `south` / `east` / `west` を計算する。
+  - 経度方向は `cos(latitude)` を使って概算する。
+- `validate_center_grid_limits()`
+  - 一般ユーザー向けの作成上限を確認する。
+  - 現在は最大 500 マス、南北 30,000m、東西 30,000m。
+  - staff ユーザーはこの制限の対象外。
+- `generate_grid_cells_for_area()`
+  - `MapArea` から `GridCell` を自動生成する。
+  - 中心座標方式では、呼び出し側が指定した `rows` / `cols` / `lat_step` / `lng_step` を使う。
+  - 既に対象 `MapArea` に `GridCell` がある場合は `ValueError`。
+- `update_grid_cell_score()`
+  - 対象 `GridCell` の `GridRating` を集計する。
+  - 採点がある場合は平均点と採点数を保存する。
+  - `calculated_score` は `(initial_score + average_user_score) / 2`。
+  - 採点が 0 件なら `calculated_score = initial_score` に戻す。
 
 ## 実装済み API
 
@@ -125,12 +130,15 @@ JWT 認証はまだ実装しない方針。
 POST /api/maps/areas/
 ```
 
+- 入力は中心座標方式。
+- `north` / `south` / `east` / `west` は作成入力では指定できない。
+- `center_lat` / `center_lng` / `grid_size_meters` / `rows` / `cols` を指定する。
 - ログイン中ユーザーで `MapArea` を作成する。
 - `created_by` はリクエストから受け取らず、サーバー側で `request.user` を入れる。
-- 作成後、同じ transaction 内で `generate_grid_cells_for_area(area)` を呼び、`GridCell` も自動生成する。
+- 作成後、同じ transaction 内で `generate_grid_cells_for_area(area, ...)` を呼び、`GridCell` も自動生成する。
 - GridCell 生成に失敗した場合、MapArea だけが保存される状態にはしない。
-- 一般ユーザーは、緯度差または経度差が 20 分を超えるメモグリッドを作成できない。
-- 管理者はこの 20 分制限の対象外。
+- 一般ユーザーは、最大 500 マス、南北 30,000m、東西 30,000m を超えるメモグリッドを作成できない。
+- 管理者はこの制限の対象外。
 
 ### MapArea 一覧 API
 
@@ -155,6 +163,16 @@ GET /api/maps/areas/{area_id}/
 - 共有されていない他ユーザーの `MapArea`、存在しない ID は `404 Not Found`。
 - `created_by=None` の `MapArea` も、自分に共有されていれば取得できる。
 
+### MapArea 削除 API
+
+```text
+DELETE /api/maps/areas/{area_id}/
+```
+
+- 作成者だけ削除できる。
+- 共有されたユーザーは削除できない。
+- 削除成功時は `204 No Content`。
+
 ### GridCell 自動生成 API
 
 ```text
@@ -166,6 +184,7 @@ POST /api/maps/areas/{area_id}/grids/
 - 共有されたユーザーは実行できない。
 - 他ユーザーの `MapArea` や `created_by is None` の `MapArea` は `403 Forbidden`。
 - 既に `GridCell` がある場合は `400 Bad Request`。
+- 通常は MapArea 作成時に自動生成されるため、demo では「GridCell を自動生成」ボタンは不要。
 
 ### 点数付きグリッド一覧 API
 
@@ -234,20 +253,24 @@ demo ページ自体は認証なしで表示できる。
 現在できること:
 
 - username/password 入力。
-- MapArea 作成。
-- MapArea 一覧取得。
-- MapArea 選択。
+- メモグリッド作成。
+- メモグリッド一覧取得。
+- メモグリッド選択。
 - MapArea 作成後の GridCell 自動生成。
 - GridCell 一覧取得。
 - 単体採点。
+- 一括採点。
 - 採点後の GridCell 一覧再取得。
 - `calculated_score` に応じた Score Map の色分け表示。
-- Score Map 背景画像 URL の指定。
 - 共有相手一覧取得。
 - 共有相手 username による共有追加。
 - 共有相手一覧から共有解除。
+- メモグリッド削除。
 - Score Map のマスクリックによる GridCell 選択。
-- 選択中 GridCell の採点パネルからの単体採点。
+- Score Map のドラッグ範囲選択。
+- Map Preview 上の GridCell クリック選択。
+- Map Preview 上の Shift + ドラッグ範囲選択。
+- 選択中 GridCell の採点パネルからの複数採点。
 
 メモグリッド一覧表示:
 
@@ -256,6 +279,7 @@ demo ページ自体は認証なしで表示できる。
 - ボタン右下に `display_type / 作成者: ...` を小さめに表示。
 - 自分のメモグリッドは `作成者: 自分`。
 - 共有メモグリッドは `作成者: <created_by_username>`。
+- 作成者本人のメモグリッドだけ削除ボタンを表示する。
 
 Score Map:
 
@@ -264,20 +288,73 @@ Score Map:
 - 正確な地図投影や外部地図表示はまだ行わない。
 - `row_index` / `col_index` に対応した簡易グリッド配置は維持。
 - 各マスは `calculated_score` を表示する。
-- 各マスはクリック可能。
-- クリックしたマスは選択状態になり、採点パネルに GridCell 情報が表示される。
-- スコア文字は以前より小さめ。
-- スコア値に応じて文字色を変えている。
-- グリッド自体の背景色は控えめにしている。
+- スコア文字は小さめで、スコア値に応じて文字色を変えている。
+- グリッド自体の背景色は控えめ。
 - `GridCell ID`、`row/col` は確認用に小さく表示。
-- テーブルの `calculated_score` にも色付きバッジを表示。
+- 表示モードは `全体表示` / `詳細表示`。
 
-共有操作の確認結果:
+選択中のマスパネル:
 
-- `testuser` で demo ページから共有相手 `otheruser` を追加できた。
-- `otheruser` に切り替えるには、demo ページ上部の認証欄を `otheruser` / `other-password` に変更する。
-- 共有後、`otheruser` で共有メモグリッドの閲覧・GridCell 表示・採点を確認できた。
-- `testuser` に戻って共有解除できた。
+- Score Map または Map Preview で選択した GridCell を表示する。
+- 行/列は画面上では 1 始まりの「縦/横」として表示する。
+- 再採点すると点数が更新される旨を表示する。
+- 採点に時間がかかる時は、メッセージ横にスピナーを表示する。
+- 採点後は選択が外れる。
+- `選択をすべて解除` ボタンは Map Preview の凡例横に配置している。
+
+Map Preview:
+
+- Leaflet ベース。
+- OpenStreetMap タイルを CDN から読み込む。
+- 選択中メモグリッドの `north/south/east/west` から範囲を作り、Leaflet 上に四角で表示する。
+- GridCell 境界を薄い rectangle として重ねる。
+- GridCell rectangle は `calculated_score` に応じて色分けする。
+- 地図タイルが見えるように、GridCell rectangle の塗りは薄め。
+- Map Preview の高さは Score Map に近い大きめの表示範囲に調整済み。
+- Map image URL 入力は削除済み。
+
+## 直近の作業: 2026-05-28 Map Preview 初期表示調整
+
+目的:
+
+- Map Preview の初期表示で、MapArea の長い方の辺が表示枠の約 95% 程度になるように調整した。
+
+変更内容:
+
+- `maps/static/maps/demo.js`
+  - `MAP_PREVIEW_TARGET_FILL_RATIO = 0.95` を追加。
+  - `MAP_PREVIEW_MIN_FIT_PADDING = 4` を追加。
+  - `mapPreviewFitPadding()` を追加。
+  - `elements.mapPreview.getBoundingClientRect()` で Map Preview の実サイズを取得し、`fitBounds()` 用 padding を動的に計算するようにした。
+  - `fitBounds()` 前に `invalidateSize()` を呼ぶようにした。
+  - `fitBounds()` に `padding: mapPreviewFitPadding()` と `maxZoom: MAP_PREVIEW_MAX_ZOOM` を渡すようにした。
+  - 追加ズーム処理を削除した。
+  - `zoomSnap: 0.25` / `zoomDelta: 0.25` を Leaflet map 作成時に追加した。
+- `maps/tests.py`
+  - demo 用 JS に、動的 padding、`zoomSnap`、`zoomDelta`、追加ズーム削除が反映されていることを確認するテストを追加した。
+
+確認済み:
+
+```bash
+node --check maps/static/maps/demo.js
+.venv/bin/python manage.py check
+.venv/bin/python manage.py test maps.tests.MapDemoViewTests
+git diff --check -- maps/static/maps/demo.js maps/static/maps/demo.css maps/static/maps/demo.html maps/tests.py
+.venv/bin/python manage.py test maps
+```
+
+結果:
+
+- `node --check` OK。
+- `System check identified no issues`。
+- `MapDemoViewTests` OK。
+- `maps` 全体テスト OK。
+- 直近確認時点では `213 tests` 通過。
+
+未確認:
+
+- 実ブラウザで、広め/狭め/縦長/横長のメモグリッドを選択した時に Map Preview の初期表示が約 95% 程度に見えるか。
+- 外部 CDN が使えない環境では Leaflet タイル表示自体は確認しにくい。
 
 ## README の現状
 
@@ -285,251 +362,37 @@ README には以下を記載済み。
 
 - セットアップ手順。
 - Token 認証手順。
-- MapArea 作成と GridCell 自動生成。
+- 中心座標方式での MapArea 作成。
+- MapArea 作成時の GridCell 自動生成。
 - 単体採点、一括採点。
 - MapArea 閲覧制限。
 - 他ユーザーでは採点できないことの確認。
 - 共有相手管理 API の curl 手動確認。
 - demo ページでの共有相手管理確認。
-- Score Map 背景画像 URL の使い方。
+- demo 操作手順。
+- 削除 API の手動確認。
 
-## 2026-05-25 Score Map クリック採点対応
+## 次にやるとよいこと
 
-- Score Map のマスをクリックして GridCell を選択できるようにした。
-- 選択中 GridCell を demo ページ内の `選択中のマス` パネルから採点できるようにした。
-- 採点 API 呼び出し処理を `submitRating()` に寄せ、既存のテーブル採点と採点パネルの両方から使う形にした。
-- 採点後は `loadGrids()` で GridCell 一覧と Score Map を再読み込みする。
-- 再読み込み後も対象 GridCell が存在すれば選択状態を維持する。
-- メモグリッド切り替え時は選択中 GridCell をリセットする。
-- README の demo 確認手順に、Score Map クリック採点の確認を追加した。
+優先候補:
 
-確認:
+1. 実ブラウザで Map Preview の初期表示を手動確認する。
+2. Map Preview と Score Map の選択状態・色味・表示サイズが説明用に見やすいか確認する。
+3. README の demo 操作手順が、現在の UI と完全に一致しているか見直す。
+4. 共有メモグリッドで、閲覧・採点・削除不可・共有管理不可が demo 上でも直感的に分かるか確認する。
 
-```bash
-node --check maps/static/maps/demo.js
-.venv/bin/python manage.py test maps.tests.MapDemoViewTests
-.venv/bin/python manage.py check
-git diff --check -- maps/static/maps/demo.html maps/static/maps/demo.js maps/static/maps/demo.css maps/tests.py README.md memo.md
-.venv/bin/python manage.py test maps
-```
+まだ大きめに残っている設計課題:
 
-結果:
-
-- `MapDemoViewTests` 通過。
-- `150 tests` 通過。
-- `System check identified no issues`。
-
-次:
-
-- ブラウザで Score Map のマス選択、採点パネル採点、テーブル採点、共有メモグリッドでの採点を手動確認するとよい。
-- 必要に応じて、選択中マスの枠線や採点パネルの位置を微調整する。
-
-## 直近の確認コマンド
-
-直近作業で確認済み:
-
-```bash
-node --check maps/static/maps/demo.js
-.venv/bin/python manage.py test maps.tests.MapDemoViewTests
-.venv/bin/python manage.py check
-git diff --check -- maps/static/maps/demo.html maps/static/maps/demo.js maps/static/maps/demo.css maps/tests.py README.md memo.md
-```
-
-直近の全体テスト:
-
-```bash
-.venv/bin/python manage.py test maps
-```
-
-結果:
-
-- `150 tests` 通過。
-- `System check identified no issues`。
-
-## 2026-05-25 Score Map 複数選択採点対応
-
-- Score Map のマスを複数選択できるようにした。
-- 選択済みのマスをもう一度クリックすると、選択解除できるようにした。
-- `選択中のマス` パネルに、選択数、選択中 GridCell 一覧、個別 score 入力欄、選択解除ボタンを表示するようにした。
-- 採点方式として、`個別に入力し、まとめて採点` と `選択グリッドを全て同じ値で採点` を選べるようにした。
-- 個別入力方式では、単体採点 API を複数回呼び、最後に GridCell を再読み込みする。
-- 同じ値方式では、一括採点 API を使う。
-- 下部の表形式採点 UI は使わず、Score Map と選択中マスパネルで採点する流れに寄せた。
-- README の demo ページ確認手順を、複数選択採点の流れに更新した。
-
-確認:
-
-```bash
-node --check maps/static/maps/demo.js
-.venv/bin/python manage.py check
-.venv/bin/python manage.py test maps.tests.MapDemoViewTests
-git diff --check -- maps/static/maps/demo.html maps/static/maps/demo.js maps/static/maps/demo.css maps/tests.py README.md memo.md
-.venv/bin/python manage.py test maps
-```
-
-ブラウザ確認:
-
-- `http://127.0.0.1:8001/api/maps/demo/` で demo ページを開き、複数選択用 UI が表示されることを確認した。
-- 旧単体採点フォームと下部テーブル用 `grids-body` が表示されていないことを確認した。
-
-次:
-
-- ブラウザで Score Map の複数選択、個別入力まとめ採点、同じ値での一括採点を手動確認するとよい。
-- 必要に応じて、ドラッグ選択や矩形選択を検討する。
-
-## 2026-05-25 Score Map 表示モード対応
-
-- Score Map に `全体表示` / `詳細表示` を追加した。
-- 初期表示は `全体表示`。
-- 全体表示では、CSS Grid ベースのまま Score Map 全体が表示枠内に収まるようにした。
-- 詳細表示では、1マスの最低サイズを確保し、縦横スクロールで GridCell を確認できるようにした。
-- Score Map 周りを `stage / background / grid-layer` として扱いやすい構造に整理した。
-- GridCell の緯度経度から絶対配置する方式は、次回以降の検討に残した。
-- README の demo ページ確認手順に、表示モードと `grid_size_meters` の扱いを短く追記した。
-
-確認:
-
-```bash
-node --check maps/static/maps/demo.js
-.venv/bin/python manage.py check
-.venv/bin/python manage.py test maps.tests.MapDemoViewTests
-git diff --check -- maps/static/maps/demo.html maps/static/maps/demo.js maps/static/maps/demo.css maps/tests.py README.md memo.md
-.venv/bin/python manage.py test maps
-```
-
-ブラウザ確認:
-
-- `http://127.0.0.1:8001/api/maps/demo/` で demo ページを開いた。
-- `表示モード`、`全体表示`、`詳細表示`、`score-map-grid-layer` が表示されることを確認した。
-- `詳細表示` に切り替えると `score-map-wrap` / `score-map-stage` に `is-detail` が付き、`全体表示` に戻すと `is-fit` が付くことを確認した。
-
-次:
-
-- ブラウザで GridCell 数が多いメモグリッドを開き、全体表示と詳細表示の切り替えを手動確認するとよい。
-- 必要に応じて、GridCell の `north/south/east/west` を使った割合配置方式を検討する。
-
-## 2026-05-25 Score Map ドラッグ範囲選択対応
-
-- Score Map 上でドラッグした範囲内の GridCell をまとめて選択できるようにした。
-- ドラッグ中は `score-selection-rect` で選択範囲を矩形表示する。
-- ドラッグ範囲選択は追加選択として扱い、既存の選択済み GridCell は維持する。
-- クリック選択・クリック解除、選択中 GridCell 一覧、複数選択採点は引き続き動作する。
-- README の demo ページ確認手順に、ドラッグ範囲選択の確認を短く追記した。
-
-確認:
-
-```bash
-node --check maps/static/maps/demo.js
-.venv/bin/python manage.py check
-.venv/bin/python manage.py test maps.tests.MapDemoViewTests
-git diff --check -- maps/static/maps/demo.html maps/static/maps/demo.js maps/static/maps/demo.css maps/tests.py README.md memo.md
-.venv/bin/python manage.py test maps
-```
-
-ブラウザ確認:
-
-- `http://127.0.0.1:8001/api/maps/demo/` で demo ページを開いた。
-- `score-selection-rect` が存在し、初期状態では非表示、`position: absolute`、`pointer-events: none` であることを確認した。
-
-次:
-
-- ブラウザで全体表示・詳細表示それぞれのドラッグ範囲選択を手動確認するとよい。
-- 必要に応じて、Shift クリック選択、範囲外への自動スクロール、矩形選択解除を検討する。
-
-## 2026-05-25 Leaflet Map Preview 対応
-
-- demo ページに Leaflet ベースの `Map Preview` を追加した。
-- 選択中メモグリッドの `north/south/east/west` から範囲を作り、Leaflet 上に四角で表示する。
-- 既存の CSS Grid ベースの `Score Map` は残し、GridCell の表示・選択・採点は引き続き Score Map 側で行う。
-- Leaflet と OpenStreetMap タイルは CDN 読み込み。README には開発確認用で、本番利用時はタイル提供元の利用条件を確認する旨を追記した。
-- Map Preview の表示崩れ対策として、Leaflet の pane / tile / SVG を配置する最低限の CSS を `demo.css` 側にも追加した。
-- GridCell 一覧取得後、各 GridCell の `north/south/east/west` を Leaflet の薄い rectangle として Map Preview に重ねるようにした。
-- メモグリッド切り替え時や GridCell が空の時は、古い GridCell 境界を消す。
-
-確認:
-
-```bash
-node --check maps/static/maps/demo.js
-.venv/bin/python manage.py check
-.venv/bin/python manage.py test maps.tests.MapDemoViewTests
-git diff --check -- maps/static/maps/demo.html maps/static/maps/demo.js maps/static/maps/demo.css maps/tests.py README.md memo.md
-.venv/bin/python manage.py test maps
-```
-
-ブラウザ確認:
-
-- `http://127.0.0.1:8001/api/maps/demo/` で demo ページを開いた。
-- `Map Preview` 枠、未選択メッセージ、既存の `Score Map` が表示されることを確認した。
-- この実行環境では外部 CDN が読み込めず、Leaflet の地図描画自体は未確認。
-
-次にやるとよいこと:
-
-- ブラウザでメモグリッド選択時に Map Preview の範囲表示と GridCell 境界が更新されることを確認する。
-- 必要に応じて、Score Map の選択状態を Map Preview 側にも薄く反映するか検討する。
-
-## 2026-05-26 Leaflet Map Preview スコア色分け対応
-
-- Leaflet Map Preview 上の GridCell rectangle を `calculated_score` に応じて色分け表示するようにした。
-- 色分け基準は Score Map と同じく、0-2.99 / 3-5.99 / 6-7.99 / 8+。
-- 地図タイルが見えるように、GridCell rectangle の塗りは薄めにした。
-- Map Preview は引き続き表示専用で、GridCell の選択・採点は Score Map 側で行う。
-- 採点後の `loadGrids()` により、Map Preview 側の色分けも更新される。
-
-確認:
-
-```bash
-node --check maps/static/maps/demo.js
-.venv/bin/python manage.py check
-.venv/bin/python manage.py test maps.tests.MapDemoViewTests
-git diff --check -- maps/static/maps/demo.html maps/static/maps/demo.js maps/static/maps/demo.css maps/tests.py README.md memo.md
-.venv/bin/python manage.py test maps
-```
-
-ブラウザ確認:
-
-- `http://127.0.0.1:8001/api/maps/demo/` で demo ページを開いた。
-- `Map Preview` 枠、色分け説明、凡例、既存の `Score Map` が表示されることを確認した。
-- この実行環境では外部 CDN が読み込めず、Leaflet の地図描画自体は未確認。
-
-次にやるとよいこと:
-
-- Leaflet 上の GridCell クリック選択を、既存の `selectedGridIds` と連動するか検討する。
-- Map Preview の色が濃すぎないか、実ブラウザで地図タイルと合わせて確認する。
-
-## 2026-05-26 Leaflet Map Preview 追加ズーム対応
-
-- MapArea が小さい場合、Leaflet の `fitBounds()` 後に追加で少しズームインするようにした。
-- 追加ズームは緯度差・経度差が一定以下の場合だけ行う。
-- 追加ズーム済みの MapArea ID を記録し、同じ MapArea では追加ズームを一度だけ行う。
-- `MAP_PREVIEW_MAX_ZOOM` を超えないようにした。
-- この変更は表示上の調整であり、`grid_size_meters` や GridCell 生成ロジックは変更していない。
-
-確認:
-
-```bash
-node --check maps/static/maps/demo.js
-.venv/bin/python manage.py check
-.venv/bin/python manage.py test maps.tests.MapDemoViewTests
-git diff --check -- maps/static/maps/demo.js README.md memo.md
-.venv/bin/python manage.py test maps
-```
-
-ブラウザ確認:
-
-- `http://127.0.0.1:8001/api/maps/demo/` で demo ページを開いた。
-- `Map Preview` 枠と既存の `Score Map` が表示されることを確認した。
-- この実行環境では外部 CDN が読み込めず、Leaflet の追加ズーム動作自体は未確認。
-
-次にやるとよいこと:
-
-- 必要に応じて MapArea 外枠の太さや Map Preview の高さを調整する。
-- 実ブラウザで小さめ/広めのメモグリッドを切り替え、寄り具合を確認する。
+- ワールドグリッド用の `is_public` は未実装。
+- ユーザー検索 API、username オートコンプリート、email 共有は未実装。
+- Map Preview は CDN の Leaflet / OpenStreetMap タイルに依存しているため、本番向けの地図タイル利用方針は未確定。
+- GridCell 生成は概算計算であり、正確な地図投影までは扱っていない。
 
 ## 注意点
 
 - `models.py` と migration は、指示がない限り変更しない。
 - `created_by=None` は public 扱いしない。
 - 共有されたユーザーは閲覧・採点だけ可能。
-- GridCell 自動生成と共有相手管理は作成者だけ可能。
+- GridCell 自動生成、削除、共有相手管理は作成者だけ可能。
 - ワールドグリッド用の `is_public` はまだ未実装。
-- ユーザー検索 API、username オートコンプリート、email 共有はまだ未実装。
+- セキュリティ関連、認証方式、外部地図 API キーを触る場合は、作業前に影響を説明する。

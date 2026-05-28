@@ -15,12 +15,12 @@ const state = {
   mapAreaRectangle: null,
   gridBoundaryLayer: null,
   mapGridRectanglesById: new Map(),
+  mapGridScoreLabelsById: new Map(),
   isLeafletDragSelecting: false,
   leafletDragSelectStartLatLng: null,
   leafletDragSelectStartPoint: null,
   leafletDragSelectRectangle: null,
   suppressNextMapGridClick: false,
-  extraZoomedAreaIds: new Set(),
 };
 
 const elements = {
@@ -75,10 +75,9 @@ const FALLBACK_AREA_ASPECT_RATIO = 1.4;
 const MIN_AREA_ASPECT_RATIO = 0.6;
 const MAX_AREA_ASPECT_RATIO = 2.2;
 const DRAG_SELECT_THRESHOLD = 5;
-const MAP_PREVIEW_EXTRA_ZOOM = 1;
+const MAP_PREVIEW_TARGET_FILL_RATIO = 0.95;
+const MAP_PREVIEW_MIN_FIT_PADDING = 4;
 const MAP_PREVIEW_MAX_ZOOM = 19;
-const MAP_PREVIEW_EXTRA_ZOOM_MAX_LAT_DIFF = 0.02;
-const MAP_PREVIEW_EXTRA_ZOOM_MAX_LNG_DIFF = 0.02;
 const MAP_PREVIEW_SCORE_STYLES = {
   low: {
     color: "#4d6372",
@@ -246,38 +245,62 @@ function gridCellLatLngBounds(grid) {
   return window.L.latLngBounds(bounds);
 }
 
-function shouldApplyExtraMapPreviewZoom(area) {
-  const latDiff = Math.abs(Number(area.north) - Number(area.south));
-  const lngDiff = Math.abs(Number(area.east) - Number(area.west));
+function gridCellCenterLatLng(grid) {
+  const north = Number(grid.north);
+  const south = Number(grid.south);
+  const east = Number(grid.east);
+  const west = Number(grid.west);
 
-  if (!Number.isFinite(latDiff) || !Number.isFinite(lngDiff)) {
-    return false;
+  if (
+    !Number.isFinite(north) ||
+    !Number.isFinite(south) ||
+    !Number.isFinite(east) ||
+    !Number.isFinite(west) ||
+    north <= south ||
+    east <= west
+  ) {
+    return null;
   }
 
-  return (
-    latDiff <= MAP_PREVIEW_EXTRA_ZOOM_MAX_LAT_DIFF &&
-    lngDiff <= MAP_PREVIEW_EXTRA_ZOOM_MAX_LNG_DIFF
-  );
+  return [(north + south) / 2, (east + west) / 2];
 }
 
-function applyExtraMapPreviewZoom(area) {
-  const areaId = Number(area.id);
-  if (state.extraZoomedAreaIds.has(areaId)) {
-    return;
-  }
-  if (!shouldApplyExtraMapPreviewZoom(area)) {
-    return;
+function mapGridScoreLabelIcon(score) {
+  const formattedScore = formatNumber(score) || "0";
+
+  return window.L.divIcon({
+    className: `map-preview-score-label ${scoreClass(score)}`,
+    html: `<span>${escapeHtml(formattedScore)}</span>`,
+    iconSize: [32, 20],
+    iconAnchor: [16, 10],
+  });
+}
+
+function mapPreviewFitPadding() {
+  const rect = elements.mapPreview.getBoundingClientRect();
+  const width = rect.width;
+  const height = rect.height;
+
+  if (
+    !Number.isFinite(width) ||
+    !Number.isFinite(height) ||
+    width <= 0 ||
+    height <= 0
+  ) {
+    return [8, 8];
   }
 
-  const currentZoom = state.leafletMap.getZoom();
-  if (!Number.isFinite(currentZoom)) {
-    return;
-  }
-
-  state.leafletMap.setZoom(
-    Math.min(currentZoom + MAP_PREVIEW_EXTRA_ZOOM, MAP_PREVIEW_MAX_ZOOM)
+  const paddingRatio = (1 - MAP_PREVIEW_TARGET_FILL_RATIO) / 2;
+  const xPadding = Math.max(
+    MAP_PREVIEW_MIN_FIT_PADDING,
+    Math.round(width * paddingRatio)
   );
-  state.extraZoomedAreaIds.add(areaId);
+  const yPadding = Math.max(
+    MAP_PREVIEW_MIN_FIT_PADDING,
+    Math.round(height * paddingRatio)
+  );
+
+  return [yPadding, xPadding];
 }
 
 function initMapPreview() {
@@ -293,6 +316,8 @@ function initMapPreview() {
   state.leafletMap = window.L.map(elements.mapPreview, {
     scrollWheelZoom: false,
     boxZoom: false,
+    zoomSnap: 0.25,
+    zoomDelta: 0.25,
   }).setView([35.69, 139.7], 11);
 
   window.L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
@@ -312,6 +337,7 @@ function clearMapGridBoundaries() {
     state.gridBoundaryLayer.clearLayers();
   }
   state.mapGridRectanglesById.clear();
+  state.mapGridScoreLabelsById.clear();
 }
 
 function mapGridBoundaryLayer() {
@@ -369,6 +395,18 @@ function updateMapGridBoundaries(grids) {
     });
     rectangle.addTo(boundaryLayer);
     state.mapGridRectanglesById.set(gridId, rectangle);
+
+    const centerLatLng = gridCellCenterLatLng(grid);
+    if (centerLatLng) {
+      const scoreLabel = window.L.marker(centerLatLng, {
+        icon: mapGridScoreLabelIcon(grid.calculated_score),
+        interactive: false,
+        keyboard: false,
+      });
+
+      scoreLabel.addTo(boundaryLayer);
+      state.mapGridScoreLabelsById.set(gridId, scoreLabel);
+    }
   });
 
   highlightSelectedMapGridBoundaries();
@@ -411,12 +449,19 @@ function updateMapPreview() {
     weight: 2,
     fill: false,
   }).addTo(state.leafletMap);
-  state.leafletMap.fitBounds(bounds, { padding: [20, 20] });
-  applyExtraMapPreviewZoom(area);
+  state.leafletMap.invalidateSize();
+  state.leafletMap.fitBounds(bounds, {
+    padding: mapPreviewFitPadding(),
+    maxZoom: MAP_PREVIEW_MAX_ZOOM,
+  });
   elements.mapPreviewStatus.textContent = `選択中 MapArea: #${area.id} ${area.name}`;
 
   window.setTimeout(() => {
     state.leafletMap.invalidateSize();
+    state.leafletMap.fitBounds(bounds, {
+      padding: mapPreviewFitPadding(),
+      maxZoom: MAP_PREVIEW_MAX_ZOOM,
+    });
   }, 0);
 }
 
@@ -1450,8 +1495,13 @@ function readMultiRatingMode() {
 
 function updateRatingMode() {
   const mode = readMultiRatingMode();
-  elements.individualRatingForm.hidden = mode !== "individual";
-  elements.sameScoreRatingForm.hidden = mode !== "same";
+  const isIndividualMode = mode === "individual";
+  const isSameMode = mode === "same";
+
+  elements.individualRatingForm.hidden = !isIndividualMode;
+  elements.sameScoreRatingForm.hidden = !isSameMode;
+  elements.individualRatingSubmit.hidden = !isIndividualMode;
+  elements.sameScoreRatingSubmit.hidden = !isSameMode;
 }
 
 function readIndividualScores() {

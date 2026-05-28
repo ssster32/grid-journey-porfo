@@ -638,8 +638,8 @@ label {
 
 .map-preview {
   position: relative;
-  height: 320px;
-  min-height: 320px;
+  height: 520px;
+  min-height: 520px;
   overflow: hidden;
   border: 1px solid var(--map-line);
   border-radius: 8px;
@@ -707,6 +707,37 @@ label {
 .map-preview .map-preview-grid-boundary {
   cursor: pointer;
   pointer-events: auto;
+}
+
+.map-preview-score-label {
+  pointer-events: none;
+  text-align: center;
+}
+
+.map-preview-score-label span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+  text-shadow: 0 1px 2px rgba(255, 255, 255, 0.34);
+}
+
+.map-preview-score-label.score-low span {
+  color: #4d6372;
+}
+
+.map-preview-score-label.score-middle span {
+  color: #9a6b00;
+}
+
+.map-preview-score-label.score-high span {
+  color: #25733a;
+}
+
+.map-preview-score-label.score-very-high span {
+  color: #0d5f4e;
 }
 
 .map-preview.is-leaflet-drag-selecting,
