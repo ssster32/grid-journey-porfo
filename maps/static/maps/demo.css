@@ -710,6 +710,8 @@ label {
 }
 
 .map-preview-score-label {
+  background: transparent;
+  border: 0;
   pointer-events: none;
   text-align: center;
 }
@@ -724,19 +726,27 @@ label {
   text-shadow: 0 1px 2px rgba(255, 255, 255, 0.34);
 }
 
-.map-preview-score-label.score-low span {
+.map-preview.is-large-score-label .map-preview-score-label span {
+  font-size: 13px;
+}
+
+.map-preview.is-extra-large-score-label .map-preview-score-label span {
+  font-size: 15px;
+}
+
+.map-preview-score-label.map-preview-score-low span {
   color: #4d6372;
 }
 
-.map-preview-score-label.score-middle span {
+.map-preview-score-label.map-preview-score-middle span {
   color: #9a6b00;
 }
 
-.map-preview-score-label.score-high span {
+.map-preview-score-label.map-preview-score-high span {
   color: #25733a;
 }
 
-.map-preview-score-label.score-very-high span {
+.map-preview-score-label.map-preview-score-very-high span {
   color: #0d5f4e;
 }
 

@@ -992,7 +992,16 @@ class MapDemoViewTests(TestCase):
         self.assertIn("mapGridScoreLabelsById", demo_js)
         self.assertIn("gridCellCenterLatLng", demo_js)
         self.assertIn("mapGridScoreLabelIcon", demo_js)
+        self.assertIn("mapPreviewScoreLabelClass", demo_js)
         self.assertIn("map-preview-score-label", demo_js)
+        self.assertIn("map-preview-score-low", demo_js)
+        self.assertIn("map-preview-score-middle", demo_js)
+        self.assertIn("map-preview-score-high", demo_js)
+        self.assertIn("map-preview-score-very-high", demo_js)
+        self.assertNotIn(
+            "className: `map-preview-score-label ${scoreClass(score)}`",
+            demo_js,
+        )
         self.assertIn("const isIndividualMode = mode === \"individual\"", demo_js)
         self.assertIn("const isSameMode = mode === \"same\"", demo_js)
         self.assertIn("elements.individualRatingSubmit.hidden", demo_js)
@@ -1002,6 +1011,11 @@ class MapDemoViewTests(TestCase):
         self.assertIn("data-delete-area-id", demo_js)
         self.assertIn("関連するGridCell、採点、共有設定も削除されます", demo_js)
         self.assertIn(".map-preview-score-label", demo_css)
+        self.assertIn(".map-preview-score-label.map-preview-score-low", demo_css)
+        self.assertIn(".map-preview-score-label.map-preview-score-middle", demo_css)
+        self.assertIn(".map-preview-score-label.map-preview-score-high", demo_css)
+        self.assertIn(".map-preview-score-label.map-preview-score-very-high", demo_css)
+        self.assertIn("background: transparent", demo_css)
         self.assertIn("pointer-events: none", demo_css)
         self.assertIn(".area-delete-button", demo_css)
 

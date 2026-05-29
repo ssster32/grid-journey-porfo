@@ -1,416 +1,331 @@
-# Codex タスク: Map Preview 上の GridCell に calculated_score を表示する
+# Codex タスク: MapArea生成時の initial_score 自動判定方針と補正値入力の設計を整理する
 
 ## 担当ロール
 
-今回は **Frontend Developer** と **Tester** として作業してください。
+今回は **System Designer** と **Backend Designer** として作業してください。
 
-demoページの Leaflet Map Preview 上に表示している各 GridCell について、セル中央付近に `calculated_score` を表示してください。
+MapArea生成時に設定される `initial_score` について、今後の自動判定を見据えた設計方針を整理してください。
 
-現在、Map Preview では GridCell 境界が `calculated_score` に応じて色分けされています。  
-しかし、地図上では具体的な点数が見えないため、Score Map を見なくても Map Preview 上でスコア分布を確認しやすいようにします。
+ただし、今回は実装ではなく **設計整理のみ** を行ってください。
+
+今回すぐに実装する前提ではなく、次以降の実装タスクに分割しやすいように、設計方針・用語・入力項目・今後の実装順を整理してください。
 
 ## レート制限節約の方針
 
 今回はレート制限節約を優先してください。
 
-- 変更範囲を必要最小限にしてください。
-- バックエンドAPIは変更しないでください。
-- model / serializer / view / service は変更しないでください。
-- README.md / API_SPEC.md / memo.md は変更しないでください。
-- Map Preview 上の点数表示追加に集中してください。
-- GridCell選択・採点・共有・削除機能は変更しないでください。
-- Map Preview のズーム調整処理は変更しないでください。
-- 実装後の報告は短くしてください。
+- コード変更はしないでください。
+- ファイル編集は原則しないでください。
+- 既存コードの大規模調査はしないでください。
+- 必要な場合のみ、現在の仕様を把握するために最小限のファイルを確認してください。
+- 設計結果はチャット欄に Markdown で出力してください。
+- README.md / API_SPEC.md / memo.md / TASK.md には書き込まないでください。
+- 実装タスクに分割できる粒度で、簡潔にまとめてください。
 
 ## 作業前に読むファイル
 
-まず、次のファイルだけを確認してください。
+まず、必要最小限で以下を確認してください。
 
 - `AGENTS.md`
 - `RULES.md`
-- `maps/static/maps/demo.js`
-- `maps/static/maps/demo.css`
-- `maps/tests.py`
-
-必要がある場合のみ、次を確認してください。
-
-- `maps/static/maps/demo.html`
-
-今回は、以下のファイルは原則として読まなくてよいです。
-
 - `maps/models.py`
 - `maps/serializers.py`
 - `maps/views.py`
 - `maps/services.py`
-- `README.md`
+- `maps/static/maps/demo.js`
 - `API_SPEC.md`
+
+必要がある場合のみ、以下を確認してください。
+
+- `README.md`
+- `maps/tests.py`
+
+今回は以下のファイルは編集しないでください。
+
 - `memo.md`
+- `TASK.md`
 
-## 今回の目的
+## 背景
 
-Map Preview 上の各 GridCell に、表示用スコアである `calculated_score` を表示します。
+現在、GridCell には `initial_score` が存在しています。
 
-期待する挙動:
+今後は、MapArea生成時に各GridCellの `initial_score` を自動判定できるようにしたいです。
+
+ただし、いきなり外部地図データやOSMタグなどを使った本格的な自動判定に入るのではなく、まずは設計を整理し、段階的に実装できる状態にしたいです。
+
+## 重要な方針
+
+### 1. initial_score はユーザーが後から直接編集しない
+
+`initial_score` は、ユーザーがGridCellごとに自由に変更する値にはしないでください。
+
+役割は以下のように分けます。
 
 ```text
-メモグリッドを選択
-↓
-Map Preview に GridCell 境界が表示される
-↓
-各 GridCell の中央付近に calculated_score が表示される
-↓
-採点後に GridCell 一覧が再取得される
-↓
-Map Preview 上の点数表示も更新後の calculated_score に変わる
+initial_score:
+- システムがMapArea生成時に決める初期評価値
+- 将来的には地理的特徴から自動判定する
+- ユーザーが後からGridCellごとに直接編集する値ではない
+
+user rating:
+- ユーザーがGridCellに対して付ける主観的な採点
+- 既存の採点機能で扱う
 ```
 
-## 現状
+### 2. 今回は手動で初期値カテゴリを選ばせる
 
-現在、`demo.js` では `updateMapGridBoundaries(grids)` 内で Map Preview 上の GridCell 境界を描画しているはずです。
+今回は自動判定はまだ実装しません。
 
-現在のイメージ:
+代わりに、MapArea作成時にユーザーが以下の4段階から初期値カテゴリを選択できる設計にしてください。
 
-```javascript
-const rectangle = window.L.rectangle(bounds, {
-  color: style.color,
-  weight: 1,
-  opacity: 0.45,
-  fillColor: style.fillColor,
-  fillOpacity: style.fillOpacity,
-  interactive: true,
-  className: "map-preview-grid-boundary",
-});
+```text
+0: 初期値
+1: ありふれた地域
+2: 普通の地域
+3: 特徴的な地域
 ```
 
-この rectangle は `state.mapGridRectanglesById` で管理されています。
+この値は、将来的な自動判定の代替・仮入力として扱います。
 
-また、Score Map 側では `formatNumber(grid.calculated_score)` を使って点数を表示しているはずです。
+### 3. 自動判定は後回しだが、必ずやる前提にする
 
-今回の修正では、Map Preview 側にも同じ `formatNumber()` を使って `calculated_score` を表示してください。
+自動判定は今回の実装対象外です。
 
-## 今回やること
+ただし、将来的には必ず行う前提で設計してください。
 
-- Map Preview 上の GridCell 中央付近に `calculated_score` ラベルを表示する
-- ラベルには `formatNumber(grid.calculated_score)` を使う
-- GridCell bounds から中央座標を求める helper を追加する
-- Leaflet の `marker` + `divIcon` などを使ってラベルを表示する
-- ラベルはクリックやドラッグ選択を邪魔しないようにする
-- GridCell 境界のクリア時に、点数ラベルも同時にクリアする
-- 採点後に `loadGrids()` で再描画されたとき、ラベルの値も更新されるようにする
-- 既存の Map Preview 上のクリック選択を壊さない
-- 既存の Shift + ドラッグ範囲選択を壊さない
-- 既存の Score Map 表示を壊さない
-- 必要に応じて `MapDemoViewTests` を更新する
+今回の手動選択は、あくまで自動判定前の暫定方式です。
 
-## 今回やらないこと
+### 4. 自動判定の範囲も 0〜3 に収める
 
-- バックエンドAPIの変更
-- `calculated_score` の計算式変更
-- GridCell のデータ構造変更
-- Score Map の表示変更
-- Map Preview のズーム調整変更
-- Leaflet 範囲選択処理の作り直し
-- ラベルの自動間引き
-- ズーム率に応じたラベル表示/非表示切り替え
-- 文字色の高度な自動調整
-- README.md の更新
-- API_SPEC.md の更新
-- memo.md の更新
+将来的な自動判定も、最終的には以下の範囲に収めてください。
 
-## 変更してよいファイル
-
-- `maps/static/maps/demo.js`
-- `maps/static/maps/demo.css`
-- `maps/tests.py`
-
-必要がある場合のみ、最小限で以下を変更して構いません。
-
-- `maps/static/maps/demo.html`
-
-## 変更しないファイル
-
-- `maps/models.py`
-- `maps/serializers.py`
-- `maps/views.py`
-- `maps/services.py`
-- `maps/urls.py`
-- `README.md`
-- `API_SPEC.md`
-- `memo.md`
-- `requirements.txt`
-- `config/settings.py`
-- `config/urls.py`
-
-## 実装方針
-
-### 1. state にラベル管理用の Map を追加する
-
-Map Preview 上の GridCell rectangle と同じように、点数ラベルも GridCell ID ごとに管理してください。
-
-追加例:
-
-```javascript
-mapGridScoreLabelsById: new Map(),
+```text
+0〜3
 ```
 
-既存の `state.mapGridRectanglesById` の近くに追加すると分かりやすいです。
+つまり、自動判定の出力は直接 0〜10 ではなく、まずは地域特徴レベルとして 0〜3 の範囲で扱います。
 
-### 2. GridCell の中心座標を求める helper を追加する
+### 5. 補正の計算は案C路線にする
 
-GridCell の `north / south / east / west` から中心座標を計算してください。
+補正・評価の考え方は、単純に全体へ加点する方式ではなく、案C路線にしてください。
 
-実装例:
+案Cの考え方:
 
-```javascript
-function gridCellCenterLatLng(grid) {
-  const north = Number(grid.north);
-  const south = Number(grid.south);
-  const east = Number(grid.east);
-  const west = Number(grid.west);
-
-  if (
-    !Number.isFinite(north) ||
-    !Number.isFinite(south) ||
-    !Number.isFinite(east) ||
-    !Number.isFinite(west) ||
-    north <= south ||
-    east <= west
-  ) {
-    return null;
-  }
-
-  return [(north + south) / 2, (east + west) / 2];
-}
+```text
+土地タイプの基本点
++
+地物の多様性・特徴の組み合わせによる加点
 ```
 
-Leaflet の marker に渡すため、`[lat, lng]` の形式にしてください。
+つまり、単純に「補正値が高いから全GridCellを一律に高くする」のではなく、将来的には以下のような要素の組み合わせを評価します。
 
-### 3. 点数ラベル用の divIcon を作成する helper を追加する
-
-`calculated_score` を表示するための Leaflet `divIcon` を作成してください。
-
-実装例:
-
-```javascript
-function mapGridScoreLabelIcon(score) {
-  const formattedScore = formatNumber(score) || "0";
-
-  return window.L.divIcon({
-    className: "map-preview-score-label",
-    html: `<span>${escapeHtml(formattedScore)}</span>`,
-    iconSize: [32, 20],
-    iconAnchor: [16, 10],
-  });
-}
+```text
+- 建物が多い
+- 川が近い
+- 森や山が近い
+- 公園がある
+- 海沿いである
+- 住宅地だけでなく複数の地物が集まっている
 ```
 
-既存の `formatNumber()` と `escapeHtml()` を使ってください。
+ただし、今回の手動選択段階では、まだ地物判定は行いません。
 
-### 4. updateMapGridBoundaries() で rectangle と一緒にラベルを追加する
+## 今回整理してほしいこと
 
-`updateMapGridBoundaries(grids)` の `grids.forEach()` 内で、rectangle を作成した後に、同じ GridCell の中央へラベルを追加してください。
+以下を設計として整理してください。
 
-実装イメージ:
+### 1. initial_score の役割
 
-```javascript
-const centerLatLng = gridCellCenterLatLng(grid);
-if (centerLatLng) {
-  const label = window.L.marker(centerLatLng, {
-    icon: mapGridScoreLabelIcon(grid.calculated_score),
-    interactive: false,
-    keyboard: false,
-  });
+以下の観点で整理してください。
 
-  label.addTo(boundaryLayer);
-  state.mapGridScoreLabelsById.set(gridId, label);
-}
+- `initial_score` は何を表す値か
+- ユーザー採点とどう違うか
+- なぜユーザーがGridCellごとに直接編集しない方がよいか
+- `calculated_score` との関係をどう考えるか
+
+### 2. 手動選択値の名称
+
+MapArea作成時に入力させる項目名を提案してください。
+
+候補例:
+
+```text
+- 初期スコア種別
+- 初期地域評価
+- 地域特徴レベル
+- 探索向き初期値
 ```
 
-ラベルはクリックやドラッグ範囲選択を邪魔しないように、`interactive: false` にしてください。
+最終的にどの名称がよいか、理由付きで提案してください。
 
-### 5. clearMapGridBoundaries() でラベル管理もクリアする
+### 3. 0〜3 の意味
 
-`clearMapGridBoundaries()` では現在、GridCell rectangle 用の layer をクリアしているはずです。
+以下の4段階の意味を、ユーザーに分かりやすい説明として整理してください。
 
-`boundaryLayer.clearLayers()` で同じ layer 上のラベルも消える場合でも、管理用Mapは必ずクリアしてください。
-
-修正イメージ:
-
-```javascript
-function clearMapGridBoundaries() {
-  cancelLeafletDragSelection();
-  if (state.gridBoundaryLayer) {
-    state.gridBoundaryLayer.clearLayers();
-  }
-  state.mapGridRectanglesById.clear();
-  state.mapGridScoreLabelsById.clear();
-}
+```text
+0: 初期値
+1: ありふれた地域
+2: 普通の地域
+3: 特徴的な地域
 ```
 
-### 6. ラベルをクリック選択の対象にしない
+特に、以下を明確にしてください。
 
-ラベルは `interactive: false` にしてください。
+- 0 は「未判定・初期値」として扱うのか
+- 1〜3 は地域特徴の強さとして扱うのか
+- 0〜3 をそのまま GridCell の `initial_score` に入れるのか
+- 将来自動判定が入った場合も同じ0〜3を使うのか
 
-また、CSS側でも念のため `pointer-events: none;` を指定してください。
+### 4. 今回の暫定実装方針
 
-```css
-.map-preview-score-label {
-  pointer-events: none;
-}
+今回は自動判定を行わず、MapArea作成時に選んだ値を使う方針にしてください。
+
+設計として、以下のどちらがよいか検討してください。
+
+```text
+案A:
+MapArea作成時に選んだ 0〜3 の値を、生成される全GridCellの initial_score に一律設定する
+
+案B:
+MapArea側に「初期地域評価」として保存し、GridCell生成時にそれを参照して initial_score に反映する
+
+案C:
+将来の自動判定関数の入力として手動選択値を渡し、今は暫定的に全GridCellへ同じ initial_score を返す
 ```
 
-これにより、Map Preview 上の GridCell rectangle クリック選択や Shift + ドラッグ範囲選択を邪魔しにくくなります。
+おすすめ案を1つ選び、その理由も書いてください。
 
-### 7. ラベルの見た目を最小限整える
+### 5. 将来の自動判定方針
 
-CSSでラベルの見た目を調整してください。
+将来的な自動判定について、0〜3に収める前提で整理してください。
 
 例:
 
-```css
-.map-preview-score-label {
-  pointer-events: none;
-  text-align: center;
-}
-
-.map-preview-score-label span {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 28px;
-  min-height: 18px;
-  padding: 1px 4px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.82);
-  border: 1px solid rgba(23, 111, 92, 0.35);
-  color: #15362f;
-  font-size: 11px;
-  font-weight: 700;
-  line-height: 1;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18);
-}
+```text
+0: 海・山・森林のみ・未判定など、初期評価を上げない地域
+1: 住宅地のみ、単調な市街地、ありふれた地域
+2: 建物・道路・公園・川などがある程度ある普通の地域
+3: 海沿い、川沿い、山際、市街地と自然が近い、複数要素が集まる特徴的な地域
 ```
 
-既存のデザイン変数や色がある場合は、それに合わせてください。
+ただし、細かいアルゴリズム実装は今回不要です。
 
-### 8. 選択中ハイライトとの重なりに注意する
+次回以降の自動判定設計につながる程度に、評価要素を整理してください。
 
-現在、選択中の GridCell rectangle は `bringToFront()` されているはずです。
+### 6. 案C路線の補正計算イメージ
 
-点数ラベルを rectangle と同じ layer に追加すると、選択時の `bringToFront()` によってラベルより rectangle が前面に来る可能性があります。
-
-最低限、ラベルが見えれば問題ありません。  
-もし rectangle がラベルを隠す場合は、以下のどちらかで対応してください。
+案C路線として、以下のような設計イメージを整理してください。
 
 ```text
-- ラベルを rectangle の後に addTo する
-- highlightSelectedMapGridBoundaries() の最後でラベルも bringToFront() する
+基本評価:
+- 完全な海・完全な山などは0
+- 住宅地中心なら1
+- 一般的な市街地や建物が多い地域なら2
+- 特徴的な地物が複数ある地域なら3
+
+多様性評価:
+- 川、公園、森、海沿い、山際、建物密度などの組み合わせを見る
+- 複数の地物が集まるほど上がりやすい
+- ただし最終値は0〜3に丸める
 ```
 
-必要であれば、以下のような helper を追加しても構いません。
+注意:
 
-```javascript
-function bringMapGridScoreLabelsToFront() {
-  state.mapGridScoreLabelsById.forEach((label) => {
-    label.bringToFront();
-  });
-}
-```
+- 今回は計算式を確定しなくてよいです。
+- ただし、将来的に関数化しやすい形で整理してください。
 
-そして `highlightSelectedMapGridBoundaries()` の最後で呼び出してください。
+### 7. API・serializer・service・demo の変更候補
 
-ただし、過剰に複雑にしないでください。
+今回は実装しませんが、次回以降に必要になりそうな変更点を整理してください。
 
-### 9. 採点後の更新
-
-採点後は既存処理で `loadGrids()` が呼ばれているはずです。
-
-`loadGrids()` → `renderGrids()` → `updateMapGridBoundaries(grids)` の流れで再描画されるなら、点数ラベルも自然に更新されます。
-
-今回、採点後の更新処理自体は変更しないでください。
-
-## テスト方針
-
-Django の view test では Leaflet の実際の描画までは確認できません。
-
-そのため、`MapDemoViewTests` では静的確認で構いません。
-
-既に `demo.js` と `demo.css` の中身を確認するテストがある場合は、以下を確認してください。
+例:
 
 ```text
-mapGridScoreLabelsById
-gridCellCenterLatLng
-mapGridScoreLabelIcon
-map-preview-score-label
+API:
+- MapArea作成時に初期地域評価を受け取る
+
+serializer:
+- 0〜3の値として検証する
+
+service:
+- GridCell生成時に initial_score を決める処理を分離する
+- 将来自動判定に差し替えやすい helper を作る
+
+demo:
+- MapArea作成フォームに初期地域評価のselectを追加する
 ```
 
-CSS側については以下を確認してください。
+ただし、具体的なコード変更は今回行わないでください。
+
+### 8. 実装順
+
+次回以降の実装順を提案してください。
+
+想定する順番:
 
 ```text
-.map-preview-score-label
-pointer-events: none
+1. MapArea作成時に手動の初期地域評価 0〜3 を受け取れるようにする
+2. GridCell生成時に、その値を initial_score に反映する
+3. demoページのMapArea作成フォームに選択欄を追加する
+4. API_SPEC.md / README.md を更新する
+5. 将来自動判定用の helper 設計を追加する
+6. OSM等の外部地理データを使った自動判定を検討する
 ```
 
-既存の `MapDemoViewTests` に追加する場合は、確認項目を増やしすぎないようにしてください。
+必要であれば、順番を調整してください。
 
-## 手動確認方針
+## 今回やらないこと
 
-実装後、開発サーバーを起動してdemoページを確認してください。
+- コード実装
+- DBマイグレーション
+- API変更
+- serializer変更
+- service変更
+- demoページ変更
+- README.md更新
+- API_SPEC.md更新
+- memo.md更新
+- OSM連携の実装
+- 外部API調査の深掘り
+- 自動判定アルゴリズムの確定
+- 0〜10スコアへの直接自動判定
 
-```bash
-source .venv/bin/activate
-python manage.py runserver
-```
+## 出力形式
 
-ブラウザで開くURL:
+チャット欄に、以下の構成で Markdown 出力してください。
 
-```text
-http://127.0.0.1:8000/api/maps/demo/
-```
+```markdown
+# initial_score 自動判定方針と補正値入力の設計整理
 
-手動確認では、次を確認してください。
+## 1. 結論
 
-- demoページが表示される
-- メモグリッドを作成または選択できる
-- Map Preview に GridCell 境界が表示される
-- 各 GridCell 中央付近に calculated_score が表示される
-- 点数表示が Score Map 側の表示値と一致する
-- 採点後、Map Preview 上の点数表示も更新される
-- 点数ラベルが GridCell クリック選択を邪魔しない
-- 点数ラベルが Shift + ドラッグ範囲選択を邪魔しない
-- 選択中GridCellのハイライトが引き続き見える
-- Map Preview のズーム初期表示が壊れていない
-- Score Map 側の表示・選択・採点が壊れていない
-- ブラウザコンソールに重大な JavaScript エラーが出ていない
+## 2. initial_score の役割
 
-## 確認方法
+## 3. MapArea作成時に入力する値
 
-作業後、次を実行してください。
+## 4. 0〜3 の意味
 
-```bash
-source .venv/bin/activate
-node --check maps/static/maps/demo.js
-python manage.py check
-python manage.py test maps.tests.MapDemoViewTests
-git diff --check -- maps/static/maps/demo.js maps/static/maps/demo.css maps/tests.py
-```
+## 5. 今回の暫定方式
 
-可能であれば、次も実行してください。
+## 6. 将来の自動判定方針
 
-```bash
-python manage.py test maps
+## 7. 案C路線の補正計算イメージ
+
+## 8. 次回以降に必要な変更候補
+
+## 9. 実装順
+
+## 10. 注意点
 ```
 
 ## 注意事項
 
-- 今回は Map Preview 上の点数表示追加に集中してください。
-- バックエンドAPIは変更しないでください。
-- `calculated_score` の計算式は変更しないでください。
-- Score Map の表示は変更しないでください。
-- Map Preview のズーム調整処理は変更しないでください。
-- 点数ラベルはクリックやドラッグ選択を邪魔しないようにしてください。
-- ラベルが多くて見づらい場合でも、今回は自動間引きやズーム率による表示切替までは行わないでください。
-- 小さいGridCellでラベルが重なる場合の高度な調整は次回以降に残してください。
-- README.md / API_SPEC.md / memo.md には触れないでください。
-- レート制限節約のため、必要最小限のファイルだけを変更してください。
-- 実装後の報告は、変更点と実行した確認コマンドだけを短くまとめてください。
+- 今回は設計整理のみです。
+- ファイル編集はしないでください。
+- `initial_score` をユーザーがGridCellごとに直接編集できる設計にはしないでください。
+- 今回は手動で 0〜3 を選ばせる暫定方式にしてください。
+- 自動判定は後回しですが、必ず将来実装する前提で整理してください。
+- 自動判定の出力も 0〜3 に収めてください。
+- 補正計算は案C路線で整理してください。
+- 単純な一律加点方式を最終設計にしないでください。
+- レート制限節約のため、調査と出力は簡潔にしてください。

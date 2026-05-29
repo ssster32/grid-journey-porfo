@@ -78,6 +78,8 @@ const DRAG_SELECT_THRESHOLD = 5;
 const MAP_PREVIEW_TARGET_FILL_RATIO = 0.95;
 const MAP_PREVIEW_MIN_FIT_PADDING = 4;
 const MAP_PREVIEW_MAX_ZOOM = 19;
+const MAP_PREVIEW_LARGE_SCORE_LABEL_MIN_ZOOM = 15;
+const MAP_PREVIEW_EXTRA_LARGE_SCORE_LABEL_MIN_ZOOM = 20;
 const MAP_PREVIEW_SCORE_STYLES = {
   low: {
     color: "#4d6372",
@@ -149,7 +151,7 @@ function formatNumber(value) {
   if (!Number.isFinite(numberValue)) {
     return "";
   }
-  return Number.isInteger(numberValue) ? String(numberValue) : numberValue.toFixed(2);
+  return Number.isInteger(numberValue) ? String(numberValue) : numberValue.toFixed(1);
 }
 
 function scoreLevel(score) {
@@ -175,6 +177,16 @@ function scoreClass(score) {
     middle: "score-middle",
     high: "score-high",
     veryHigh: "score-very-high",
+  };
+  return classes[scoreLevel(score)];
+}
+
+function mapPreviewScoreLabelClass(score) {
+  const classes = {
+    low: "map-preview-score-low",
+    middle: "map-preview-score-middle",
+    high: "map-preview-score-high",
+    veryHigh: "map-preview-score-very-high",
   };
   return classes[scoreLevel(score)];
 }
@@ -269,7 +281,7 @@ function mapGridScoreLabelIcon(score) {
   const formattedScore = formatNumber(score) || "0";
 
   return window.L.divIcon({
-    className: `map-preview-score-label ${scoreClass(score)}`,
+    className: `map-preview-score-label ${mapPreviewScoreLabelClass(score)}`,
     html: `<span>${escapeHtml(formattedScore)}</span>`,
     iconSize: [32, 20],
     iconAnchor: [16, 10],
@@ -303,6 +315,22 @@ function mapPreviewFitPadding() {
   return [yPadding, xPadding];
 }
 
+function updateMapPreviewScoreLabelSize() {
+  if (!state.leafletMap || !elements.mapPreview) {
+    return;
+  }
+
+  const zoom = state.leafletMap.getZoom();
+  elements.mapPreview.classList.toggle(
+    "is-large-score-label",
+    Number.isFinite(zoom) && zoom >= MAP_PREVIEW_LARGE_SCORE_LABEL_MIN_ZOOM
+  );
+  elements.mapPreview.classList.toggle(
+    "is-extra-large-score-label",
+    Number.isFinite(zoom) && zoom >= MAP_PREVIEW_EXTRA_LARGE_SCORE_LABEL_MIN_ZOOM
+  );
+}
+
 function initMapPreview() {
   if (state.leafletMap || !elements.mapPreview) {
     return;
@@ -329,6 +357,8 @@ function initMapPreview() {
   state.leafletMap.on("mousedown", startLeafletDragSelection);
   state.leafletMap.on("mousemove", updateLeafletDragSelection);
   state.leafletMap.on("mouseup", finishLeafletDragSelection);
+  state.leafletMap.on("zoomend", updateMapPreviewScoreLabelSize);
+  updateMapPreviewScoreLabelSize();
 }
 
 function clearMapGridBoundaries() {
