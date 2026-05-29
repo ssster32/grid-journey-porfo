@@ -30,7 +30,8 @@ body {
 }
 
 button,
-input {
+input,
+select {
   font: inherit;
 }
 
@@ -53,7 +54,8 @@ button:disabled {
   cursor: not-allowed;
 }
 
-input {
+input,
+select {
   width: 100%;
   min-height: 40px;
   border: 1px solid var(--line);

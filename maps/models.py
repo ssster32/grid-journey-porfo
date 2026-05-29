@@ -4,6 +4,16 @@ from django.db.models import F, Q
 
 
 class MapArea(models.Model):
+    class InitialScoreMode(models.TextChoices):
+        MANUAL = "manual", "Manual"
+        AUTO = "auto", "Auto"
+
+    class RegionFeatureLevel(models.IntegerChoices):
+        INITIAL = 0, "初期値"
+        COMMON = 1, "ありふれた地域"
+        NORMAL = 2, "普通の地域"
+        DISTINCTIVE = 3, "特徴的な地域"
+
     name = models.CharField(max_length=100)
     description = models.TextField(blank=True)
     north = models.FloatField()
@@ -11,6 +21,15 @@ class MapArea(models.Model):
     east = models.FloatField()
     west = models.FloatField()
     grid_size_meters = models.PositiveIntegerField()
+    region_feature_level = models.PositiveSmallIntegerField(
+        choices=RegionFeatureLevel.choices,
+        default=RegionFeatureLevel.INITIAL,
+    )
+    initial_score_mode = models.CharField(
+        max_length=20,
+        choices=InitialScoreMode.choices,
+        default=InitialScoreMode.MANUAL,
+    )
     source = models.CharField(max_length=100, blank=True)
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -35,6 +54,11 @@ class MapArea(models.Model):
             models.CheckConstraint(
                 condition=Q(grid_size_meters__gt=0),
                 name="map_area_grid_size_meters_gt_0",
+            ),
+            models.CheckConstraint(
+                condition=Q(region_feature_level__gte=0)
+                & Q(region_feature_level__lte=3),
+                name="map_area_region_feature_level_between_0_and_3",
             ),
         ]
         ordering = ["name", "id"]

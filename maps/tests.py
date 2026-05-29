@@ -21,7 +21,14 @@ from .serializers import (
 )
 from .services import (
     METERS_PER_DEGREE,
+    build_feature_summaries_for_grid_cell_contexts,
+    build_feature_summaries_for_grid_cells,
+    build_feature_summary_for_grid_cell,
+    build_grid_cell_contexts_for_area,
+    calculate_initial_score_from_feature_summary,
     calculate_bounds_from_center,
+    determine_initial_score_for_grid_cell,
+    feature_intersects_grid_cell,
     generate_grid_cells_for_area,
     update_grid_cell_score,
     validate_center_grid_limits,
@@ -213,6 +220,32 @@ class MapAreaShareModelTests(TestCase):
         self.assertFalse(MapAreaShare.objects.filter(id=share.id).exists())
 
 
+class MapAreaModelTests(TestCase):
+    def test_region_feature_level_defaults_to_zero(self):
+        area = MapArea.objects.create(
+            name="Default Region Feature Area",
+            north=35.7,
+            south=35.6,
+            east=139.8,
+            west=139.7,
+            grid_size_meters=500,
+        )
+
+        self.assertEqual(area.region_feature_level, 0)
+
+    def test_initial_score_mode_defaults_to_manual(self):
+        area = MapArea.objects.create(
+            name="Default Initial Score Mode Area",
+            north=35.7,
+            south=35.6,
+            east=139.8,
+            west=139.7,
+            grid_size_meters=500,
+        )
+
+        self.assertEqual(area.initial_score_mode, MapArea.InitialScoreMode.MANUAL)
+
+
 class MapAreaSerializerTests(TestCase):
     def center_payload(self):
         return {
@@ -275,6 +308,104 @@ class MapAreaSerializerTests(TestCase):
         self.assertNotIn("center_lng", serializer.data)
         self.assertNotIn("rows", serializer.data)
         self.assertNotIn("cols", serializer.data)
+        self.assertIn("region_feature_level", serializer.data)
+        self.assertIn("initial_score_mode", serializer.data)
+
+    def test_region_feature_level_defaults_to_zero(self):
+        serializer = MapAreaSerializer(data=self.center_payload())
+
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        self.assertEqual(serializer.validated_data["region_feature_level"], 0)
+
+    def test_initial_score_mode_defaults_to_manual(self):
+        serializer = MapAreaSerializer(data=self.center_payload())
+
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        self.assertEqual(
+            serializer.validated_data["initial_score_mode"],
+            MapArea.InitialScoreMode.MANUAL,
+        )
+
+    def test_initial_score_mode_manual_and_auto_are_valid(self):
+        for initial_score_mode in (
+            MapArea.InitialScoreMode.MANUAL,
+            MapArea.InitialScoreMode.AUTO,
+        ):
+            with self.subTest(initial_score_mode=initial_score_mode):
+                serializer = MapAreaSerializer(
+                    data={
+                        **self.center_payload(),
+                        "initial_score_mode": initial_score_mode,
+                    }
+                )
+
+                self.assertTrue(serializer.is_valid(), serializer.errors)
+                self.assertEqual(
+                    serializer.validated_data["initial_score_mode"],
+                    initial_score_mode,
+                )
+
+    def test_invalid_initial_score_mode_is_invalid(self):
+        invalid_values = ("invalid", "", None, 1, True)
+
+        for initial_score_mode in invalid_values:
+            with self.subTest(initial_score_mode=initial_score_mode):
+                serializer = MapAreaSerializer(
+                    data={
+                        **self.center_payload(),
+                        "initial_score_mode": initial_score_mode,
+                    }
+                )
+
+                self.assertFalse(serializer.is_valid())
+                self.assertIn("initial_score_mode", serializer.errors)
+
+    def test_region_feature_level_0_to_3_are_valid(self):
+        for region_feature_level in (0, 1, 2, 3):
+            with self.subTest(region_feature_level=region_feature_level):
+                payload = {
+                    **self.center_payload(),
+                    "region_feature_level": region_feature_level,
+                }
+                serializer = MapAreaSerializer(data=payload)
+
+                self.assertTrue(serializer.is_valid(), serializer.errors)
+                self.assertEqual(
+                    serializer.validated_data["region_feature_level"],
+                    region_feature_level,
+                )
+
+    def test_region_feature_level_less_than_zero_is_invalid(self):
+        serializer = MapAreaSerializer(
+            data={**self.center_payload(), "region_feature_level": -1}
+        )
+
+        self.assertFalse(serializer.is_valid())
+        self.assertIn("region_feature_level", serializer.errors)
+
+    def test_region_feature_level_greater_than_three_is_invalid(self):
+        serializer = MapAreaSerializer(
+            data={**self.center_payload(), "region_feature_level": 4}
+        )
+
+        self.assertFalse(serializer.is_valid())
+        self.assertIn("region_feature_level", serializer.errors)
+
+    def test_region_feature_level_non_integer_is_invalid(self):
+        serializer = MapAreaSerializer(
+            data={**self.center_payload(), "region_feature_level": "abc"}
+        )
+
+        self.assertFalse(serializer.is_valid())
+        self.assertIn("region_feature_level", serializer.errors)
+
+    def test_region_feature_level_null_is_invalid(self):
+        serializer = MapAreaSerializer(
+            data={**self.center_payload(), "region_feature_level": None}
+        )
+
+        self.assertFalse(serializer.is_valid())
+        self.assertIn("region_feature_level", serializer.errors)
 
     def test_legacy_bounds_input_is_invalid(self):
         serializer = MapAreaSerializer(
@@ -605,6 +736,636 @@ class ValidateCenterGridLimitsTests(TestCase):
             validate_center_grid_limits(1000, 100, 1.5)
 
 
+class DetermineInitialScoreForGridCellTests(TestCase):
+    def setUp(self):
+        self.area = MapArea.objects.create(
+            name="Feature Summary Area",
+            north=10.0,
+            south=9.0,
+            east=21.0,
+            west=19.0,
+            grid_size_meters=500,
+        )
+
+    def grid_bounds(self):
+        return {
+            "north": 10.0,
+            "south": 9.0,
+            "east": 20.0,
+            "west": 19.0,
+        }
+
+    def create_grid_cell(self, row_index, col_index, north, south, east, west):
+        return GridCell.objects.create(
+            area=self.area,
+            row_index=row_index,
+            col_index=col_index,
+            north=north,
+            south=south,
+            east=east,
+            west=west,
+        )
+
+    def test_feature_intersects_grid_cell_when_bboxes_overlap(self):
+        self.assertTrue(
+            feature_intersects_grid_cell(
+                {
+                    "north": 10.5,
+                    "south": 9.5,
+                    "east": 20.5,
+                    "west": 19.5,
+                },
+                self.grid_bounds(),
+            )
+        )
+
+    def test_feature_does_not_intersect_when_only_touching_boundary(self):
+        self.assertFalse(
+            feature_intersects_grid_cell(
+                {
+                    "north": 10.5,
+                    "south": 10.0,
+                    "east": 20.0,
+                    "west": 19.0,
+                },
+                self.grid_bounds(),
+            )
+        )
+
+    def test_build_feature_summary_counts_buildings_and_roads(self):
+        summary = build_feature_summary_for_grid_cell(
+            self.grid_bounds(),
+            [
+                {
+                    "kind": "building",
+                    "bounds": {
+                        "north": 9.9,
+                        "south": 9.8,
+                        "east": 19.2,
+                        "west": 19.1,
+                    },
+                },
+                {
+                    "kind": "building",
+                    "bounds": {
+                        "north": 9.7,
+                        "south": 9.6,
+                        "east": 19.4,
+                        "west": 19.3,
+                    },
+                },
+                {
+                    "kind": "road",
+                    "bounds": {
+                        "north": 9.5,
+                        "south": 9.4,
+                        "east": 19.6,
+                        "west": 19.5,
+                    },
+                },
+            ],
+        )
+
+        self.assertEqual(summary["building_count"], 2)
+        self.assertEqual(summary["road_count"], 1)
+
+    def test_build_feature_summary_sets_water_and_forest_ratios(self):
+        summary = build_feature_summary_for_grid_cell(
+            self.grid_bounds(),
+            [
+                {
+                    "kind": "water",
+                    "bounds": {
+                        "north": 9.9,
+                        "south": 9.8,
+                        "east": 19.2,
+                        "west": 19.1,
+                    },
+                },
+                {
+                    "kind": "forest",
+                    "bounds": {
+                        "north": 10.5,
+                        "south": 8.5,
+                        "east": 20.5,
+                        "west": 18.5,
+                    },
+                },
+            ],
+        )
+
+        self.assertEqual(summary["water_coverage_ratio"], 0.5)
+        self.assertEqual(summary["forest_coverage_ratio"], 1.0)
+
+    def test_build_feature_summary_sets_boolean_features(self):
+        summary = build_feature_summary_for_grid_cell(
+            self.grid_bounds(),
+            [
+                {
+                    "kind": "park",
+                    "bounds": {
+                        "north": 9.9,
+                        "south": 9.8,
+                        "east": 19.2,
+                        "west": 19.1,
+                    },
+                },
+                {
+                    "kind": "river",
+                    "bounds": {
+                        "north": 9.7,
+                        "south": 9.6,
+                        "east": 19.4,
+                        "west": 19.3,
+                    },
+                },
+                {
+                    "kind": "coastline",
+                    "bounds": {
+                        "north": 9.5,
+                        "south": 9.4,
+                        "east": 19.6,
+                        "west": 19.5,
+                    },
+                },
+            ],
+        )
+
+        self.assertTrue(summary["has_park"])
+        self.assertTrue(summary["has_river"])
+        self.assertTrue(summary["is_coastal"])
+
+    def test_build_feature_summary_ignores_unknown_kind_and_non_intersections(self):
+        summary = build_feature_summary_for_grid_cell(
+            self.grid_bounds(),
+            [
+                {
+                    "kind": "unknown",
+                    "bounds": {
+                        "north": 9.9,
+                        "south": 9.8,
+                        "east": 19.2,
+                        "west": 19.1,
+                    },
+                },
+                {
+                    "kind": "building",
+                    "bounds": {
+                        "north": 11.0,
+                        "south": 10.5,
+                        "east": 19.5,
+                        "west": 19.4,
+                    },
+                },
+            ],
+        )
+
+        self.assertEqual(
+            summary,
+            {
+                "building_count": 0,
+                "road_count": 0,
+                "water_coverage_ratio": 0.0,
+                "forest_coverage_ratio": 0.0,
+                "has_park": False,
+                "has_river": False,
+                "is_coastal": False,
+            },
+        )
+
+    def test_build_feature_summary_invalid_input_raises_value_error(self):
+        invalid_inputs = (
+            ({"north": 1, "south": 1, "east": 1, "west": 0}, []),
+            (self.grid_bounds(), None),
+            (self.grid_bounds(), [{"kind": "building", "bounds": None}]),
+        )
+
+        for grid_cell_bounds, map_features in invalid_inputs:
+            with self.subTest(grid_cell_bounds=grid_cell_bounds, map_features=map_features):
+                with self.assertRaises(ValueError):
+                    build_feature_summary_for_grid_cell(
+                        grid_cell_bounds,
+                        map_features,
+                    )
+
+    def test_build_feature_summaries_for_grid_cells_returns_position_keys(self):
+        grid_cells = [
+            self.create_grid_cell(0, 0, 10.0, 9.0, 20.0, 19.0),
+            self.create_grid_cell(0, 1, 10.0, 9.0, 21.0, 20.0),
+        ]
+
+        summaries = build_feature_summaries_for_grid_cells(grid_cells, [])
+
+        self.assertEqual(set(summaries.keys()), {(0, 0), (0, 1)})
+
+    def test_build_feature_summaries_for_grid_cells_builds_each_summary(self):
+        grid_cells = [
+            self.create_grid_cell(0, 0, 10.0, 9.0, 20.0, 19.0),
+            self.create_grid_cell(0, 1, 10.0, 9.0, 21.0, 20.0),
+        ]
+        map_features = [
+            {
+                "kind": "building",
+                "bounds": {
+                    "north": 9.9,
+                    "south": 9.8,
+                    "east": 19.2,
+                    "west": 19.1,
+                },
+            },
+            {
+                "kind": "road",
+                "bounds": {
+                    "north": 9.9,
+                    "south": 9.8,
+                    "east": 20.2,
+                    "west": 20.1,
+                },
+            },
+        ]
+
+        summaries = build_feature_summaries_for_grid_cells(grid_cells, map_features)
+
+        self.assertEqual(summaries[(0, 0)]["building_count"], 1)
+        self.assertEqual(summaries[(0, 0)]["road_count"], 0)
+        self.assertEqual(summaries[(0, 1)]["building_count"], 0)
+        self.assertEqual(summaries[(0, 1)]["road_count"], 1)
+
+    def test_build_feature_summaries_for_grid_cells_applies_spanning_feature(self):
+        grid_cells = [
+            self.create_grid_cell(0, 0, 10.0, 9.0, 20.0, 19.0),
+            self.create_grid_cell(0, 1, 10.0, 9.0, 21.0, 20.0),
+        ]
+        map_features = [
+            {
+                "kind": "river",
+                "bounds": {
+                    "north": 9.8,
+                    "south": 9.2,
+                    "east": 20.5,
+                    "west": 19.5,
+                },
+            },
+        ]
+
+        summaries = build_feature_summaries_for_grid_cells(grid_cells, map_features)
+
+        self.assertTrue(summaries[(0, 0)]["has_river"])
+        self.assertTrue(summaries[(0, 1)]["has_river"])
+
+    def test_build_feature_summaries_for_grid_cells_empty_cell_gets_empty_summary(self):
+        grid_cells = [
+            self.create_grid_cell(0, 0, 10.0, 9.0, 20.0, 19.0),
+            self.create_grid_cell(0, 1, 10.0, 9.0, 21.0, 20.0),
+        ]
+        map_features = [
+            {
+                "kind": "building",
+                "bounds": {
+                    "north": 9.9,
+                    "south": 9.8,
+                    "east": 19.2,
+                    "west": 19.1,
+                },
+            },
+        ]
+
+        summaries = build_feature_summaries_for_grid_cells(grid_cells, map_features)
+
+        self.assertEqual(
+            summaries[(0, 1)],
+            {
+                "building_count": 0,
+                "road_count": 0,
+                "water_coverage_ratio": 0.0,
+                "forest_coverage_ratio": 0.0,
+                "has_park": False,
+                "has_river": False,
+                "is_coastal": False,
+            },
+        )
+
+    def test_build_feature_summaries_for_grid_cell_contexts_builds_each_summary(self):
+        grid_cell_contexts = [
+            {
+                "row_index": 0,
+                "col_index": 0,
+                "north": 10.0,
+                "south": 9.0,
+                "east": 20.0,
+                "west": 19.0,
+            },
+            {
+                "row_index": 0,
+                "col_index": 1,
+                "north": 10.0,
+                "south": 9.0,
+                "east": 21.0,
+                "west": 20.0,
+            },
+        ]
+        map_features = [
+            {
+                "kind": "building",
+                "bounds": {
+                    "north": 9.9,
+                    "south": 9.8,
+                    "east": 19.2,
+                    "west": 19.1,
+                },
+            },
+            {
+                "kind": "road",
+                "bounds": {
+                    "north": 9.9,
+                    "south": 9.8,
+                    "east": 20.2,
+                    "west": 20.1,
+                },
+            },
+        ]
+
+        summaries = build_feature_summaries_for_grid_cell_contexts(
+            grid_cell_contexts,
+            map_features,
+        )
+
+        self.assertEqual(set(summaries.keys()), {(0, 0), (0, 1)})
+        self.assertEqual(summaries[(0, 0)]["building_count"], 1)
+        self.assertEqual(summaries[(0, 0)]["road_count"], 0)
+        self.assertEqual(summaries[(0, 1)]["building_count"], 0)
+        self.assertEqual(summaries[(0, 1)]["road_count"], 1)
+
+    def test_build_feature_summaries_for_grid_cell_contexts_applies_spanning_feature(
+        self,
+    ):
+        grid_cell_contexts = [
+            {
+                "row_index": 0,
+                "col_index": 0,
+                "north": 10.0,
+                "south": 9.0,
+                "east": 20.0,
+                "west": 19.0,
+            },
+            {
+                "row_index": 0,
+                "col_index": 1,
+                "north": 10.0,
+                "south": 9.0,
+                "east": 21.0,
+                "west": 20.0,
+            },
+        ]
+        map_features = [
+            {
+                "kind": "river",
+                "bounds": {
+                    "north": 9.8,
+                    "south": 9.2,
+                    "east": 20.5,
+                    "west": 19.5,
+                },
+            },
+        ]
+
+        summaries = build_feature_summaries_for_grid_cell_contexts(
+            grid_cell_contexts,
+            map_features,
+        )
+
+        self.assertTrue(summaries[(0, 0)]["has_river"])
+        self.assertTrue(summaries[(0, 1)]["has_river"])
+
+    def test_build_feature_summaries_for_grid_cell_contexts_empty_context_gets_empty_summary(
+        self,
+    ):
+        grid_cell_contexts = [
+            {
+                "row_index": 0,
+                "col_index": 0,
+                "north": 10.0,
+                "south": 9.0,
+                "east": 20.0,
+                "west": 19.0,
+            },
+            {
+                "row_index": 0,
+                "col_index": 1,
+                "north": 10.0,
+                "south": 9.0,
+                "east": 21.0,
+                "west": 20.0,
+            },
+        ]
+        map_features = [
+            {
+                "kind": "building",
+                "bounds": {
+                    "north": 9.9,
+                    "south": 9.8,
+                    "east": 19.2,
+                    "west": 19.1,
+                },
+            },
+        ]
+
+        summaries = build_feature_summaries_for_grid_cell_contexts(
+            grid_cell_contexts,
+            map_features,
+        )
+
+        self.assertEqual(
+            summaries[(0, 1)],
+            {
+                "building_count": 0,
+                "road_count": 0,
+                "water_coverage_ratio": 0.0,
+                "forest_coverage_ratio": 0.0,
+                "has_park": False,
+                "has_river": False,
+                "is_coastal": False,
+            },
+        )
+
+    def test_build_feature_summaries_for_grid_cell_contexts_invalid_input_raises_value_error(
+        self,
+    ):
+        valid_context = {
+            "row_index": 0,
+            "col_index": 0,
+            "north": 10.0,
+            "south": 9.0,
+            "east": 20.0,
+            "west": 19.0,
+        }
+        invalid_inputs = (
+            (None, []),
+            ([None], []),
+            ([{**valid_context, "row_index": True}], []),
+            ([{**valid_context, "col_index": "0"}], []),
+            ([{**valid_context, "north": 9.0}], []),
+            ([valid_context], None),
+        )
+
+        for grid_cell_contexts, map_features in invalid_inputs:
+            with self.subTest(
+                grid_cell_contexts=grid_cell_contexts,
+                map_features=map_features,
+            ):
+                with self.assertRaises(ValueError):
+                    build_feature_summaries_for_grid_cell_contexts(
+                        grid_cell_contexts,
+                        map_features,
+                    )
+
+    def test_grid_context_feature_summary_returns_auto_score(self):
+        feature_summary = {
+            "building_count": 20,
+            "road_count": 10,
+            "has_park": True,
+            "has_river": True,
+            "is_coastal": True,
+            "water_coverage_ratio": 0.1,
+        }
+        expected_score = calculate_initial_score_from_feature_summary(feature_summary)
+
+        score = determine_initial_score_for_grid_cell(
+            region_feature_level=0,
+            grid_context={"feature_summary": feature_summary},
+        )
+
+        self.assertEqual(score, expected_score)
+        self.assertGreater(score, 2.5)
+
+    def test_grid_context_without_feature_summary_returns_region_feature_fallback(self):
+        score = determine_initial_score_for_grid_cell(
+            region_feature_level=1.5,
+            grid_context={"row_index": 0, "col_index": 0},
+        )
+
+        self.assertEqual(score, 1.5)
+
+    def test_invalid_grid_context_feature_summary_raises_value_error(self):
+        with self.assertRaises(ValueError):
+            determine_initial_score_for_grid_cell(
+                region_feature_level=1,
+                grid_context={"feature_summary": {"building_count": -1}},
+            )
+
+    def test_feature_summary_buildings_and_roads_returns_middle_score(self):
+        score = calculate_initial_score_from_feature_summary(
+            {
+                "building_count": 12,
+                "road_count": 6,
+            }
+        )
+
+        self.assertGreaterEqual(score, 1.0)
+        self.assertLess(score, 2.0)
+        self.assertIsInstance(score, float)
+
+    def test_feature_summary_multiple_features_returns_high_score(self):
+        score = calculate_initial_score_from_feature_summary(
+            {
+                "building_count": 20,
+                "road_count": 10,
+                "has_park": True,
+                "has_river": True,
+                "is_coastal": True,
+                "water_coverage_ratio": 0.1,
+            }
+        )
+
+        self.assertGreaterEqual(score, 2.5)
+        self.assertLessEqual(score, 3.0)
+
+    def test_feature_summary_full_water_returns_low_score(self):
+        score = calculate_initial_score_from_feature_summary(
+            {
+                "water_coverage_ratio": 0.99,
+            }
+        )
+
+        self.assertGreaterEqual(score, 0.0)
+        self.assertLess(score, 1.0)
+
+    def test_feature_summary_forest_only_returns_low_score(self):
+        score = calculate_initial_score_from_feature_summary(
+            {
+                "forest_coverage_ratio": 0.98,
+            }
+        )
+
+        self.assertGreaterEqual(score, 0.0)
+        self.assertLess(score, 1.0)
+
+    def test_feature_summary_score_is_clamped_to_0_to_3(self):
+        high_score = calculate_initial_score_from_feature_summary(
+            {
+                "building_count": 999,
+                "road_count": 999,
+                "has_park": True,
+                "has_river": True,
+                "is_coastal": True,
+                "water_coverage_ratio": 0.2,
+                "forest_coverage_ratio": 0.2,
+            }
+        )
+        low_score = calculate_initial_score_from_feature_summary(
+            {
+                "water_coverage_ratio": 1.0,
+                "forest_coverage_ratio": 1.0,
+            }
+        )
+
+        self.assertEqual(high_score, 3.0)
+        self.assertEqual(low_score, 0.0)
+
+    def test_invalid_feature_summary_raises_value_error(self):
+        invalid_summaries = (
+            None,
+            [],
+            {"building_count": -1},
+            {"road_count": float("inf")},
+            {"water_coverage_ratio": 1.1},
+            {"forest_coverage_ratio": -0.1},
+            {"building_count": True},
+        )
+        for feature_summary in invalid_summaries:
+            with self.subTest(feature_summary=feature_summary):
+                with self.assertRaises(ValueError):
+                    calculate_initial_score_from_feature_summary(feature_summary)
+
+    def test_region_feature_level_0_to_3_are_returned_as_float(self):
+        for region_feature_level in (0, 1, 2, 3):
+            with self.subTest(region_feature_level=region_feature_level):
+                score = determine_initial_score_for_grid_cell(
+                    region_feature_level=region_feature_level,
+                    grid_context={"row_index": 0, "col_index": 0},
+                )
+
+                self.assertEqual(score, float(region_feature_level))
+                self.assertIsInstance(score, float)
+
+    def test_decimal_region_feature_level_is_returned_as_float(self):
+        score = determine_initial_score_for_grid_cell(
+            region_feature_level=1.75,
+            grid_context={"row_index": 0, "col_index": 0},
+        )
+
+        self.assertEqual(score, 1.75)
+        self.assertIsInstance(score, float)
+
+    def test_invalid_region_feature_level_raises_value_error(self):
+        for region_feature_level in (-0.1, 3.1, float("inf"), "abc", True):
+            with self.subTest(region_feature_level=region_feature_level):
+                with self.assertRaises(ValueError):
+                    determine_initial_score_for_grid_cell(
+                        region_feature_level=region_feature_level,
+                    )
+
+
 class GenerateGridCellsForAreaTests(TestCase):
     def setUp(self):
         self.user = get_user_model().objects.create_user(
@@ -647,6 +1408,41 @@ class GenerateGridCellsForAreaTests(TestCase):
         self.assertEqual(len(grid_cells), 4)
         self.assertEqual(GridCell.objects.filter(area=self.area).count(), 4)
 
+    def test_build_grid_cell_contexts_returns_expected_count(self):
+        contexts = build_grid_cell_contexts_for_area(self.area)
+
+        self.assertEqual(len(contexts), 4)
+
+    def test_build_grid_cell_contexts_indexes_match_generated_grid_cells(self):
+        contexts = build_grid_cell_contexts_for_area(self.area)
+        generate_grid_cells_for_area(self.area)
+        context_positions = [
+            (context["row_index"], context["col_index"]) for context in contexts
+        ]
+        grid_positions = list(
+            GridCell.objects.filter(area=self.area).values_list(
+                "row_index",
+                "col_index",
+            )
+        )
+
+        self.assertEqual(context_positions, grid_positions)
+
+    def test_build_grid_cell_contexts_bounds_match_generated_grid_cells(self):
+        contexts = build_grid_cell_contexts_for_area(self.area)
+        generate_grid_cells_for_area(self.area)
+
+        for context in contexts:
+            grid_cell = GridCell.objects.get(
+                area=self.area,
+                row_index=context["row_index"],
+                col_index=context["col_index"],
+            )
+            self.assertAlmostEqual(context["north"], grid_cell.north)
+            self.assertAlmostEqual(context["south"], grid_cell.south)
+            self.assertAlmostEqual(context["east"], grid_cell.east)
+            self.assertAlmostEqual(context["west"], grid_cell.west)
+
     def test_generated_grid_indexes_start_from_zero(self):
         generate_grid_cells_for_area(self.area)
 
@@ -669,6 +1465,122 @@ class GenerateGridCellsForAreaTests(TestCase):
             self.assertEqual(grid_cell.calculated_score, 0)
             self.assertIsNone(grid_cell.score_updated_at)
 
+    def test_generated_grid_score_fields_use_region_feature_level(self):
+        self.area.region_feature_level = 2
+        self.area.save(update_fields=["region_feature_level"])
+
+        grid_cells = generate_grid_cells_for_area(self.area)
+
+        for grid_cell in grid_cells:
+            self.assertEqual(grid_cell.initial_score, 2.0)
+            self.assertEqual(grid_cell.average_user_score, 0)
+            self.assertEqual(grid_cell.rating_count, 0)
+            self.assertEqual(grid_cell.calculated_score, 2.0)
+            self.assertIsNone(grid_cell.score_updated_at)
+
+    def test_feature_summary_sets_initial_score_for_matching_grid_cell(self):
+        self.area.region_feature_level = 1
+        self.area.save(update_fields=["region_feature_level"])
+        feature_summary = {
+            "building_count": 20,
+            "road_count": 10,
+            "has_park": True,
+            "has_river": True,
+            "is_coastal": True,
+            "water_coverage_ratio": 0.1,
+        }
+        expected_score = calculate_initial_score_from_feature_summary(feature_summary)
+
+        generate_grid_cells_for_area(
+            self.area,
+            feature_summaries_by_position={(0, 0): feature_summary},
+        )
+        auto_score_grid = GridCell.objects.get(
+            area=self.area,
+            row_index=0,
+            col_index=0,
+        )
+        fallback_grid = GridCell.objects.get(
+            area=self.area,
+            row_index=0,
+            col_index=1,
+        )
+
+        self.assertEqual(auto_score_grid.initial_score, expected_score)
+        self.assertEqual(auto_score_grid.calculated_score, expected_score)
+        self.assertEqual(fallback_grid.initial_score, 1.0)
+        self.assertEqual(fallback_grid.calculated_score, 1.0)
+
+    def test_context_feature_summaries_can_drive_generated_initial_scores(self):
+        self.area.region_feature_level = 2
+        self.area.save(update_fields=["region_feature_level"])
+        grid_cell_contexts = build_grid_cell_contexts_for_area(self.area)
+        map_features = [
+            {
+                "kind": "building",
+                "bounds": {
+                    "north": 0.99,
+                    "south": 0.98,
+                    "east": 0.87,
+                    "west": 0.86,
+                },
+            },
+        ]
+        feature_summaries = build_feature_summaries_for_grid_cell_contexts(
+            grid_cell_contexts,
+            map_features,
+        )
+        expected_score = calculate_initial_score_from_feature_summary(
+            feature_summaries[(0, 0)]
+        )
+
+        generate_grid_cells_for_area(
+            self.area,
+            feature_summaries_by_position=feature_summaries,
+        )
+        auto_score_grid = GridCell.objects.get(
+            area=self.area,
+            row_index=0,
+            col_index=0,
+        )
+
+        self.assertEqual(auto_score_grid.initial_score, expected_score)
+        self.assertEqual(auto_score_grid.calculated_score, expected_score)
+        self.assertNotEqual(auto_score_grid.initial_score, 2.0)
+
+    def test_missing_feature_summary_uses_region_feature_level_fallback(self):
+        self.area.region_feature_level = 2
+        self.area.save(update_fields=["region_feature_level"])
+
+        grid_cells = generate_grid_cells_for_area(
+            self.area,
+            feature_summaries_by_position={},
+        )
+
+        for grid_cell in grid_cells:
+            self.assertEqual(grid_cell.initial_score, 2.0)
+            self.assertEqual(grid_cell.calculated_score, 2.0)
+
+    def test_invalid_feature_summary_by_position_raises_value_error(self):
+        with self.assertRaises(ValueError):
+            generate_grid_cells_for_area(
+                self.area,
+                feature_summaries_by_position={
+                    (0, 0): {"building_count": -1},
+                },
+            )
+
+        self.assertEqual(GridCell.objects.filter(area=self.area).count(), 0)
+
+    def test_feature_summaries_by_position_must_be_dict(self):
+        with self.assertRaises(ValueError):
+            generate_grid_cells_for_area(
+                self.area,
+                feature_summaries_by_position=[],
+            )
+
+        self.assertEqual(GridCell.objects.filter(area=self.area).count(), 0)
+
     def test_explicit_rows_and_cols_generate_exact_grid_count(self):
         area, bounds = self.create_center_grid_area()
 
@@ -682,6 +1594,34 @@ class GenerateGridCellsForAreaTests(TestCase):
 
         self.assertEqual(len(grid_cells), 48)
         self.assertEqual(GridCell.objects.filter(area=area).count(), 48)
+
+    def test_explicit_grid_cell_contexts_match_generated_grid_cells(self):
+        area, bounds = self.create_center_grid_area()
+
+        contexts = build_grid_cell_contexts_for_area(
+            area,
+            rows=bounds["rows"],
+            cols=bounds["cols"],
+            lat_step=bounds["lat_step"],
+            lng_step=bounds["lng_step"],
+        )
+        generate_grid_cells_for_area(
+            area,
+            rows=bounds["rows"],
+            cols=bounds["cols"],
+            lat_step=bounds["lat_step"],
+            lng_step=bounds["lng_step"],
+        )
+
+        self.assertEqual(len(contexts), 48)
+        first_context = contexts[0]
+        last_context = contexts[-1]
+        first_grid = GridCell.objects.get(area=area, row_index=0, col_index=0)
+        last_grid = GridCell.objects.get(area=area, row_index=5, col_index=7)
+        self.assertAlmostEqual(first_context["north"], first_grid.north)
+        self.assertAlmostEqual(first_context["west"], first_grid.west)
+        self.assertAlmostEqual(last_context["south"], last_grid.south)
+        self.assertAlmostEqual(last_context["east"], last_grid.east)
 
     def test_explicit_rows_and_cols_generate_expected_indexes(self):
         area, bounds = self.create_center_grid_area()
@@ -899,6 +1839,13 @@ class MapDemoViewTests(TestCase):
         self.assertContains(response, "area-center-lng")
         self.assertContains(response, "area-rows")
         self.assertContains(response, "area-cols")
+        self.assertContains(response, "地域特徴レベル")
+        self.assertContains(response, "region_feature_level")
+        self.assertContains(response, "area-region-feature-level")
+        self.assertContains(response, "0: 初期値")
+        self.assertContains(response, "1: ありふれた地域")
+        self.assertContains(response, "2: 普通の地域")
+        self.assertContains(response, "3: 特徴的な地域")
         self.assertNotContains(response, "area-north")
         self.assertNotContains(response, "area-south")
         self.assertNotContains(response, "area-east")
@@ -1010,6 +1957,8 @@ class MapDemoViewTests(TestCase):
         self.assertIn("area-delete-button", demo_js)
         self.assertIn("data-delete-area-id", demo_js)
         self.assertIn("関連するGridCell、採点、共有設定も削除されます", demo_js)
+        self.assertIn("areaRegionFeatureLevel", demo_js)
+        self.assertIn("region_feature_level", demo_js)
         self.assertIn(".map-preview-score-label", demo_css)
         self.assertIn(".map-preview-score-label.map-preview-score-low", demo_css)
         self.assertIn(".map-preview-score-label.map-preview-score-middle", demo_css)
@@ -1210,11 +2159,15 @@ class MapAreaCreateViewTests(TestCase):
         self.assertNotIn("rows", response.data)
         self.assertNotIn("cols", response.data)
         self.assertEqual(response.data["grid_size_meters"], 500)
+        self.assertEqual(response.data["region_feature_level"], 0)
+        self.assertEqual(response.data["initial_score_mode"], "manual")
         self.assertEqual(response.data["source"], "manual")
         self.assertEqual(response.data["created_by"], self.user.id)
         self.assertIn("created_at", response.data)
         self.assertIn("updated_at", response.data)
         self.assertEqual(area.created_by, self.user)
+        self.assertEqual(area.region_feature_level, 0)
+        self.assertEqual(area.initial_score_mode, MapArea.InitialScoreMode.MANUAL)
         self.assertEqual(GridCell.objects.filter(area=area).count(), 48)
 
     def test_authenticated_user_can_create_center_based_map_area(self):
@@ -1242,6 +2195,101 @@ class MapAreaCreateViewTests(TestCase):
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertEqual(GridCell.objects.filter(area=area).count(), 48)
+
+    def test_create_map_area_with_region_feature_level_sets_grid_initial_scores(self):
+        self.client.force_authenticate(user=self.user)
+        payload = {**self.center_payload(), "region_feature_level": 3}
+
+        response = self.client.post(self.url, payload, format="json")
+        area = MapArea.objects.get(id=response.data["id"])
+        grids = GridCell.objects.filter(area=area)
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["region_feature_level"], 3)
+        self.assertEqual(area.region_feature_level, 3)
+        self.assertEqual(grids.count(), 48)
+        self.assertTrue(grids.filter(initial_score=3).exists())
+        self.assertEqual(grids.exclude(initial_score=3).count(), 0)
+        self.assertEqual(grids.exclude(calculated_score=3).count(), 0)
+
+    def test_create_map_area_with_manual_initial_score_mode(self):
+        self.client.force_authenticate(user=self.user)
+        payload = {
+            **self.center_payload(),
+            "region_feature_level": 2,
+            "initial_score_mode": "manual",
+        }
+
+        response = self.client.post(self.url, payload, format="json")
+        area = MapArea.objects.get(id=response.data["id"])
+        grids = GridCell.objects.filter(area=area)
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["initial_score_mode"], "manual")
+        self.assertEqual(area.initial_score_mode, MapArea.InitialScoreMode.MANUAL)
+        self.assertEqual(grids.exclude(initial_score=2).count(), 0)
+        self.assertEqual(grids.exclude(calculated_score=2).count(), 0)
+
+    def test_create_map_area_with_auto_initial_score_mode_uses_region_feature_fallback(
+        self,
+    ):
+        self.client.force_authenticate(user=self.user)
+        payload = {
+            **self.center_payload(),
+            "region_feature_level": 2,
+            "initial_score_mode": "auto",
+        }
+
+        response = self.client.post(self.url, payload, format="json")
+        area = MapArea.objects.get(id=response.data["id"])
+        grids = GridCell.objects.filter(area=area)
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["initial_score_mode"], "auto")
+        self.assertEqual(area.initial_score_mode, MapArea.InitialScoreMode.AUTO)
+        self.assertEqual(grids.exclude(initial_score=2).count(), 0)
+        self.assertEqual(grids.exclude(calculated_score=2).count(), 0)
+
+    def test_create_map_area_without_region_feature_level_uses_zero(self):
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.post(self.url, self.center_payload(), format="json")
+        area = MapArea.objects.get(id=response.data["id"])
+        grids = GridCell.objects.filter(area=area)
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["region_feature_level"], 0)
+        self.assertEqual(area.region_feature_level, 0)
+        self.assertEqual(grids.exclude(initial_score=0).count(), 0)
+        self.assertEqual(grids.exclude(calculated_score=0).count(), 0)
+
+    def test_create_map_area_with_invalid_region_feature_level_returns_400(self):
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.post(
+            self.url,
+            {**self.center_payload(), "region_feature_level": 4},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("region_feature_level", response.data)
+        self.assertEqual(MapArea.objects.count(), 0)
+        self.assertEqual(GridCell.objects.count(), 0)
+
+    def test_create_map_area_with_invalid_initial_score_mode_returns_400(self):
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.post(
+            self.url,
+            {**self.center_payload(), "initial_score_mode": "invalid"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("initial_score_mode", response.data)
+        self.assertEqual(MapArea.objects.count(), 0)
+        self.assertEqual(GridCell.objects.count(), 0)
 
     def test_center_based_grid_cells_align_to_area_bounds(self):
         self.client.force_authenticate(user=self.user)
@@ -1564,6 +2612,7 @@ class MapAreaListViewTests(TestCase):
         self.assertEqual(response.data["areas"][0]["name"], "A Area")
         self.assertEqual(response.data["areas"][0]["created_by"], self.user.id)
         self.assertEqual(response.data["areas"][0]["created_by_username"], self.user.username)
+        self.assertEqual(response.data["areas"][0]["initial_score_mode"], "manual")
         self.assertEqual(response.data["areas"][0]["visibility"], "private")
         self.assertEqual(response.data["areas"][0]["display_type"], "メモグリッド")
         self.assertIs(response.data["areas"][0]["is_owner"], True)
@@ -1793,6 +2842,7 @@ class MapAreaDetailViewTests(TestCase):
         self.assertEqual(response.data["east"], 139.8)
         self.assertEqual(response.data["west"], 139.7)
         self.assertEqual(response.data["grid_size_meters"], 500)
+        self.assertEqual(response.data["initial_score_mode"], "manual")
         self.assertEqual(response.data["source"], "manual")
         self.assertEqual(response.data["created_by"], self.user.id)
         self.assertIn("created_at", response.data)

@@ -10,6 +10,17 @@ class MapAreaSerializer(serializers.ModelSerializer):
     south = serializers.FloatField(read_only=True)
     east = serializers.FloatField(read_only=True)
     west = serializers.FloatField(read_only=True)
+    region_feature_level = serializers.IntegerField(
+        min_value=0,
+        max_value=3,
+        required=False,
+        default=0,
+    )
+    initial_score_mode = serializers.ChoiceField(
+        choices=MapArea.InitialScoreMode.choices,
+        required=False,
+        default=MapArea.InitialScoreMode.MANUAL,
+    )
     center_lat = serializers.FloatField(write_only=True, required=False)
     center_lng = serializers.FloatField(write_only=True, required=False)
     rows = serializers.IntegerField(write_only=True, required=False)
@@ -28,6 +39,8 @@ class MapAreaSerializer(serializers.ModelSerializer):
             "center_lat",
             "center_lng",
             "grid_size_meters",
+            "region_feature_level",
+            "initial_score_mode",
             "rows",
             "cols",
             "source",
