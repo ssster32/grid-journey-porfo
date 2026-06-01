@@ -1186,13 +1186,23 @@ function cancelDragSelection() {
 }
 
 function readAreaForm() {
+  const selectedInitialScoreValue = elements.areaRegionFeatureLevel.value;
+  let initialScoreMode = "manual";
+  let regionFeatureLevel = Number(selectedInitialScoreValue);
+
+  if (selectedInitialScoreValue === "auto") {
+    initialScoreMode = "auto";
+    regionFeatureLevel = 0;
+  }
+
   return {
     name: elements.areaName.value.trim(),
     description: elements.areaDescription.value.trim(),
     center_lat: Number(elements.areaCenterLat.value),
     center_lng: Number(elements.areaCenterLng.value),
     grid_size_meters: Number(elements.areaGridSize.value),
-    region_feature_level: parseInt(elements.areaRegionFeatureLevel.value, 10),
+    region_feature_level: regionFeatureLevel,
+    initial_score_mode: initialScoreMode,
     rows: parseInt(elements.areaRows.value, 10),
     cols: parseInt(elements.areaCols.value, 10),
     source: elements.areaSource.value.trim(),

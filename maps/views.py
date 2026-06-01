@@ -1,3 +1,5 @@
+import logging
+
 from django.contrib.staticfiles import finders
 from django.db import transaction
 from django.db.models import Q
@@ -22,6 +24,7 @@ from .serializers import (
     GridRatingResponseSerializer,
 )
 from .services import (
+    build_feature_summaries_for_map_area_from_overpass,
     generate_grid_cells_for_area,
     update_grid_cell_score,
     validate_center_grid_limits,
@@ -33,6 +36,8 @@ API_AUTHENTICATION_CLASSES = [
     BasicAuthentication,
     SessionAuthentication,
 ]
+
+logger = logging.getLogger(__name__)
 
 
 def get_viewable_map_area_or_404(user, area_id):
@@ -48,6 +53,26 @@ def rateable_grid_cells_for_user(user):
     return GridCell.objects.filter(
         Q(area__created_by=user) | Q(area__shares__user=user)
     ).distinct()
+
+
+def log_overpass_feature_summary(area, user_id, feature_summaries_by_position):
+    summaries = feature_summaries_by_position.values()
+    logger.info(
+        "Overpass auto feature summary: "
+        "area_id=%s user_id=%s summary_count=%s "
+        "building_cells=%s road_cells=%s park_cells=%s river_cells=%s "
+        "coastal_cells=%s water_cells=%s forest_cells=%s",
+        area.id,
+        user_id,
+        len(feature_summaries_by_position),
+        sum(summary.get("building_count", 0) > 0 for summary in summaries),
+        sum(summary.get("road_count", 0) > 0 for summary in summaries),
+        sum(summary.get("has_park", False) is True for summary in summaries),
+        sum(summary.get("has_river", False) is True for summary in summaries),
+        sum(summary.get("is_coastal", False) is True for summary in summaries),
+        sum(summary.get("water_coverage_ratio", 0) > 0 for summary in summaries),
+        sum(summary.get("forest_coverage_ratio", 0) > 0 for summary in summaries),
+    )
 
 
 class MapDemoView(APIView):
@@ -124,13 +149,52 @@ class MapAreaListCreateView(APIView):
         try:
             with transaction.atomic():
                 area = serializer.save(created_by=request.user)
-                generate_grid_cells_for_area(
-                    area,
-                    rows=center_grid_options["rows"],
-                    cols=center_grid_options["cols"],
-                    lat_step=center_grid_options["lat_step"],
-                    lng_step=center_grid_options["lng_step"],
-                )
+                grid_generation_options = {
+                    "rows": center_grid_options["rows"],
+                    "cols": center_grid_options["cols"],
+                    "lat_step": center_grid_options["lat_step"],
+                    "lng_step": center_grid_options["lng_step"],
+                }
+                feature_summaries_by_position = None
+
+                if area.initial_score_mode == MapArea.InitialScoreMode.AUTO:
+                    try:
+                        feature_summaries_by_position = (
+                            build_feature_summaries_for_map_area_from_overpass(
+                                area,
+                                **grid_generation_options,
+                            )
+                        )
+                        logger.info(
+                            "Overpass auto initial score succeeded: "
+                            "area_id=%s user_id=%s initial_score_mode=%s "
+                            "summary_count=%s",
+                            area.id,
+                            request.user.id,
+                            area.initial_score_mode,
+                            len(feature_summaries_by_position),
+                        )
+                        log_overpass_feature_summary(
+                            area,
+                            request.user.id,
+                            feature_summaries_by_position,
+                        )
+                    except ValueError as error:
+                        logger.warning(
+                            "Overpass auto initial score failed; using fallback: "
+                            "area_id=%s user_id=%s error=%s",
+                            area.id,
+                            request.user.id,
+                            error,
+                        )
+                        feature_summaries_by_position = None
+
+                if feature_summaries_by_position is not None:
+                    grid_generation_options["feature_summaries_by_position"] = (
+                        feature_summaries_by_position
+                    )
+
+                generate_grid_cells_for_area(area, **grid_generation_options)
         except ValueError as error:
             return Response(
                 {"detail": str(error)},

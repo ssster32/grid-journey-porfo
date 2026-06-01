@@ -1,5 +1,6 @@
 from math import ceil, cos, isfinite, radians
 
+import requests
 from django.db.models import Avg, Count
 from django.utils import timezone
 
@@ -75,6 +76,309 @@ def _normalize_bounds(bounds):
         raise ValueError("east は west より大きい値にしてください。")
 
     return normalized_bounds
+
+
+def classify_osm_element(tags):
+    """Classify OSM tags into one map_features kind."""
+    if not isinstance(tags, dict):
+        raise ValueError("tags は辞書で指定してください。")
+
+    waterway = tags.get("waterway")
+    natural = tags.get("natural")
+    landuse = tags.get("landuse")
+    leisure = tags.get("leisure")
+
+    if natural == "coastline":
+        return "coastline"
+    if waterway in {"river", "stream", "canal"}:
+        return "river"
+    if natural == "water" or "water" in tags or waterway == "riverbank":
+        return "water"
+    if landuse == "forest" or natural == "wood":
+        return "forest"
+    if leisure in {"park", "garden"}:
+        return "park"
+    if "highway" in tags:
+        return "road"
+    if "building" in tags:
+        return "building"
+
+    return None
+
+
+def build_bounds_from_osm_element(element):
+    """Build normalized bbox bounds from one OSM element."""
+    if not isinstance(element, dict):
+        raise ValueError("element は辞書で指定してください。")
+
+    if "bounds" in element:
+        bounds = element["bounds"]
+        if isinstance(bounds, dict) and {
+            "minlat",
+            "minlon",
+            "maxlat",
+            "maxlon",
+        }.issubset(bounds):
+            bounds = {
+                "north": bounds["maxlat"],
+                "south": bounds["minlat"],
+                "east": bounds["maxlon"],
+                "west": bounds["minlon"],
+            }
+
+        return _normalize_bounds(bounds)
+
+    geometry = element.get("geometry")
+    if not geometry:
+        return None
+
+    north = south = east = west = None
+    for point in geometry:
+        if not isinstance(point, dict):
+            return None
+
+        try:
+            lat = float(point["lat"])
+            lon = float(point["lon"])
+        except (KeyError, TypeError, ValueError):
+            return None
+
+        if not isfinite(lat) or not isfinite(lon):
+            return None
+
+        north = lat if north is None else max(north, lat)
+        south = lat if south is None else min(south, lat)
+        east = lon if east is None else max(east, lon)
+        west = lon if west is None else min(west, lon)
+
+    try:
+        return _normalize_bounds(
+            {
+                "north": north,
+                "south": south,
+                "east": east,
+                "west": west,
+            }
+        )
+    except ValueError:
+        return None
+
+
+def build_map_feature_from_osm_element(element):
+    """Build one map_features dict from one OSM element."""
+    if not isinstance(element, dict):
+        raise ValueError("element は辞書で指定してください。")
+
+    kind = classify_osm_element(element.get("tags", {}))
+    if kind is None:
+        return None
+
+    bounds = build_bounds_from_osm_element(element)
+    if bounds is None:
+        return None
+
+    return {
+        "kind": kind,
+        "bounds": bounds,
+        "source": "osm",
+        "source_type": element.get("type"),
+        "source_id": element.get("id"),
+    }
+
+
+def parse_overpass_elements_to_map_features(elements):
+    """Convert Overpass elements into map_features."""
+    if not isinstance(elements, list):
+        raise ValueError("elements はリストで指定してください。")
+
+    map_features = []
+    for element in elements:
+        if not isinstance(element, dict):
+            raise ValueError("elements の各要素は辞書で指定してください。")
+
+        try:
+            map_feature = build_map_feature_from_osm_element(element)
+        except ValueError:
+            continue
+
+        if map_feature is not None:
+            map_features.append(map_feature)
+
+    return map_features
+
+
+def build_overpass_query(bounds):
+    """Build an Overpass QL query for map feature candidates within bounds."""
+    bounds = _normalize_bounds(bounds)
+    bbox = (
+        f'{bounds["south"]},{bounds["west"]},'
+        f'{bounds["north"]},{bounds["east"]}'
+    )
+    target_filters = (
+        '["building"]',
+        '["highway"]',
+        '["natural"="water"]',
+        '["water"]',
+        '["waterway"="riverbank"]',
+        '["waterway"="river"]',
+        '["waterway"="stream"]',
+        '["waterway"="canal"]',
+        '["landuse"="forest"]',
+        '["natural"="wood"]',
+        '["leisure"="park"]',
+        '["leisure"="garden"]',
+        '["natural"="coastline"]',
+    )
+    query_lines = [
+        "[out:json][timeout:25];",
+        "(",
+    ]
+    for target_filter in target_filters:
+        query_lines.append(f"  nwr{target_filter}({bbox});")
+    query_lines.extend(
+        [
+            ");",
+            "out body geom;",
+        ]
+    )
+
+    return "\n".join(query_lines)
+
+
+def fetch_osm_features_from_overpass(
+    bounds,
+    *,
+    endpoint="https://overpass-api.de/api/interpreter",
+    timeout=25,
+):
+    """Fetch OSM features from Overpass and convert them into map_features."""
+    query = build_overpass_query(bounds)
+
+    if not isinstance(endpoint, str) or not endpoint.strip():
+        raise ValueError("endpoint は空でない文字列で指定してください。")
+    endpoint = endpoint.strip()
+
+    if isinstance(timeout, bool):
+        raise ValueError("timeout は 0 より大きい数値で指定してください。")
+    try:
+        timeout = float(timeout)
+    except (TypeError, ValueError):
+        raise ValueError("timeout は 0 より大きい数値で指定してください。")
+    if not isfinite(timeout) or timeout <= 0:
+        raise ValueError("timeout は 0 より大きい数値で指定してください。")
+
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "text/plain; charset=utf-8",
+        "User-Agent": "portfolio-api-map-score/1.0",
+    }
+
+    try:
+        response = requests.post(
+            endpoint,
+            data=query.encode("utf-8"),
+            headers=headers,
+            timeout=timeout,
+        )
+    except Exception as exc:
+        raise ValueError("Overpass API へのリクエストに失敗しました。") from exc
+
+    if response.status_code != 200:
+        response_text = str(getattr(response, "text", ""))[:300]
+        error_message = (
+            "Overpass API から正常なレスポンスを取得できませんでした。"
+            f" status_code={response.status_code}"
+        )
+        if response_text:
+            error_message += f" response_text={response_text}"
+        raise ValueError(error_message)
+
+    try:
+        response_data = response.json()
+    except ValueError as exc:
+        raise ValueError("Overpass API レスポンスをJSONとして読めません。") from exc
+
+    if not isinstance(response_data, dict):
+        raise ValueError("Overpass API レスポンスは辞書形式である必要があります。")
+    if "elements" not in response_data:
+        raise ValueError("Overpass API レスポンスに elements がありません。")
+    if not isinstance(response_data["elements"], list):
+        raise ValueError("Overpass API レスポンスの elements はリストである必要があります。")
+
+    try:
+        return parse_overpass_elements_to_map_features(response_data["elements"])
+    except ValueError as exc:
+        raise ValueError("Overpass API レスポンスの elements が不正です。") from exc
+
+
+def build_feature_summaries_for_map_area_from_overpass(
+    map_area,
+    *,
+    padding_meters=0,
+    rows=None,
+    cols=None,
+    lat_step=None,
+    lng_step=None,
+):
+    """Build feature summaries for unsaved GridCells using Overpass map features."""
+    grid_cell_contexts = build_grid_cell_contexts_for_area(
+        map_area,
+        rows=rows,
+        cols=cols,
+        lat_step=lat_step,
+        lng_step=lng_step,
+    )
+    overpass_bounds = build_overpass_bbox_for_map_area(
+        map_area,
+        padding_meters=padding_meters,
+    )
+    map_features = fetch_osm_features_from_overpass(overpass_bounds)
+
+    return build_feature_summaries_for_grid_cell_contexts(
+        grid_cell_contexts,
+        map_features,
+    )
+
+
+def build_overpass_bbox_for_map_area(map_area, padding_meters=0):
+    """Build an Overpass bbox dict from MapArea bounds."""
+    bounds = _normalize_bounds(
+        {
+            "north": getattr(map_area, "north", None),
+            "south": getattr(map_area, "south", None),
+            "east": getattr(map_area, "east", None),
+            "west": getattr(map_area, "west", None),
+        }
+    )
+
+    if isinstance(padding_meters, bool):
+        raise ValueError("padding_meters は 0 以上の数値で指定してください。")
+
+    try:
+        padding_meters = float(padding_meters)
+    except (TypeError, ValueError):
+        raise ValueError("padding_meters は 0 以上の数値で指定してください。")
+
+    if not isfinite(padding_meters) or padding_meters < 0:
+        raise ValueError("padding_meters は 0 以上の数値で指定してください。")
+
+    if padding_meters == 0:
+        return bounds
+
+    center_lat = (bounds["north"] + bounds["south"]) / 2
+    longitude_cosine = cos(radians(center_lat))
+    if abs(longitude_cosine) < MIN_LONGITUDE_COSINE:
+        raise ValueError("中心緯度が極域に近すぎるため経度方向のpaddingを計算できません。")
+
+    lat_padding = padding_meters / METERS_PER_DEGREE
+    lng_padding = padding_meters / (METERS_PER_DEGREE * longitude_cosine)
+
+    return {
+        "north": bounds["north"] + lat_padding,
+        "south": bounds["south"] - lat_padding,
+        "east": bounds["east"] + lng_padding,
+        "west": bounds["west"] - lng_padding,
+    }
 
 
 def feature_intersects_grid_cell(feature_bounds, grid_cell_bounds):
