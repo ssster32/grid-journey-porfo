@@ -14,12 +14,22 @@ MAX_GENERAL_USER_GRID_WIDTH_METERS = 30000
 MIN_LONGITUDE_COSINE = 0.01
 INITIAL_SCORE_MIN = 0.0
 INITIAL_SCORE_MAX = 3.0
+BASE_INITIAL_SCORE = 0.2
+BUILDING_BASE_SCORE_MAX_BONUS = 0.4
+BUILDING_COUNT_FOR_MAX_BASE_SCORE = 20
+ROAD_BASE_SCORE_MAX_BONUS = 0.0
+ROAD_COUNT_FOR_MAX_BASE_SCORE = 10
+MIN_FOREST_COVERAGE_RATIO_FOR_SCORE = 0.10
 MAX_ROAD_BOUNDS_AREA_RATIO_FOR_COUNT = 20.0
 MAX_ROAD_BOUNDS_LENGTH_RATIO_FOR_COUNT = 10.0
 MAX_RIVER_BOUNDS_AREA_RATIO_FOR_INTERSECTION = 20.0
 MAX_RIVER_BOUNDS_LENGTH_RATIO_FOR_INTERSECTION = 10.0
 MIN_LARGE_RIVER_OVERLAP_RATIO_FOR_INTERSECTION = 0.05
+MIN_RIVER_COVERAGE_RATIO_FOR_HAS_RIVER = 0.05
 LARGE_WATERWAY_RIVER_BOUNDS_AREA_RATIO_TO_MAP = 1.0
+MAX_WATERWAY_RIVER_BOUNDS_AREA_RATIO_TO_MAP_FOR_GRID_CELL = (
+    LARGE_WATERWAY_RIVER_BOUNDS_AREA_RATIO_TO_MAP
+)
 
 
 class FeatureSummariesByPosition(dict):
@@ -351,11 +361,18 @@ def build_feature_summaries_for_map_area_from_overpass(
         padding_meters=padding_meters,
     )
     map_features = fetch_osm_features_from_overpass(overpass_bounds)
+    map_area_bounds = {
+        "north": map_area.north,
+        "south": map_area.south,
+        "east": map_area.east,
+        "west": map_area.west,
+    }
 
     feature_summaries = FeatureSummariesByPosition(
         build_feature_summaries_for_grid_cell_contexts(
             grid_cell_contexts,
             map_features,
+            map_area_bounds=map_area_bounds,
         )
     )
     feature_summaries.river_summary = (
@@ -372,13 +389,9 @@ def build_feature_summaries_for_map_area_from_overpass(
     )
     feature_summaries.waterway_river_bounds_summary = (
         summarize_waterway_river_bounds_for_map_area(
-            {
-                "north": map_area.north,
-                "south": map_area.south,
-                "east": map_area.east,
-                "west": map_area.west,
-            },
+            map_area_bounds,
             map_features,
+            grid_cell_contexts=grid_cell_contexts,
         )
     )
 
@@ -415,19 +428,49 @@ def _empty_waterway_river_bounds_summary():
         "waterway_river_bounds_intersecting_map_features": 0,
         "waterway_river_bounds_covering_map_features": 0,
         "waterway_river_bounds_large_area_features": 0,
+        "waterway_river_bounds_filtered_features": 0,
+        "waterway_river_bounds_filtered_cells": 0,
         "waterway_river_bounds_max_area_ratio_to_map": 0.0,
         "waterway_river_bounds_max_height_ratio_to_map": 0.0,
         "waterway_river_bounds_max_width_ratio_to_map": 0.0,
     }
 
 
-def summarize_waterway_river_bounds_for_map_area(map_area_bounds, map_features):
+def summarize_waterway_river_bounds_for_map_area(
+    map_area_bounds,
+    map_features,
+    grid_cell_contexts=None,
+):
     """Summarize waterway=river bbox size ratios against a MapArea bbox."""
     map_area_bounds = _normalize_bounds(map_area_bounds)
     if not isinstance(map_features, list):
         raise ValueError("map_features はリストで指定してください。")
+    grid_cell_entries = []
+    if grid_cell_contexts is not None:
+        if not isinstance(grid_cell_contexts, list):
+            raise ValueError("grid_cell_contexts はリストで指定してください。")
+        for index, grid_cell_context in enumerate(grid_cell_contexts):
+            if not isinstance(grid_cell_context, dict):
+                raise ValueError("grid_cell_contexts の各要素は辞書で指定してください。")
+            grid_cell_entries.append(
+                (
+                    (
+                        grid_cell_context.get("row_index", index),
+                        grid_cell_context.get("col_index", index),
+                    ),
+                    _normalize_bounds(
+                        {
+                            "north": grid_cell_context.get("north"),
+                            "south": grid_cell_context.get("south"),
+                            "east": grid_cell_context.get("east"),
+                            "west": grid_cell_context.get("west"),
+                        }
+                    ),
+                )
+            )
 
     bounds_summary = _empty_waterway_river_bounds_summary()
+    filtered_cell_keys = set()
 
     for feature in map_features:
         if not isinstance(feature, dict):
@@ -455,8 +498,17 @@ def summarize_waterway_river_bounds_for_map_area(map_area_bounds, map_features):
             bounds_summary["waterway_river_bounds_intersecting_map_features"] += 1
         if _feature_covers_grid_cell(feature_bounds, map_area_bounds):
             bounds_summary["waterway_river_bounds_covering_map_features"] += 1
-        if size_ratios["area_ratio"] >= LARGE_WATERWAY_RIVER_BOUNDS_AREA_RATIO_TO_MAP:
+        if is_large_waterway_river_bounds_for_map_area(
+            feature_bounds,
+            map_area_bounds,
+        ):
             bounds_summary["waterway_river_bounds_large_area_features"] += 1
+            bounds_summary["waterway_river_bounds_filtered_features"] += 1
+            for cell_key, grid_cell_bounds in grid_cell_entries:
+                if feature_intersects_grid_cell(feature_bounds, grid_cell_bounds):
+                    filtered_cell_keys.add(cell_key)
+
+    bounds_summary["waterway_river_bounds_filtered_cells"] = len(filtered_cell_keys)
 
     return bounds_summary
 
@@ -677,7 +729,7 @@ def calculate_bounds_overlap_ratio(feature_bounds, grid_cell_bounds):
 
 
 def calculate_bounds_size_ratios(feature_bounds, grid_cell_bounds):
-    """Return feature bbox size ratios compared with one GridCell bbox."""
+    """Return feature bbox size ratios against another bbox."""
     feature_bounds = _normalize_bounds(feature_bounds)
     grid_cell_bounds = _normalize_bounds(grid_cell_bounds)
 
@@ -695,6 +747,32 @@ def calculate_bounds_size_ratios(feature_bounds, grid_cell_bounds):
     }
 
 
+def is_large_waterway_river_bounds_for_map_area(feature_bounds, map_area_bounds):
+    """Return True when a waterway=river bbox is too large for MapArea scoring."""
+    size_ratios = calculate_bounds_size_ratios(feature_bounds, map_area_bounds)
+    return (
+        size_ratios["area_ratio"]
+        >= MAX_WATERWAY_RIVER_BOUNDS_AREA_RATIO_TO_MAP_FOR_GRID_CELL
+    )
+
+
+def should_use_river_feature_for_grid_cell(feature, map_area_bounds):
+    """Return False for MapArea-scale waterway=river bounds that over-mark cells."""
+    if map_area_bounds is None:
+        return True
+    map_area_bounds = _normalize_bounds(map_area_bounds)
+
+    if not isinstance(feature, dict):
+        raise ValueError("feature は辞書で指定してください。")
+    if feature.get("kind") != "river" or feature.get("source_waterway") != "river":
+        return True
+
+    return not is_large_waterway_river_bounds_for_map_area(
+        feature.get("bounds"),
+        map_area_bounds,
+    )
+
+
 def _feature_covers_grid_cell(feature_bounds, grid_cell_bounds):
     feature_bounds = _normalize_bounds(feature_bounds)
     grid_cell_bounds = _normalize_bounds(grid_cell_bounds)
@@ -707,9 +785,15 @@ def _feature_covers_grid_cell(feature_bounds, grid_cell_bounds):
     )
 
 
-def build_feature_summary_for_grid_cell(grid_cell_bounds, map_features):
+def build_feature_summary_for_grid_cell(
+    grid_cell_bounds,
+    map_features,
+    map_area_bounds=None,
+):
     """Build feature summary for one GridCell from provisional bbox features."""
     grid_cell_bounds = _normalize_bounds(grid_cell_bounds)
+    if map_area_bounds is not None:
+        map_area_bounds = _normalize_bounds(map_area_bounds)
     if not isinstance(map_features, list):
         raise ValueError("map_features はリストで指定してください。")
 
@@ -718,6 +802,8 @@ def build_feature_summary_for_grid_cell(grid_cell_bounds, map_features):
         "road_count": 0,
         "water_coverage_ratio": 0.0,
         "forest_coverage_ratio": 0.0,
+        "park_coverage_ratio": 0.0,
+        "river_coverage_ratio": 0.0,
         "has_park": False,
         "has_river": False,
         "is_coastal": False,
@@ -768,8 +854,16 @@ def build_feature_summary_for_grid_cell(grid_cell_bounds, map_features):
                 calculate_bounds_overlap_ratio(feature_bounds, grid_cell_bounds),
             )
         elif feature_kind == "park":
+            feature_summary["park_coverage_ratio"] = max(
+                feature_summary["park_coverage_ratio"],
+                calculate_bounds_overlap_ratio(feature_bounds, grid_cell_bounds),
+            )
             feature_summary["has_park"] = True
         elif feature_kind == "river":
+            # MapArea-scale waterway=river bboxes can over-mark every GridCell.
+            if not should_use_river_feature_for_grid_cell(feature, map_area_bounds):
+                continue
+
             size_ratios = calculate_bounds_size_ratios(
                 feature_bounds,
                 grid_cell_bounds,
@@ -785,13 +879,21 @@ def build_feature_summary_for_grid_cell(grid_cell_bounds, map_features):
                 or size_ratios["width_ratio"]
                 > MAX_RIVER_BOUNDS_LENGTH_RATIO_FOR_INTERSECTION
             )
+            # GridCell-scale large river bboxes still count when overlap is meaningful.
             if (
                 not is_large_river_bounds
                 or overlap_ratio >= MIN_LARGE_RIVER_OVERLAP_RATIO_FOR_INTERSECTION
             ):
-                feature_summary["has_river"] = True
+                feature_summary["river_coverage_ratio"] = max(
+                    feature_summary["river_coverage_ratio"],
+                    overlap_ratio,
+                )
         elif feature_kind == "coastline":
             feature_summary["is_coastal"] = True
+
+    feature_summary["has_river"] = (
+        feature_summary["river_coverage_ratio"] >= MIN_RIVER_COVERAGE_RATIO_FOR_HAS_RIVER
+    )
 
     return feature_summary
 
@@ -814,10 +916,16 @@ def build_feature_summaries_for_grid_cells(grid_cells, map_features):
     return feature_summaries
 
 
-def build_feature_summaries_for_grid_cell_contexts(grid_cell_contexts, map_features):
+def build_feature_summaries_for_grid_cell_contexts(
+    grid_cell_contexts,
+    map_features,
+    map_area_bounds=None,
+):
     """Build feature summaries keyed by each unsaved GridCell context position."""
     if not isinstance(grid_cell_contexts, list):
         raise ValueError("grid_cell_contexts はリストで指定してください。")
+    if map_area_bounds is not None:
+        map_area_bounds = _normalize_bounds(map_area_bounds)
 
     feature_summaries = {}
 
@@ -842,14 +950,18 @@ def build_feature_summaries_for_grid_cell_contexts(grid_cell_contexts, map_featu
             "west": grid_cell_context.get("west"),
         }
         feature_summaries[(row_index, col_index)] = (
-            build_feature_summary_for_grid_cell(grid_cell_bounds, map_features)
+            build_feature_summary_for_grid_cell(
+                grid_cell_bounds,
+                map_features,
+                map_area_bounds=map_area_bounds,
+            )
         )
 
     return feature_summaries
 
 
-def calculate_initial_score_from_feature_summary(feature_summary):
-    """Calculate a provisional 0.0-3.0 initial score from feature summary data."""
+def calculate_initial_score_breakdown_from_feature_summary(feature_summary):
+    """Calculate score details from feature summary data without changing rules."""
     if not isinstance(feature_summary, dict):
         raise ValueError("feature_summary は辞書で指定してください。")
 
@@ -857,45 +969,117 @@ def calculate_initial_score_from_feature_summary(feature_summary):
     road_count = _feature_number(feature_summary, "road_count")
     water_coverage_ratio = _feature_ratio(feature_summary, "water_coverage_ratio")
     forest_coverage_ratio = _feature_ratio(feature_summary, "forest_coverage_ratio")
-    has_park = bool(feature_summary.get("has_park", False))
-    has_river = bool(feature_summary.get("has_river", False))
+    has_park_value = bool(feature_summary.get("has_park", False))
+    _feature_ratio(
+        feature_summary,
+        "park_coverage_ratio",
+        1.0 if has_park_value else 0.0,
+    )
+    has_park = has_park_value
+    has_river_value = bool(feature_summary.get("has_river", False))
+    river_coverage_ratio = _feature_ratio(
+        feature_summary,
+        "river_coverage_ratio",
+        1.0 if has_river_value else 0.0,
+    )
+    has_river = (
+        has_river_value
+        or river_coverage_ratio >= MIN_RIVER_COVERAGE_RATIO_FOR_HAS_RIVER
+    )
+    has_scored_forest = (
+        forest_coverage_ratio >= MIN_FOREST_COVERAGE_RATIO_FOR_SCORE
+    )
     is_coastal = bool(feature_summary.get("is_coastal", False))
+    has_building = building_count > 0
+    has_road = road_count > 0
+    has_water = water_coverage_ratio > 0
 
-    base_score = 0.3
-    base_score += min(building_count / 20, 1.0) * 0.7
-    base_score += min(road_count / 10, 1.0) * 0.5
+    building_base_bonus = (
+        min(building_count / BUILDING_COUNT_FOR_MAX_BASE_SCORE, 1.0)
+        * BUILDING_BASE_SCORE_MAX_BONUS
+    )
+    road_base_bonus = (
+        min(road_count / ROAD_COUNT_FOR_MAX_BASE_SCORE, 1.0)
+        * ROAD_BASE_SCORE_MAX_BONUS
+    )
+    base_score = BASE_INITIAL_SCORE + building_base_bonus + road_base_bonus
 
     feature_categories = [
-        building_count > 0,
-        road_count > 0,
+        has_building,
         has_park,
         has_river,
         is_coastal,
-        water_coverage_ratio > 0,
-        forest_coverage_ratio > 0,
+        has_water,
+        has_scored_forest,
     ]
-    diversity_bonus = min(sum(feature_categories) * 0.18, 0.9)
+    feature_category_count = sum(feature_categories)
+    diversity_bonus = min(feature_category_count * 0.18, 0.9)
+
+    has_park_context = has_park and has_building
+    has_river_context = has_river and has_building
+    has_coastal_context = is_coastal and (has_building or has_road)
+    has_forest_context = has_scored_forest and has_building
 
     context_bonus = 0.0
-    if has_park and building_count > 0:
+    if has_park_context:
         context_bonus += 0.2
-    if has_river and building_count > 0:
+    if has_river_context:
         context_bonus += 0.25
-    if is_coastal and (building_count > 0 or road_count > 0):
+    if has_coastal_context:
         context_bonus += 0.3
-    if forest_coverage_ratio > 0 and building_count > 0:
+    if has_forest_context:
         context_bonus += 0.15
 
+    has_water_penalty = water_coverage_ratio >= 0.95
+    has_forest_penalty = (
+        forest_coverage_ratio >= 0.95 and not has_building and not has_road
+    )
+    has_empty_cell_penalty = not has_building and not has_road
+
     penalty = 0.0
-    if water_coverage_ratio >= 0.95:
+    if has_water_penalty:
         penalty += 2.4
-    if forest_coverage_ratio >= 0.95 and building_count == 0 and road_count == 0:
+    if has_forest_penalty:
         penalty += 2.0
-    if building_count == 0 and road_count == 0:
+    if has_empty_cell_penalty:
         penalty += 0.6
 
     raw_score = base_score + diversity_bonus + context_bonus - penalty
-    return _clamp_initial_score(raw_score)
+    clamped_score = _clamp_initial_score(raw_score)
+
+    return {
+        "base_score": base_score,
+        "building_base_bonus": building_base_bonus,
+        "road_base_bonus": road_base_bonus,
+        "diversity_bonus": diversity_bonus,
+        "context_bonus": context_bonus,
+        "penalty": penalty,
+        "raw_score": raw_score,
+        "clamped_score": clamped_score,
+        "feature_category_count": feature_category_count,
+        "has_building": has_building,
+        "has_road": has_road,
+        "has_park": has_park,
+        "has_river": has_river,
+        "has_water": has_water,
+        "has_scored_forest": has_scored_forest,
+        "is_coastal": is_coastal,
+        "has_park_context": has_park_context,
+        "has_river_context": has_river_context,
+        "has_forest_context": has_forest_context,
+        "has_coastal_context": has_coastal_context,
+        "has_water_penalty": has_water_penalty,
+        "has_forest_penalty": has_forest_penalty,
+        "has_empty_cell_penalty": has_empty_cell_penalty,
+    }
+
+
+def calculate_initial_score_from_feature_summary(feature_summary):
+    """Calculate a provisional 0.0-3.0 initial score from feature summary data."""
+    breakdown = calculate_initial_score_breakdown_from_feature_summary(
+        feature_summary
+    )
+    return breakdown["clamped_score"]
 
 
 def determine_initial_score_for_grid_cell(

@@ -1517,6 +1517,8 @@ class MapAreaCreateViewTests(TestCase):
             "has_river": True,
             "is_coastal": True,
             "water_coverage_ratio": 0.1,
+            "park_coverage_ratio": 0.3,
+            "river_coverage_ratio": 0.2,
         }
         second_feature_summary = {
             "road_count": 5,
@@ -1577,6 +1579,47 @@ class MapAreaCreateViewTests(TestCase):
             f"score_avg={sum(expected_scores) / len(expected_scores):.2f}",
             log_output,
         )
+        self.assertIn("Overpass auto score breakdown summary", log_output)
+        self.assertIn("base_score_avg=", log_output)
+        self.assertIn("base_score_max=", log_output)
+        self.assertIn("diversity_bonus_avg=", log_output)
+        self.assertIn("diversity_bonus_max=", log_output)
+        self.assertIn("context_bonus_avg=", log_output)
+        self.assertIn("context_bonus_max=", log_output)
+        self.assertIn("penalty_avg=", log_output)
+        self.assertIn("penalty_max=", log_output)
+        self.assertIn("raw_score_avg=", log_output)
+        self.assertIn("raw_score_max=", log_output)
+        self.assertIn("clamped_score_avg=", log_output)
+        self.assertIn("clamped_score_max=", log_output)
+        self.assertIn("max_score_cells=0", log_output)
+        self.assertIn("building_base_cells=1", log_output)
+        self.assertIn("road_base_cells=0", log_output)
+        self.assertIn("road_scored_cells=0", log_output)
+        self.assertIn("park_context_cells=1", log_output)
+        self.assertIn("river_context_cells=1", log_output)
+        self.assertIn("forest_context_cells=0", log_output)
+        self.assertIn("coastal_context_cells=1", log_output)
+        self.assertIn("water_penalty_cells=0", log_output)
+        self.assertIn("forest_penalty_cells=0", log_output)
+        self.assertIn("empty_cell_penalty_cells=0", log_output)
+        self.assertIn("Overpass auto scored river summary", log_output)
+        self.assertIn("scored_river_cells=1", log_output)
+        self.assertIn("river_coverage_cells=1", log_output)
+        self.assertIn("river_coverage_avg=0.2000", log_output)
+        self.assertIn("river_coverage_max=0.2000", log_output)
+        self.assertIn("Overpass auto scored natural coverage summary", log_output)
+        self.assertIn("park_cells=1", log_output)
+        self.assertIn("park_coverage_cells=1", log_output)
+        self.assertIn("park_coverage_avg=0.3000", log_output)
+        self.assertIn("park_coverage_max=0.3000", log_output)
+        self.assertIn("water_coverage_cells=1", log_output)
+        self.assertIn("water_coverage_avg=0.1000", log_output)
+        self.assertIn("water_coverage_max=0.1000", log_output)
+        self.assertIn("forest_coverage_cells=1", log_output)
+        self.assertIn("scored_forest_cells=1", log_output)
+        self.assertIn("forest_coverage_avg=0.5000", log_output)
+        self.assertIn("forest_coverage_max=0.5000", log_output)
         self.assertIn("Overpass auto waterway summary", log_output)
         self.assertIn("waterway_river_features=0", log_output)
         self.assertIn("waterway_stream_features=0", log_output)
@@ -1591,6 +1634,8 @@ class MapAreaCreateViewTests(TestCase):
         self.assertIn("waterway_river_bounds_intersecting_map_features=0", log_output)
         self.assertIn("waterway_river_bounds_covering_map_features=0", log_output)
         self.assertIn("waterway_river_bounds_large_area_features=0", log_output)
+        self.assertIn("waterway_river_bounds_filtered_features=0", log_output)
+        self.assertIn("waterway_river_bounds_filtered_cells=0", log_output)
         self.assertIn(
             "waterway_river_bounds_max_area_ratio_to_map=0.0000",
             log_output,

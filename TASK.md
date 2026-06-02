@@ -1,324 +1,352 @@
 ````markdown
-# Codex タスク: MapAreaに対して大きすぎる waterway=river bounds による has_river 過検出を抑える
-
-## 目的
-
-Overpass API 由来の `waterway=river` 地物について、`bounds` が MapArea 全体に対して大きすぎる場合に、GridCell ごとの `has_river=True` 判定へそのまま使わないようにしてください。
-
-現在、`waterway=river` の bounds が大きい場合、実際の川の線形ではなく外接矩形で判定しているため、広い範囲の GridCell が `has_river=True` になりすぎることがあります。
-
-今回は **MapAreaに対して大きすぎる waterway=river bounds による has_river 過検出を抑えること** に限定します。
+# TASK: road を initial_score の採点寄与から外し、building の base_score 寄与を弱める
 
 ## 背景
 
-同じ中心位置付近で、グリッド設定を変えて確認したところ、以下の差が出ました。
+Django製ポートフォリオ投稿サイトの MapArea / GridCell 自動初期スコア機能を実装中です。
+
+現在、`initial_score_mode=auto` の場合、Overpass API から OSM 地物を取得し、GridCellごとの `feature_summary` を作成し、`calculate_initial_score_from_feature_summary()` によって `initial_score` を自動計算しています。
+
+直近では、スコア内訳確認のために以下を追加しました。
+
+- `calculate_initial_score_breakdown_from_feature_summary()`
+- `Overpass auto score breakdown summary`
+- `base_score_avg`
+- `diversity_bonus_avg`
+- `context_bonus_avg`
+- `penalty_avg`
+- `building_base_cells`
+- `road_base_cells`
+- `park_context_cells`
+- `river_context_cells`
+- `forest_context_cells`
+
+実データ確認では、以下のログになっています。
 
 ```text
-10×10 / 100m:
-waterway_river_bounds_features=0
-river_cells=0
-score_avg=1.82
-
-15×15 / 200m:
-waterway_river_bounds_features=15
-waterway_river_bounds_intersecting_map_features=15
-waterway_river_bounds_covering_map_features=0
-waterway_river_bounds_large_area_features=3
-waterway_river_bounds_max_area_ratio_to_map=12.3827
-waterway_river_bounds_max_height_ratio_to_map=3.0680
-waterway_river_bounds_max_width_ratio_to_map=4.0361
-river_cells=225
-score_avg=2.33
+Overpass auto score breakdown summary:
+area_id=59
+user_id=1
+summary_count=225
+base_score_avg=1.45
+base_score_max=1.50
+diversity_bonus_avg=0.66
+diversity_bonus_max=0.90
+context_bonus_avg=0.27
+context_bonus_max=0.60
+penalty_avg=0.30
+penalty_max=2.40
+raw_score_avg=2.07
+raw_score_max=3.00
+clamped_score_avg=2.07
+clamped_score_max=3.00
+max_score_cells=1
+building_base_cells=225
+road_base_cells=225
+park_context_cells=146
+river_context_cells=117
+forest_context_cells=14
+coastal_context_cells=0
+water_penalty_cells=28
+forest_penalty_cells=0
+empty_cell_penalty_cells=0
 ```
 
-`covering_map_features=0` なので、MapArea全体を完全に覆うfeatureだけが原因ではありません。  
-一方で、`large_area_features=3`、`max_area_ratio_to_map=12.3827` となっており、MapAreaよりかなり大きい `waterway=river` bounds が取得されています。
+この結果から、現在の平均スコアが高めになる主因は `base_score` です。
 
-このような大きすぎる river bounds が GridCell 単位の `has_river` 判定に使われることで、`river_cells` が全セルに広がっている可能性が高いです。
+特に、
 
-## 対象ファイル
+```text
+base_score_avg=1.45
+base_score_max=1.50
+building_base_cells=225
+road_base_cells=225
+```
 
-主に以下を対象にしてください。
+となっており、建物・道路が全セルで基礎点を大きく押し上げています。
 
-- `maps/services.py`
-- `maps/test_osm_services.py`
+しかし、道路が多いこと自体は必ずしも「面白い場所」「特徴的な場所」とは限りません。  
+住宅街や普通の市街地でも道路は多くなるため、`road_count` は initial_score の直接的な採点寄与から外したいです。
 
-必要な場合のみ確認してください。
+一方で、建物は人の活動・店舗・施設密度の目安にはなるため、完全には外さず、base_scoreへの寄与を弱めたいです。
 
-- `maps/views.py`
-- `maps/tests.py`
+## 目的
 
-## 現在の前提
+`road_count` を `initial_score` の採点寄与から外し、`building_count` による `base_score` 寄与を弱めてください。
 
-現在、`maps/services.py` には以下の helper / 定数があります。
+目的は以下です。
+
+- 道路が多いだけの住宅街・市街地が高スコアになりすぎるのを防ぐ
+- 建物密度による都市部の底上げを弱める
+- 水辺・公園・川沿いなど、他の特徴があるセルを相対的に目立たせる
+- `road_count` の収集・ログは残し、将来の補助判定に使える余地は残す
+- 今回は `road_count` の検出処理自体は削除しない
+
+## 現在の想定スコア式
+
+現在の `calculate_initial_score_breakdown_from_feature_summary()` では、おおよそ以下のような計算になっているはずです。
 
 ```python
-calculate_bounds_size_ratios(feature_bounds, grid_cell_bounds)
-calculate_bounds_overlap_ratio(feature_bounds, grid_cell_bounds)
-summarize_waterway_river_bounds_for_map_area(...)
-LARGE_WATERWAY_RIVER_BOUNDS_AREA_RATIO_TO_MAP = 1.0
+building_base_bonus = min(building_count / 20, 1.0) * 0.7
+road_base_bonus = min(road_count / 10, 1.0) * 0.5
+base_score = 0.3 + building_base_bonus + road_base_bonus
 ```
 
-また、`build_map_feature_from_osm_element()` では、OSM element の `tags["waterway"]` を `source_waterway` として保持しています。
-
-例:
+また、`feature_categories` に `has_road` が含まれている場合、道路は diversity bonus にも影響しているはずです。
 
 ```python
-{
-    "kind": "river",
-    "bounds": {...},
-    "source": "osm",
-    "source_type": "way",
-    "source_id": 123,
-    "source_waterway": "river",
-}
+feature_categories = [
+    has_building,
+    has_road,
+    has_park,
+    has_river,
+    is_coastal,
+    has_water,
+    has_scored_forest,
+]
 ```
 
-現在の `build_feature_summary_for_grid_cell()` では、`river` は以下のような流れで `has_river` を判定しています。
-
-```text
-1. GridCell bounds と river feature bounds が交差する
-2. feature bounds が GridCell に対して大きすぎるかを見る
-3. 大きすぎない、または overlap_ratio が一定以上なら has_river=True
-```
-
-今回追加したいのは、これに加えて、
-
-```text
-waterway=river の feature bounds が MapArea に対して大きすぎる場合は、
-GridCell ごとの has_river 判定に使わない
-```
-
-という抑制です。
-
-## 今回やること
-
-### 1. MapAreaに対して大きすぎる waterway=river bounds を判定する helper を追加する
-
-`maps/services.py` に、MapArea bounds と feature を受け取り、その feature を `has_river` 判定に使ってよいか判断する小さな helper を追加してください。
-
-候補名:
-
-```python
-should_use_river_feature_for_grid_cell(feature, map_area_bounds)
-```
-
-または、既存方針に合わせてより自然な名前にして構いません。
-
-### 2. 判定対象
-
-今回の抑制対象は、以下をすべて満たすものにしてください。
-
-```text
-feature["kind"] == "river"
-feature["source_waterway"] == "river"
-feature bounds が MapArea bounds に対して大きすぎる
-```
-
-`waterway=stream` / `waterway=canal` / `source_waterway` なしの river feature は、今回はこの MapArea比による除外対象にしないでください。
-
-理由:
-
-```text
-- 今回のログでは waterway=river が原因として見えている
-- stream / canal まで同時に変えると影響範囲が広がりすぎる
-- unknown は原因が別なので今回は触らない
-```
-
-### 3. 判定基準
-
-まずは既存のログ用定数を使い、以下の条件を満たす場合に「MapAreaに対して大きすぎる」とみなしてください。
-
-```text
-area_ratio_to_map >= LARGE_WATERWAY_RIVER_BOUNDS_AREA_RATIO_TO_MAP
-```
-
-現在の初期値は以下です。
-
-```python
-LARGE_WATERWAY_RIVER_BOUNDS_AREA_RATIO_TO_MAP = 1.0
-```
-
-つまり、MapAreaと同等以上の面積を持つ `waterway=river` bounds は、GridCell ごとの `has_river` 判定には使わない方針です。
-
-必要であれば、判定用として別名の定数を追加しても構いません。
-
-例:
-
-```python
-MAX_WATERWAY_RIVER_BOUNDS_AREA_RATIO_TO_MAP_FOR_GRID_CELL = 1.0
-```
-
-ただし、ログ用定数と判定用定数を分ける場合は、意図が分かる名前にしてください。
+今回、この `road` の採点寄与を外してください。
 
 ## 実装方針
 
-### 1. MapArea bounds を feature_summary 生成時に渡す
+### 1. base_score 関連の定数を追加する
 
-現在の `build_feature_summary_for_grid_cell(grid_cell_bounds, map_features)` は、GridCell bounds と map_features だけで判定しています。
+`services.py` に、base_score関連の定数を追加してください。
 
-今回、MapArea全体に対するriver bounds判定が必要なので、以下のように optional 引数を追加してください。
-
-```python
-build_feature_summary_for_grid_cell(
-    grid_cell_bounds,
-    map_features,
-    map_area_bounds=None,
-)
-```
-
-`map_area_bounds` が `None` の場合は、既存互換のため従来通りの動作にしてください。
-
-### 2. 関連する呼び出し元に map_area_bounds を渡す
-
-以下のような関数で、可能な範囲で `map_area_bounds` を渡してください。
+想定名:
 
 ```python
-build_feature_summaries_for_grid_cell_contexts(...)
-build_feature_summaries_for_map_area_from_overpass(...)
+BASE_INITIAL_SCORE = 0.2
+BUILDING_BASE_SCORE_MAX_BONUS = 0.4
+BUILDING_COUNT_FOR_MAX_BASE_SCORE = 20
+ROAD_BASE_SCORE_MAX_BONUS = 0.0
+ROAD_COUNT_FOR_MAX_BASE_SCORE = 10
 ```
 
-`build_feature_summaries_for_grid_cells(...)` については、既存テストや既存用途への影響を避けるため、無理に変更しなくても構いません。  
-変更する場合も後方互換を維持してください。
+または、既存命名に合わせて自然な名前にしてください。
 
-### 3. river 判定で MapArea比の抑制を使う
+### 2. road_base_bonus を 0.0 にする
 
-`build_feature_summary_for_grid_cell()` の `feature_kind == "river"` の処理で、以下の条件に当てはまる feature は `has_river` 判定に使わないでください。
+`road_count` の収集処理は残してください。
 
-```text
-map_area_bounds が渡されている
-かつ
-feature["source_waterway"] == "river"
-かつ
-feature bounds の area_ratio_to_map >= LARGE_WATERWAY_RIVER_BOUNDS_AREA_RATIO_TO_MAP
-```
+ただし、`initial_score` の計算では、道路によるbase_score加点をなくしてください。
 
-この場合、その feature は skip してください。
-
-イメージ:
+想定:
 
 ```python
-elif feature_kind == "river":
-    if (
-        map_area_bounds is not None
-        and feature.get("source_waterway") == "river"
-        and is_large_waterway_river_bounds_for_map_area(feature_bounds, map_area_bounds)
-    ):
-        continue
-
-    # 既存の has_river 判定を続ける
+road_base_bonus = 0.0
 ```
 
-helper名や構造は、既存コードに合わせて調整してください。
+`ROAD_BASE_SCORE_MAX_BONUS = 0.0` を使う形でも構いません。
 
-## 重要な制約
+### 3. building_base_bonus を弱める
 
-- 今回は `has_river` の過検出抑制のみ行ってください
-- `source_waterway == "river"` の大きすぎるboundsだけを対象にしてください
-- `stream` / `canal` / `unknown` は今回は変更しないでください
-- `road` / `park` / `water` / `forest` / `coastline` / `building` は変更しないでください
-- `calculate_initial_score_from_feature_summary()` は変更しないでください
-- スコア計算式は変更しないでください
-- APIレスポンスに項目を追加しないでください
-- DB変更やmigrationは行わないでください
-- model変更は行わないでください
-- serializer変更は行わないでください
-- demo表示は変更しないでください
-- README.md / API_SPEC.md / memo.md / TASK.md は変更しないでください
-- Overpass API接続処理は変更しないでください
-- Overpassクエリは変更しないでください
-- 外部ライブラリは追加しないでください
-- geometryベース判定は導入しないでください
-- GridCellごとの詳細ログは出さないでください
-- 既存の summary / river summary / waterway summary / waterway river bounds summary ログは維持してください
+建物によるbase_score寄与を、現在より弱めてください。
 
-## テスト方針
+想定:
 
-テストは追加・更新してください。  
-ただし、確認コマンドは実行しないでください。テスト実行はユーザー側で行います。
+```python
+building_base_bonus = min(building_count / 20, 1.0) * 0.4
+```
 
-### maps/test_osm_services.py
+現在が `0.7` 相当なら、まずは `0.4` に下げてください。
 
-以下を確認するテストを追加してください。
+### 4. 固定base_scoreも少し下げる
 
-#### 1. map_area_bounds がない場合は既存通り has_river=True になる
+現在の固定基礎点が `0.3` の場合、以下のように弱めてください。
+
+```python
+base_score = 0.2 + building_base_bonus + road_base_bonus
+```
+
+目的は、地物が少ないセルや、道路・建物だけのセルが高くなりすぎないようにすることです。
+
+### 5. road を diversity_bonus の feature_categories から外す
+
+道路は多くの場所に存在しすぎるため、「特徴カテゴリの多様性」に含めないようにしてください。
+
+現在のように `has_road` が `feature_categories` に含まれている場合は、以下のように外してください。
+
+変更前のイメージ:
+
+```python
+feature_categories = [
+    has_building,
+    has_road,
+    has_park,
+    has_river,
+    is_coastal,
+    has_water,
+    has_scored_forest,
+]
+```
+
+変更後のイメージ:
+
+```python
+feature_categories = [
+    has_building,
+    has_park,
+    has_river,
+    is_coastal,
+    has_water,
+    has_scored_forest,
+]
+```
+
+`has_road` 自体はbreakdownに残して構いません。  
+ただし、スコア寄与には使わないでください。
+
+### 6. road_count の収集・ログは残す
+
+以下は削除しないでください。
+
+- `road_count` のfeature_summary収集
+- road bounds過検出抑制ロジック
+- `road_cells` ログ
+- `road_base_cells` ログ
+
+ただし、`road_base_cells` という名称が「道路がbase_scoreに効いているセル」と誤解される場合は、ログ項目名の変更または補足項目の追加を検討してください。
+
+安全にいくなら、既存ログ項目は残した上で、追加項目を出してください。
+
+例:
 
 ```text
-build_feature_summary_for_grid_cell(grid_cell_bounds, map_features)
-に map_area_bounds を渡さない
-↓
-従来通り river が交差すれば has_river=True
+road_cells=...
+road_scored_cells=0
 ```
 
-#### 2. MapAreaに対して大きすぎる waterway=river は has_river 判定に使われない
+ただし、既存テストへの影響が大きい場合は、`road_base_cells` を残しつつ、作業完了説明で「road_base_bonusは0になった」と説明してください。
+
+### 7. breakdownログは維持する
+
+`Overpass auto score breakdown summary` は引き続き出してください。
+
+今回の変更後に確認したい項目は以下です。
 
 ```text
-source_waterway == "river"
-feature bounds の area_ratio_to_map >= 1.0
-map_area_bounds が渡されている
-↓
-has_river=False のまま
+base_score_avg
+base_score_max
+building_base_cells
+road_base_cells
+road_scored_cells
+diversity_bonus_avg
+context_bonus_avg
+clamped_score_avg
+max_score_cells
 ```
 
-#### 3. MapAreaに対して大きすぎない waterway=river は従来通り使われる
+`road_scored_cells` を追加した場合は、常に `0` になる想定です。
+
+### 8. 既存のスコア式のうち、今回対象外の部分は変更しない
+
+今回は以下を変更しないでください。
+
+- `park` の判定
+- `river` の判定
+- `water` の判定
+- `forest` の閾値化済み挙動
+- `context_bonus`
+- `penalty`
+- `INITIAL_SCORE_MIN`
+- `INITIAL_SCORE_MAX`
+
+主な変更対象は以下です。
+
+- `base_score`
+- `building_base_bonus`
+- `road_base_bonus`
+- `feature_categories` における `has_road` の扱い
+
+## 期待される変化
+
+現在のログでは、
 
 ```text
-source_waterway == "river"
-feature bounds の area_ratio_to_map < 1.0
-map_area_bounds が渡されている
-↓
-has_river=True
+base_score_avg=1.45
+clamped_score_avg=2.07
 ```
 
-#### 4. 大きすぎる stream / canal は今回は除外されない
+でした。
+
+変更後は、同じ大阪中心部 `15×15 / 200m` で、base_scoreが大きく下がる想定です。
+
+目安:
 
 ```text
-source_waterway == "stream" または "canal"
-feature bounds が MapArea に対して大きい
-map_area_bounds が渡されている
-↓
-従来通り has_river=True になり得る
+base_score_avg: 1.45 → 0.5〜0.6前後
+clamped_score_avg: 2.07 → 1.2〜1.5前後
 ```
 
-#### 5. build_feature_summaries_for_grid_cell_contexts からも map_area_bounds が効く
+ただし、実データでは `park` / `river` / `water` の重なりが大きいため、実際の変化はログで確認してください。
 
-```text
-build_feature_summaries_for_grid_cell_contexts(...)
-で map_area_bounds を渡す
-↓
-大きすぎる waterway=river が各GridCellの has_river 判定から除外される
-```
+## テスト観点
 
-#### 6. build_feature_summaries_for_map_area_from_overpass で効果が出る
+`test_osm_services.py` と必要に応じて `tests.py` を更新してください。
 
-mockした `fetch_osm_features_from_overpass` から、MapAreaより大きい `source_waterway == "river"` feature を返す。
+### services.py 側のテスト
 
-```text
-build_feature_summaries_for_map_area_from_overpass(...)
-↓
-feature_summary の has_river が過剰に True にならない
-```
+以下を確認してください。
 
-#### 7. 既存の river summary / waterway summary / waterway river bounds summary は壊さない
+- `road_count > 0` でも `road_base_bonus == 0.0` になる
+- `road_count > 0` でも、road単体では `base_score` が上がらない
+- `road_count > 0` でも、roadは `feature_category_count` に含まれない
+- `building_count > 0` の場合、`building_base_bonus` は従来より弱い係数で計算される
+- buildingの最大base bonusが `0.4` 相当になる
+- `base_score` の固定値が `0.2` 相当になる
+- `calculate_initial_score_from_feature_summary()` の戻り値が、breakdownの `clamped_score` と一致する
+- `has_road` はbreakdown上に残る
+- `road_count` が不正値の場合のバリデーションは維持される
+- `park` / `river` / `water` / `forest` / `coastal` の既存挙動は壊れない
 
-今回の変更は `has_river` 判定には影響しますが、調査用 summary helper の集計自体は維持してください。
+### views.py / ログ側のテスト
 
-必要に応じて、既存テストの期待値を調整してください。
+既存の `initial_score_mode=auto` のログ確認テストを更新してください。
 
-### maps/tests.py
+確認例:
 
-必要があれば、auto作成時のログテストを更新してください。  
-ただし、今回の主対象は service 層なので、Viewのログテストを大きく変更しないでください。
+- `Overpass auto score breakdown summary` が引き続き出力される
+- `base_score_avg` が含まれる
+- `building_base_cells` が含まれる
+- `road_base_cells` が含まれる
+- `road_scored_cells` を追加した場合はログに含まれる
+- `road_scored_cells=0` になる
+- `diversity_bonus_avg` / `context_bonus_avg` / `penalty_avg` のログが壊れていない
 
-## 実装後の報告
+外部Overpass APIへの実リクエストは行わず、既存と同じようにモックで確認してください。
 
-報告は短くしてください。
+## 実装上の注意
+
+- 今回はDBカラム追加ではありません
+- モデルやマイグレーションは、必要がなければ変更しないでください
+- `road_count` の収集処理は削除しないでください
+- road bounds過検出抑制ロジックは削除しないでください
+- 今回は「roadを採点寄与から外す」だけで、「roadをfeature_summaryから消す」わけではありません
+- buildingは完全には外さず、弱めるだけにしてください
+- `context_bonus` と `penalty` は今回変更しないでください
+- `memo.md` は今回は触らないでください
+- 確認コマンドやテストコマンドは実行しないでください
+
+## 作業完了時に説明してほしいこと
+
+作業完了後、以下を説明してください。
 
 - 変更したファイル
-- 追加したhelperまたは定数
-- has_river 判定の変更内容
-- 追加・更新したテスト内容
-- 注意点や未確認事項
+- 追加・変更したbase_score関連の定数
+- roadがどの採点寄与から外れたか
+- `road_count` の収集・ログを残したか
+- buildingのbase_score寄与をどの程度弱めたか
+- diversity bonus からroadを外したか
+- 追加・更新したログ項目
+- 追加・更新したテスト観点
+- 実データ確認時に見るべきログ項目
+- 残る注意点
 
-※確認コマンドは実行しないでください。テスト実行はユーザー側で行います。
+## 禁止事項
+
+- 確認コマンドやテストコマンドを実行しないでください
+- コマンド実行結果を捏造しないでください
+- `memo.md` は明示指示がない限り変更しないでください
 ````

@@ -6,7 +6,13 @@ from django.test import TestCase
 
 from .models import GridCell, MapArea
 from .services import (
+    BASE_INITIAL_SCORE,
+    BUILDING_BASE_SCORE_MAX_BONUS,
+    BUILDING_COUNT_FOR_MAX_BASE_SCORE,
     METERS_PER_DEGREE,
+    MIN_FOREST_COVERAGE_RATIO_FOR_SCORE,
+    MIN_RIVER_COVERAGE_RATIO_FOR_HAS_RIVER,
+    ROAD_BASE_SCORE_MAX_BONUS,
     build_bounds_from_osm_element,
     build_feature_summaries_for_map_area_from_overpass,
     build_feature_summaries_for_grid_cell_contexts,
@@ -18,16 +24,19 @@ from .services import (
     build_overpass_query,
     calculate_bounds_overlap_ratio,
     calculate_bounds_size_ratios,
+    calculate_initial_score_breakdown_from_feature_summary,
     calculate_initial_score_from_feature_summary,
     classify_osm_element,
     determine_initial_score_for_grid_cell,
     fetch_osm_features_from_overpass,
     feature_intersects_grid_cell,
     generate_grid_cells_for_area,
+    is_large_waterway_river_bounds_for_map_area,
     parse_overpass_elements_to_map_features,
     summarize_river_feature_matches_for_grid_cell_contexts,
     summarize_waterway_feature_matches_for_grid_cell_contexts,
     summarize_waterway_river_bounds_for_map_area,
+    should_use_river_feature_for_grid_cell,
 )
 
 
@@ -376,6 +385,64 @@ class DetermineInitialScoreForGridCellTests(TestCase):
         )
 
     @patch("maps.services.fetch_osm_features_from_overpass")
+    def test_build_feature_summaries_for_map_area_from_overpass_skips_large_waterway_river(
+        self,
+        mock_fetch,
+    ):
+        mock_fetch.return_value = [
+            {
+                "kind": "river",
+                "source_waterway": "river",
+                "bounds": {
+                    "north": 10.0,
+                    "south": 9.0,
+                    "east": 21.0,
+                    "west": 19.0,
+                },
+            },
+        ]
+
+        summaries = build_feature_summaries_for_map_area_from_overpass(
+            self.area,
+            rows=1,
+            cols=2,
+            lat_step=1.0,
+            lng_step=1.0,
+        )
+
+        self.assertFalse(summaries[(0, 0)]["has_river"])
+        self.assertFalse(summaries[(0, 1)]["has_river"])
+        self.assertEqual(summaries[(0, 0)]["river_coverage_ratio"], 0.0)
+        self.assertEqual(summaries[(0, 1)]["river_coverage_ratio"], 0.0)
+        self.assertEqual(summaries.river_summary["river_cells"], 2)
+        self.assertEqual(summaries.waterway_summary["waterway_river_features"], 1)
+        self.assertEqual(summaries.waterway_summary["waterway_river_cells"], 2)
+        self.assertEqual(
+            summaries.waterway_river_bounds_summary[
+                "waterway_river_bounds_features"
+            ],
+            1,
+        )
+        self.assertEqual(
+            summaries.waterway_river_bounds_summary[
+                "waterway_river_bounds_large_area_features"
+            ],
+            1,
+        )
+        self.assertEqual(
+            summaries.waterway_river_bounds_summary[
+                "waterway_river_bounds_filtered_features"
+            ],
+            1,
+        )
+        self.assertEqual(
+            summaries.waterway_river_bounds_summary[
+                "waterway_river_bounds_filtered_cells"
+            ],
+            2,
+        )
+
+    @patch("maps.services.fetch_osm_features_from_overpass")
     def test_build_feature_summaries_for_map_area_from_overpass_uses_explicit_grid(
         self,
         mock_fetch,
@@ -402,7 +469,9 @@ class DetermineInitialScoreForGridCellTests(TestCase):
 
         self.assertEqual(set(summaries.keys()), {(0, 0), (1, 0)})
         self.assertFalse(summaries[(0, 0)]["has_park"])
+        self.assertEqual(summaries[(0, 0)]["park_coverage_ratio"], 0.0)
         self.assertTrue(summaries[(1, 0)]["has_park"])
+        self.assertAlmostEqual(summaries[(1, 0)]["park_coverage_ratio"], 0.2)
 
     @patch("maps.services.fetch_osm_features_from_overpass")
     def test_build_feature_summaries_for_map_area_from_overpass_uses_padding(
@@ -1130,6 +1199,60 @@ class DetermineInitialScoreForGridCellTests(TestCase):
                 {"north": 1.0, "south": 1.0, "east": 2.0, "west": 1.0},
             )
 
+    def test_should_use_river_feature_for_grid_cell_skips_map_sized_waterway_river(
+        self,
+    ):
+        should_use = should_use_river_feature_for_grid_cell(
+            {
+                "kind": "river",
+                "source_waterway": "river",
+                "bounds": self.map_area_bounds(),
+            },
+            self.map_area_bounds(),
+        )
+
+        self.assertFalse(should_use)
+
+    def test_is_large_waterway_river_bounds_for_map_area_uses_area_ratio_threshold(
+        self,
+    ):
+        self.assertTrue(
+            is_large_waterway_river_bounds_for_map_area(
+                self.map_area_bounds(),
+                self.map_area_bounds(),
+            )
+        )
+        self.assertFalse(
+            is_large_waterway_river_bounds_for_map_area(
+                {
+                    "north": 9.8,
+                    "south": 9.2,
+                    "east": 19.8,
+                    "west": 19.2,
+                },
+                self.map_area_bounds(),
+            )
+        )
+
+    def test_should_use_river_feature_for_grid_cell_keeps_non_waterway_river_targets(
+        self,
+    ):
+        for source_waterway in ("stream", "canal", None):
+            with self.subTest(source_waterway=source_waterway):
+                feature = {
+                    "kind": "river",
+                    "bounds": self.map_area_bounds(),
+                }
+                if source_waterway is not None:
+                    feature["source_waterway"] = source_waterway
+
+                self.assertTrue(
+                    should_use_river_feature_for_grid_cell(
+                        feature,
+                        self.map_area_bounds(),
+                    )
+                )
+
     def test_build_feature_summary_counts_buildings_and_roads(self):
         summary = build_feature_summary_for_grid_cell(
             self.grid_bounds(),
@@ -1272,8 +1395,9 @@ class DetermineInitialScoreForGridCellTests(TestCase):
 
         self.assertAlmostEqual(summary["water_coverage_ratio"], 0.01)
         self.assertEqual(summary["forest_coverage_ratio"], 1.0)
+        self.assertEqual(summary["park_coverage_ratio"], 0.0)
 
-    def test_build_feature_summary_uses_max_water_and_forest_overlap_ratios(self):
+    def test_build_feature_summary_uses_max_natural_overlap_ratios(self):
         summary = build_feature_summary_for_grid_cell(
             self.grid_bounds(),
             [
@@ -1313,11 +1437,50 @@ class DetermineInitialScoreForGridCellTests(TestCase):
                         "west": 19.0,
                     },
                 },
+                {
+                    "kind": "park",
+                    "bounds": {
+                        "north": 10.0,
+                        "south": 9.0,
+                        "east": 19.25,
+                        "west": 18.75,
+                    },
+                },
+                {
+                    "kind": "park",
+                    "bounds": {
+                        "north": 10.0,
+                        "south": 9.0,
+                        "east": 19.5,
+                        "west": 18.5,
+                    },
+                },
             ],
         )
 
         self.assertEqual(summary["water_coverage_ratio"], 0.5)
         self.assertEqual(summary["forest_coverage_ratio"], 0.5)
+        self.assertEqual(summary["park_coverage_ratio"], 0.5)
+        self.assertTrue(summary["has_park"])
+
+    def test_build_feature_summary_keeps_has_park_for_small_park_overlap(self):
+        summary = build_feature_summary_for_grid_cell(
+            self.grid_bounds(),
+            [
+                {
+                    "kind": "park",
+                    "bounds": {
+                        "north": 9.9,
+                        "south": 9.8,
+                        "east": 19.04,
+                        "west": 19.0,
+                    },
+                },
+            ],
+        )
+
+        self.assertAlmostEqual(summary["park_coverage_ratio"], 0.004)
+        self.assertTrue(summary["has_park"])
 
     def test_build_feature_summary_sets_boolean_features(self):
         summary = build_feature_summary_for_grid_cell(
@@ -1335,10 +1498,10 @@ class DetermineInitialScoreForGridCellTests(TestCase):
                 {
                     "kind": "river",
                     "bounds": {
-                        "north": 9.7,
-                        "south": 9.6,
-                        "east": 19.4,
-                        "west": 19.3,
+                        "north": 9.9,
+                        "south": 9.5,
+                        "east": 19.5,
+                        "west": 19.1,
                     },
                 },
                 {
@@ -1356,6 +1519,8 @@ class DetermineInitialScoreForGridCellTests(TestCase):
         self.assertTrue(summary["has_park"])
         self.assertTrue(summary["has_river"])
         self.assertTrue(summary["is_coastal"])
+        self.assertAlmostEqual(summary["park_coverage_ratio"], 0.01)
+        self.assertAlmostEqual(summary["river_coverage_ratio"], 0.16)
 
     def test_build_feature_summary_marks_normal_size_river(self):
         summary = build_feature_summary_for_grid_cell(
@@ -1374,6 +1539,7 @@ class DetermineInitialScoreForGridCellTests(TestCase):
         )
 
         self.assertTrue(summary["has_river"])
+        self.assertAlmostEqual(summary["river_coverage_ratio"], 0.36)
 
     def test_build_feature_summary_marks_large_river_with_enough_overlap(self):
         summary = build_feature_summary_for_grid_cell(
@@ -1392,6 +1558,7 @@ class DetermineInitialScoreForGridCellTests(TestCase):
         )
 
         self.assertTrue(summary["has_river"])
+        self.assertAlmostEqual(summary["river_coverage_ratio"], 0.1)
 
     def test_build_feature_summary_does_not_mark_large_river_with_small_overlap(self):
         summary = build_feature_summary_for_grid_cell(
@@ -1409,6 +1576,28 @@ class DetermineInitialScoreForGridCellTests(TestCase):
             ],
         )
 
+        self.assertFalse(summary["has_river"])
+        self.assertEqual(summary["river_coverage_ratio"], 0.0)
+
+    def test_build_feature_summary_keeps_river_coverage_without_marking_small_touch(
+        self,
+    ):
+        summary = build_feature_summary_for_grid_cell(
+            self.grid_bounds(),
+            [
+                {
+                    "kind": "river",
+                    "bounds": {
+                        "north": 9.9,
+                        "south": 9.8,
+                        "east": 19.04,
+                        "west": 19.0,
+                    },
+                },
+            ],
+        )
+
+        self.assertAlmostEqual(summary["river_coverage_ratio"], 0.004)
         self.assertFalse(summary["has_river"])
 
     def test_build_feature_summary_marks_river_at_size_ratio_thresholds(self):
@@ -1428,6 +1617,107 @@ class DetermineInitialScoreForGridCellTests(TestCase):
         )
 
         self.assertTrue(summary["has_river"])
+        self.assertEqual(summary["river_coverage_ratio"], 1.0)
+
+    def test_build_feature_summary_keeps_river_behavior_without_map_area_bounds(self):
+        summary = build_feature_summary_for_grid_cell(
+            self.grid_bounds(),
+            [
+                {
+                    "kind": "river",
+                    "source_waterway": "river",
+                    "bounds": {
+                        "north": 10.0,
+                        "south": 9.0,
+                        "east": 21.0,
+                        "west": 19.0,
+                    },
+                },
+            ],
+        )
+
+        self.assertTrue(summary["has_river"])
+        self.assertEqual(summary["river_coverage_ratio"], 1.0)
+
+    def test_build_feature_summary_skips_large_waterway_river_for_map_area(self):
+        summary = build_feature_summary_for_grid_cell(
+            self.grid_bounds(),
+            [
+                {
+                    "kind": "river",
+                    "source_waterway": "river",
+                    "bounds": {
+                        "north": 10.0,
+                        "south": 9.0,
+                        "east": 21.0,
+                        "west": 19.0,
+                    },
+                },
+            ],
+            map_area_bounds={
+                "north": 10.0,
+                "south": 9.0,
+                "east": 21.0,
+                "west": 19.0,
+            },
+        )
+
+        self.assertFalse(summary["has_river"])
+        self.assertEqual(summary["river_coverage_ratio"], 0.0)
+
+    def test_build_feature_summary_uses_small_waterway_river_for_map_area(self):
+        summary = build_feature_summary_for_grid_cell(
+            self.grid_bounds(),
+            [
+                {
+                    "kind": "river",
+                    "source_waterway": "river",
+                    "bounds": {
+                        "north": 9.8,
+                        "south": 9.2,
+                        "east": 19.8,
+                        "west": 19.2,
+                    },
+                },
+            ],
+            map_area_bounds={
+                "north": 10.0,
+                "south": 9.0,
+                "east": 21.0,
+                "west": 19.0,
+            },
+        )
+
+        self.assertTrue(summary["has_river"])
+        self.assertAlmostEqual(summary["river_coverage_ratio"], 0.36)
+
+    def test_build_feature_summary_keeps_large_stream_and_canal_for_map_area(self):
+        for source_waterway in ("stream", "canal"):
+            with self.subTest(source_waterway=source_waterway):
+                summary = build_feature_summary_for_grid_cell(
+                    self.grid_bounds(),
+                    [
+                        {
+                            "kind": "river",
+                            "source_waterway": source_waterway,
+                            "bounds": {
+                                "north": 10.0,
+                                "south": 9.0,
+                                "east": 21.0,
+                                "west": 19.0,
+                            },
+                        },
+                    ],
+                    map_area_bounds={
+                        "north": 10.0,
+                        "south": 9.0,
+                        "east": 21.0,
+                        "west": 19.0,
+                    },
+                )
+
+                self.assertTrue(summary["has_river"])
+                self.assertEqual(summary["river_coverage_ratio"], 1.0)
 
     def test_build_feature_summary_ignores_unknown_kind_and_non_intersections(self):
         summary = build_feature_summary_for_grid_cell(
@@ -1461,6 +1751,8 @@ class DetermineInitialScoreForGridCellTests(TestCase):
                 "road_count": 0,
                 "water_coverage_ratio": 0.0,
                 "forest_coverage_ratio": 0.0,
+                "park_coverage_ratio": 0.0,
+                "river_coverage_ratio": 0.0,
                 "has_park": False,
                 "has_river": False,
                 "is_coastal": False,
@@ -1573,6 +1865,8 @@ class DetermineInitialScoreForGridCellTests(TestCase):
                 "road_count": 0,
                 "water_coverage_ratio": 0.0,
                 "forest_coverage_ratio": 0.0,
+                "park_coverage_ratio": 0.0,
+                "river_coverage_ratio": 0.0,
                 "has_park": False,
                 "has_river": False,
                 "is_coastal": False,
@@ -1671,6 +1965,54 @@ class DetermineInitialScoreForGridCellTests(TestCase):
         self.assertTrue(summaries[(0, 0)]["has_river"])
         self.assertTrue(summaries[(0, 1)]["has_river"])
 
+    def test_build_feature_summaries_for_grid_cell_contexts_uses_map_area_bounds(
+        self,
+    ):
+        grid_cell_contexts = [
+            {
+                "row_index": 0,
+                "col_index": 0,
+                "north": 10.0,
+                "south": 9.0,
+                "east": 20.0,
+                "west": 19.0,
+            },
+            {
+                "row_index": 0,
+                "col_index": 1,
+                "north": 10.0,
+                "south": 9.0,
+                "east": 21.0,
+                "west": 20.0,
+            },
+        ]
+        map_features = [
+            {
+                "kind": "river",
+                "source_waterway": "river",
+                "bounds": {
+                    "north": 10.0,
+                    "south": 9.0,
+                    "east": 21.0,
+                    "west": 19.0,
+                },
+            },
+        ]
+
+        summaries = build_feature_summaries_for_grid_cell_contexts(
+            grid_cell_contexts,
+            map_features,
+            map_area_bounds={
+                "north": 10.0,
+                "south": 9.0,
+                "east": 21.0,
+                "west": 19.0,
+            },
+        )
+
+        self.assertFalse(summaries[(0, 0)]["has_river"])
+        self.assertFalse(summaries[(0, 1)]["has_river"])
+
     def test_build_feature_summaries_for_grid_cell_contexts_empty_context_gets_empty_summary(
         self,
     ):
@@ -1716,6 +2058,8 @@ class DetermineInitialScoreForGridCellTests(TestCase):
                 "road_count": 0,
                 "water_coverage_ratio": 0.0,
                 "forest_coverage_ratio": 0.0,
+                "park_coverage_ratio": 0.0,
+                "river_coverage_ratio": 0.0,
                 "has_park": False,
                 "has_river": False,
                 "is_coastal": False,
@@ -2133,6 +2477,8 @@ class DetermineInitialScoreForGridCellTests(TestCase):
                 "waterway_river_bounds_intersecting_map_features": 0,
                 "waterway_river_bounds_covering_map_features": 0,
                 "waterway_river_bounds_large_area_features": 0,
+                "waterway_river_bounds_filtered_features": 0,
+                "waterway_river_bounds_filtered_cells": 0,
                 "waterway_river_bounds_max_area_ratio_to_map": 0.0,
                 "waterway_river_bounds_max_height_ratio_to_map": 0.0,
                 "waterway_river_bounds_max_width_ratio_to_map": 0.0,
@@ -2300,6 +2646,65 @@ class DetermineInitialScoreForGridCellTests(TestCase):
             1,
         )
 
+    def test_summarize_waterway_river_bounds_counts_filtered_features_and_cells(self):
+        bounds_summary = summarize_waterway_river_bounds_for_map_area(
+            {
+                "north": 10.0,
+                "south": 9.0,
+                "east": 21.0,
+                "west": 19.0,
+            },
+            [
+                {
+                    "kind": "river",
+                    "source_waterway": "river",
+                    "bounds": {
+                        "north": 10.0,
+                        "south": 9.0,
+                        "east": 21.0,
+                        "west": 19.0,
+                    },
+                },
+                {
+                    "kind": "river",
+                    "source_waterway": "river",
+                    "bounds": {
+                        "north": 9.8,
+                        "south": 9.2,
+                        "east": 19.8,
+                        "west": 19.2,
+                    },
+                },
+            ],
+            grid_cell_contexts=[
+                {
+                    "row_index": 0,
+                    "col_index": 0,
+                    "north": 10.0,
+                    "south": 9.0,
+                    "east": 20.0,
+                    "west": 19.0,
+                },
+                {
+                    "row_index": 0,
+                    "col_index": 1,
+                    "north": 10.0,
+                    "south": 9.0,
+                    "east": 21.0,
+                    "west": 20.0,
+                },
+            ],
+        )
+
+        self.assertEqual(
+            bounds_summary["waterway_river_bounds_filtered_features"],
+            1,
+        )
+        self.assertEqual(
+            bounds_summary["waterway_river_bounds_filtered_cells"],
+            2,
+        )
+
     def test_summarize_waterway_river_bounds_invalid_input_raises_value_error(self):
         valid_feature = {
             "kind": "river",
@@ -2347,7 +2752,8 @@ class DetermineInitialScoreForGridCellTests(TestCase):
         )
 
         self.assertEqual(score, expected_score)
-        self.assertGreater(score, 2.5)
+        self.assertGreater(score, 2.0)
+        self.assertLess(score, 2.5)
 
     def test_grid_context_without_feature_summary_returns_region_feature_fallback(self):
         score = determine_initial_score_for_grid_cell(
@@ -2372,8 +2778,8 @@ class DetermineInitialScoreForGridCellTests(TestCase):
             }
         )
 
-        self.assertGreaterEqual(score, 1.0)
-        self.assertLess(score, 2.0)
+        self.assertGreaterEqual(score, 0.5)
+        self.assertLess(score, 1.0)
         self.assertIsInstance(score, float)
 
     def test_feature_summary_multiple_features_returns_high_score(self):
@@ -2388,8 +2794,85 @@ class DetermineInitialScoreForGridCellTests(TestCase):
             }
         )
 
-        self.assertGreaterEqual(score, 2.5)
+        self.assertGreaterEqual(score, 2.0)
+        self.assertLess(score, 2.5)
         self.assertLessEqual(score, 3.0)
+
+    def test_feature_summary_river_coverage_ratio_can_enable_river_score(self):
+        score = calculate_initial_score_from_feature_summary(
+            {
+                "building_count": 20,
+                "river_coverage_ratio": 0.06,
+            }
+        )
+
+        self.assertGreater(score, 1.0)
+
+    def test_feature_summary_has_river_without_coverage_ratio_keeps_compatibility(self):
+        score = calculate_initial_score_from_feature_summary(
+            {
+                "building_count": 20,
+                "has_river": True,
+            }
+        )
+
+        self.assertGreater(score, 1.0)
+
+    def test_feature_summary_park_coverage_ratio_keeps_park_score_compatibility(self):
+        score_with_ratio = calculate_initial_score_from_feature_summary(
+            {
+                "building_count": 20,
+                "has_park": True,
+                "park_coverage_ratio": 0.02,
+            }
+        )
+        score_without_ratio = calculate_initial_score_from_feature_summary(
+            {
+                "building_count": 20,
+                "has_park": True,
+            }
+        )
+
+        self.assertEqual(score_with_ratio, score_without_ratio)
+
+    def test_feature_summary_ignores_forest_below_score_threshold(self):
+        score_without_forest = calculate_initial_score_from_feature_summary(
+            {
+                "building_count": 20,
+            }
+        )
+        score_with_small_forest = calculate_initial_score_from_feature_summary(
+            {
+                "building_count": 20,
+                "forest_coverage_ratio": MIN_FOREST_COVERAGE_RATIO_FOR_SCORE - 0.01,
+            }
+        )
+
+        self.assertEqual(score_with_small_forest, score_without_forest)
+
+    def test_feature_summary_scores_forest_at_score_threshold(self):
+        score_without_forest = calculate_initial_score_from_feature_summary(
+            {
+                "building_count": 20,
+            }
+        )
+        score_with_scored_forest = calculate_initial_score_from_feature_summary(
+            {
+                "building_count": 20,
+                "forest_coverage_ratio": MIN_FOREST_COVERAGE_RATIO_FOR_SCORE,
+            }
+        )
+
+        self.assertGreater(score_with_scored_forest, score_without_forest)
+
+    def test_feature_summary_forest_threshold_keeps_existing_summary_compatible(self):
+        score = calculate_initial_score_from_feature_summary(
+            {
+                "building_count": 20,
+            }
+        )
+
+        self.assertGreater(score, 0.0)
 
     def test_feature_summary_full_water_returns_low_score(self):
         score = calculate_initial_score_from_feature_summary(
@@ -2430,8 +2913,175 @@ class DetermineInitialScoreForGridCellTests(TestCase):
             }
         )
 
-        self.assertEqual(high_score, 3.0)
+        self.assertLessEqual(high_score, 3.0)
         self.assertEqual(low_score, 0.0)
+
+    def test_feature_summary_breakdown_returns_expected_keys(self):
+        breakdown = calculate_initial_score_breakdown_from_feature_summary(
+            {
+                "building_count": 20,
+                "road_count": 10,
+                "has_park": True,
+                "has_river": True,
+                "is_coastal": True,
+                "water_coverage_ratio": 0.1,
+                "forest_coverage_ratio": MIN_FOREST_COVERAGE_RATIO_FOR_SCORE,
+            }
+        )
+        expected_keys = {
+            "base_score",
+            "building_base_bonus",
+            "road_base_bonus",
+            "diversity_bonus",
+            "context_bonus",
+            "penalty",
+            "raw_score",
+            "clamped_score",
+            "feature_category_count",
+            "has_building",
+            "has_road",
+            "has_park",
+            "has_river",
+            "has_water",
+            "has_scored_forest",
+            "is_coastal",
+            "has_park_context",
+            "has_river_context",
+            "has_forest_context",
+            "has_coastal_context",
+            "has_water_penalty",
+            "has_forest_penalty",
+            "has_empty_cell_penalty",
+        }
+
+        self.assertEqual(set(breakdown.keys()), expected_keys)
+
+    def test_feature_summary_score_returns_breakdown_clamped_score(self):
+        feature_summary = {
+            "building_count": 12,
+            "road_count": 6,
+            "has_park": True,
+            "river_coverage_ratio": 0.06,
+            "forest_coverage_ratio": MIN_FOREST_COVERAGE_RATIO_FOR_SCORE,
+        }
+        score = calculate_initial_score_from_feature_summary(feature_summary)
+        breakdown = calculate_initial_score_breakdown_from_feature_summary(
+            feature_summary
+        )
+
+        self.assertEqual(score, breakdown["clamped_score"])
+
+    def test_feature_summary_breakdown_tracks_base_bonuses_and_categories(self):
+        breakdown = calculate_initial_score_breakdown_from_feature_summary(
+            {
+                "building_count": 10,
+                "road_count": 5,
+                "has_park": True,
+                "river_coverage_ratio": MIN_RIVER_COVERAGE_RATIO_FOR_HAS_RIVER,
+                "is_coastal": True,
+                "water_coverage_ratio": 0.2,
+                "forest_coverage_ratio": MIN_FOREST_COVERAGE_RATIO_FOR_SCORE,
+            }
+        )
+
+        self.assertAlmostEqual(breakdown["building_base_bonus"], 0.2)
+        self.assertAlmostEqual(breakdown["road_base_bonus"], 0.0)
+        self.assertAlmostEqual(breakdown["base_score"], 0.4)
+        self.assertEqual(breakdown["feature_category_count"], 6)
+        self.assertTrue(breakdown["has_building"])
+        self.assertTrue(breakdown["has_road"])
+        self.assertTrue(breakdown["has_park"])
+        self.assertTrue(breakdown["has_river"])
+        self.assertTrue(breakdown["has_water"])
+        self.assertTrue(breakdown["has_scored_forest"])
+        self.assertTrue(breakdown["is_coastal"])
+
+    def test_feature_summary_breakdown_does_not_score_roads(self):
+        without_road = calculate_initial_score_breakdown_from_feature_summary({})
+        with_road = calculate_initial_score_breakdown_from_feature_summary(
+            {"road_count": 10}
+        )
+
+        self.assertTrue(with_road["has_road"])
+        self.assertEqual(with_road["road_base_bonus"], ROAD_BASE_SCORE_MAX_BONUS)
+        self.assertEqual(with_road["base_score"], without_road["base_score"])
+        self.assertEqual(
+            with_road["feature_category_count"],
+            without_road["feature_category_count"],
+        )
+
+    def test_feature_summary_breakdown_uses_weaker_building_base_bonus(self):
+        max_building_breakdown = calculate_initial_score_breakdown_from_feature_summary(
+            {"building_count": BUILDING_COUNT_FOR_MAX_BASE_SCORE}
+        )
+        extra_building_breakdown = (
+            calculate_initial_score_breakdown_from_feature_summary(
+                {"building_count": BUILDING_COUNT_FOR_MAX_BASE_SCORE * 2}
+            )
+        )
+
+        self.assertAlmostEqual(max_building_breakdown["base_score"], 0.6)
+        self.assertEqual(
+            max_building_breakdown["building_base_bonus"],
+            BUILDING_BASE_SCORE_MAX_BONUS,
+        )
+        self.assertEqual(
+            extra_building_breakdown["building_base_bonus"],
+            BUILDING_BASE_SCORE_MAX_BONUS,
+        )
+        self.assertAlmostEqual(
+            max_building_breakdown["base_score"],
+            BASE_INITIAL_SCORE + BUILDING_BASE_SCORE_MAX_BONUS,
+        )
+
+    def test_feature_summary_breakdown_tracks_context_and_penalties(self):
+        context_breakdown = calculate_initial_score_breakdown_from_feature_summary(
+            {
+                "building_count": 20,
+                "has_park": True,
+                "has_river": True,
+                "is_coastal": True,
+                "forest_coverage_ratio": MIN_FOREST_COVERAGE_RATIO_FOR_SCORE,
+            }
+        )
+        water_breakdown = calculate_initial_score_breakdown_from_feature_summary(
+            {
+                "water_coverage_ratio": 0.99,
+            }
+        )
+        forest_breakdown = calculate_initial_score_breakdown_from_feature_summary(
+            {
+                "forest_coverage_ratio": 0.99,
+            }
+        )
+
+        self.assertTrue(context_breakdown["has_park_context"])
+        self.assertTrue(context_breakdown["has_river_context"])
+        self.assertTrue(context_breakdown["has_forest_context"])
+        self.assertTrue(context_breakdown["has_coastal_context"])
+        self.assertTrue(water_breakdown["has_water_penalty"])
+        self.assertTrue(water_breakdown["has_empty_cell_penalty"])
+        self.assertTrue(forest_breakdown["has_forest_penalty"])
+        self.assertTrue(forest_breakdown["has_empty_cell_penalty"])
+
+    def test_invalid_feature_summary_breakdown_raises_value_error(self):
+        invalid_summaries = (
+            None,
+            [],
+            {"building_count": -1},
+            {"road_count": float("inf")},
+            {"water_coverage_ratio": 1.1},
+            {"forest_coverage_ratio": -0.1},
+            {"park_coverage_ratio": 1.1},
+            {"river_coverage_ratio": 1.1},
+            {"building_count": True},
+        )
+        for feature_summary in invalid_summaries:
+            with self.subTest(feature_summary=feature_summary):
+                with self.assertRaises(ValueError):
+                    calculate_initial_score_breakdown_from_feature_summary(
+                        feature_summary
+                    )
 
     def test_invalid_feature_summary_raises_value_error(self):
         invalid_summaries = (
@@ -2441,6 +3091,8 @@ class DetermineInitialScoreForGridCellTests(TestCase):
             {"road_count": float("inf")},
             {"water_coverage_ratio": 1.1},
             {"forest_coverage_ratio": -0.1},
+            {"park_coverage_ratio": 1.1},
+            {"river_coverage_ratio": 1.1},
             {"building_count": True},
         )
         for feature_summary in invalid_summaries:

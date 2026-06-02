@@ -25,8 +25,10 @@ from .serializers import (
 )
 from .services import (
     build_feature_summaries_for_map_area_from_overpass,
+    calculate_initial_score_breakdown_from_feature_summary,
     calculate_initial_score_from_feature_summary,
     generate_grid_cells_for_area,
+    MIN_FOREST_COVERAGE_RATIO_FOR_SCORE,
     update_grid_cell_score,
     validate_center_grid_limits,
 )
@@ -88,6 +90,72 @@ def log_overpass_feature_summary(area, user_id, feature_summaries_by_position):
     )
 
 
+def log_overpass_score_breakdown_summary(
+    area,
+    user_id,
+    feature_summaries_by_position,
+):
+    summaries = list(feature_summaries_by_position.values())
+    breakdowns = [
+        calculate_initial_score_breakdown_from_feature_summary(summary)
+        for summary in summaries
+    ]
+
+    def component_values(key):
+        return [breakdown[key] for breakdown in breakdowns]
+
+    def component_average(key):
+        values = component_values(key)
+        return sum(values) / len(values) if values else 0.0
+
+    def component_max(key):
+        values = component_values(key)
+        return max(values) if values else 0.0
+
+    logger.info(
+        "Overpass auto score breakdown summary: "
+        "area_id=%s user_id=%s summary_count=%s "
+        "base_score_avg=%.2f base_score_max=%.2f "
+        "diversity_bonus_avg=%.2f diversity_bonus_max=%.2f "
+        "context_bonus_avg=%.2f context_bonus_max=%.2f "
+        "penalty_avg=%.2f penalty_max=%.2f "
+        "raw_score_avg=%.2f raw_score_max=%.2f "
+        "clamped_score_avg=%.2f clamped_score_max=%.2f "
+        "max_score_cells=%s "
+        "building_base_cells=%s road_base_cells=%s road_scored_cells=%s "
+        "park_context_cells=%s river_context_cells=%s "
+        "forest_context_cells=%s coastal_context_cells=%s "
+        "water_penalty_cells=%s forest_penalty_cells=%s "
+        "empty_cell_penalty_cells=%s",
+        area.id,
+        user_id,
+        len(summaries),
+        component_average("base_score"),
+        component_max("base_score"),
+        component_average("diversity_bonus"),
+        component_max("diversity_bonus"),
+        component_average("context_bonus"),
+        component_max("context_bonus"),
+        component_average("penalty"),
+        component_max("penalty"),
+        component_average("raw_score"),
+        component_max("raw_score"),
+        component_average("clamped_score"),
+        component_max("clamped_score"),
+        sum(breakdown["clamped_score"] >= 3.0 for breakdown in breakdowns),
+        sum(breakdown["building_base_bonus"] > 0 for breakdown in breakdowns),
+        sum(breakdown["road_base_bonus"] > 0 for breakdown in breakdowns),
+        sum(breakdown["road_base_bonus"] > 0 for breakdown in breakdowns),
+        sum(breakdown["has_park_context"] for breakdown in breakdowns),
+        sum(breakdown["has_river_context"] for breakdown in breakdowns),
+        sum(breakdown["has_forest_context"] for breakdown in breakdowns),
+        sum(breakdown["has_coastal_context"] for breakdown in breakdowns),
+        sum(breakdown["has_water_penalty"] for breakdown in breakdowns),
+        sum(breakdown["has_forest_penalty"] for breakdown in breakdowns),
+        sum(breakdown["has_empty_cell_penalty"] for breakdown in breakdowns),
+    )
+
+
 def log_overpass_river_summary(
     area,
     user_id,
@@ -118,6 +186,88 @@ def log_overpass_river_summary(
         river_summary.get("river_max_overlap", 0.0),
         river_summary.get("river_large_bounds_cells", 0),
         river_summary.get("river_small_overlap_cells", 0),
+    )
+
+
+def log_overpass_scored_river_summary(area, user_id, feature_summaries_by_position):
+    summaries = list(feature_summaries_by_position.values())
+    river_coverages = [
+        float(summary.get("river_coverage_ratio", 0.0))
+        for summary in summaries
+        if summary.get("river_coverage_ratio", 0.0) > 0
+    ]
+    river_coverage_avg = (
+        sum(river_coverages) / len(river_coverages)
+        if river_coverages
+        else 0.0
+    )
+    river_coverage_max = max(river_coverages) if river_coverages else 0.0
+
+    logger.info(
+        "Overpass auto scored river summary: "
+        "area_id=%s user_id=%s scored_river_cells=%s "
+        "river_coverage_cells=%s river_coverage_avg=%.4f "
+        "river_coverage_max=%.4f",
+        area.id,
+        user_id,
+        sum(summary.get("has_river", False) is True for summary in summaries),
+        len(river_coverages),
+        river_coverage_avg,
+        river_coverage_max,
+    )
+
+
+def _positive_coverage_values(summaries, key):
+    return [
+        float(summary.get(key, 0.0))
+        for summary in summaries
+        if summary.get(key, 0.0) > 0
+    ]
+
+
+def _coverage_average(coverage_values):
+    if not coverage_values:
+        return 0.0
+    return sum(coverage_values) / len(coverage_values)
+
+
+def log_overpass_scored_natural_coverage_summary(
+    area,
+    user_id,
+    feature_summaries_by_position,
+):
+    summaries = list(feature_summaries_by_position.values())
+    park_coverages = _positive_coverage_values(summaries, "park_coverage_ratio")
+    water_coverages = _positive_coverage_values(summaries, "water_coverage_ratio")
+    forest_coverages = _positive_coverage_values(summaries, "forest_coverage_ratio")
+
+    logger.info(
+        "Overpass auto scored natural coverage summary: "
+        "area_id=%s user_id=%s "
+        "park_cells=%s park_coverage_cells=%s "
+        "park_coverage_avg=%.4f park_coverage_max=%.4f "
+        "water_coverage_cells=%s water_coverage_avg=%.4f "
+        "water_coverage_max=%.4f "
+        "forest_coverage_cells=%s scored_forest_cells=%s "
+        "forest_coverage_avg=%.4f "
+        "forest_coverage_max=%.4f",
+        area.id,
+        user_id,
+        sum(summary.get("has_park", False) is True for summary in summaries),
+        len(park_coverages),
+        _coverage_average(park_coverages),
+        max(park_coverages) if park_coverages else 0.0,
+        len(water_coverages),
+        _coverage_average(water_coverages),
+        max(water_coverages) if water_coverages else 0.0,
+        len(forest_coverages),
+        sum(
+            summary.get("forest_coverage_ratio", 0.0)
+            >= MIN_FOREST_COVERAGE_RATIO_FOR_SCORE
+            for summary in summaries
+        ),
+        _coverage_average(forest_coverages),
+        max(forest_coverages) if forest_coverages else 0.0,
     )
 
 
@@ -164,6 +314,8 @@ def log_overpass_waterway_river_bounds_summary(
         "waterway_river_bounds_intersecting_map_features=%s "
         "waterway_river_bounds_covering_map_features=%s "
         "waterway_river_bounds_large_area_features=%s "
+        "waterway_river_bounds_filtered_features=%s "
+        "waterway_river_bounds_filtered_cells=%s "
         "waterway_river_bounds_max_area_ratio_to_map=%.4f "
         "waterway_river_bounds_max_height_ratio_to_map=%.4f "
         "waterway_river_bounds_max_width_ratio_to_map=%.4f",
@@ -180,6 +332,14 @@ def log_overpass_waterway_river_bounds_summary(
         ),
         waterway_river_bounds_summary.get(
             "waterway_river_bounds_large_area_features",
+            0,
+        ),
+        waterway_river_bounds_summary.get(
+            "waterway_river_bounds_filtered_features",
+            0,
+        ),
+        waterway_river_bounds_summary.get(
+            "waterway_river_bounds_filtered_cells",
             0,
         ),
         waterway_river_bounds_summary.get(
@@ -301,6 +461,11 @@ class MapAreaListCreateView(APIView):
                             request.user.id,
                             feature_summaries_by_position,
                         )
+                        log_overpass_score_breakdown_summary(
+                            area,
+                            request.user.id,
+                            feature_summaries_by_position,
+                        )
                         log_overpass_river_summary(
                             area,
                             request.user.id,
@@ -310,6 +475,16 @@ class MapAreaListCreateView(APIView):
                                 "river_summary",
                                 None,
                             ),
+                        )
+                        log_overpass_scored_river_summary(
+                            area,
+                            request.user.id,
+                            feature_summaries_by_position,
+                        )
+                        log_overpass_scored_natural_coverage_summary(
+                            area,
+                            request.user.id,
+                            feature_summaries_by_position,
                         )
                         log_overpass_waterway_summary(
                             area,
