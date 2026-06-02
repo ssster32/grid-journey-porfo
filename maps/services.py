@@ -14,6 +14,19 @@ MAX_GENERAL_USER_GRID_WIDTH_METERS = 30000
 MIN_LONGITUDE_COSINE = 0.01
 INITIAL_SCORE_MIN = 0.0
 INITIAL_SCORE_MAX = 3.0
+MAX_ROAD_BOUNDS_AREA_RATIO_FOR_COUNT = 20.0
+MAX_ROAD_BOUNDS_LENGTH_RATIO_FOR_COUNT = 10.0
+MAX_RIVER_BOUNDS_AREA_RATIO_FOR_INTERSECTION = 20.0
+MAX_RIVER_BOUNDS_LENGTH_RATIO_FOR_INTERSECTION = 10.0
+MIN_LARGE_RIVER_OVERLAP_RATIO_FOR_INTERSECTION = 0.05
+LARGE_WATERWAY_RIVER_BOUNDS_AREA_RATIO_TO_MAP = 1.0
+
+
+class FeatureSummariesByPosition(dict):
+    """Dict of feature summaries with optional log-only river aggregate data."""
+
+
+WATERWAY_SUMMARY_KEYS = ("river", "stream", "canal", "unknown")
 
 
 def _clamp_initial_score(score):
@@ -177,13 +190,18 @@ def build_map_feature_from_osm_element(element):
     if bounds is None:
         return None
 
-    return {
+    map_feature = {
         "kind": kind,
         "bounds": bounds,
         "source": "osm",
         "source_type": element.get("type"),
         "source_id": element.get("id"),
     }
+    waterway = element.get("tags", {}).get("waterway")
+    if waterway:
+        map_feature["source_waterway"] = waterway
+
+    return map_feature
 
 
 def parse_overpass_elements_to_map_features(elements):
@@ -334,10 +352,250 @@ def build_feature_summaries_for_map_area_from_overpass(
     )
     map_features = fetch_osm_features_from_overpass(overpass_bounds)
 
-    return build_feature_summaries_for_grid_cell_contexts(
-        grid_cell_contexts,
-        map_features,
+    feature_summaries = FeatureSummariesByPosition(
+        build_feature_summaries_for_grid_cell_contexts(
+            grid_cell_contexts,
+            map_features,
+        )
     )
+    feature_summaries.river_summary = (
+        summarize_river_feature_matches_for_grid_cell_contexts(
+            grid_cell_contexts,
+            map_features,
+        )
+    )
+    feature_summaries.waterway_summary = (
+        summarize_waterway_feature_matches_for_grid_cell_contexts(
+            grid_cell_contexts,
+            map_features,
+        )
+    )
+    feature_summaries.waterway_river_bounds_summary = (
+        summarize_waterway_river_bounds_for_map_area(
+            {
+                "north": map_area.north,
+                "south": map_area.south,
+                "east": map_area.east,
+                "west": map_area.west,
+            },
+            map_features,
+        )
+    )
+
+    return feature_summaries
+
+
+def _empty_river_feature_match_summary():
+    return {
+        "river_cells": 0,
+        "river_avg_overlap": 0.0,
+        "river_max_overlap": 0.0,
+        "river_large_bounds_cells": 0,
+        "river_small_overlap_cells": 0,
+    }
+
+
+def _waterway_summary_key(source_waterway):
+    if source_waterway in WATERWAY_SUMMARY_KEYS[:-1]:
+        return source_waterway
+    return "unknown"
+
+
+def _empty_waterway_feature_match_summary():
+    summary = {}
+    for waterway in WATERWAY_SUMMARY_KEYS:
+        summary[f"waterway_{waterway}_features"] = 0
+        summary[f"waterway_{waterway}_cells"] = 0
+    return summary
+
+
+def _empty_waterway_river_bounds_summary():
+    return {
+        "waterway_river_bounds_features": 0,
+        "waterway_river_bounds_intersecting_map_features": 0,
+        "waterway_river_bounds_covering_map_features": 0,
+        "waterway_river_bounds_large_area_features": 0,
+        "waterway_river_bounds_max_area_ratio_to_map": 0.0,
+        "waterway_river_bounds_max_height_ratio_to_map": 0.0,
+        "waterway_river_bounds_max_width_ratio_to_map": 0.0,
+    }
+
+
+def summarize_waterway_river_bounds_for_map_area(map_area_bounds, map_features):
+    """Summarize waterway=river bbox size ratios against a MapArea bbox."""
+    map_area_bounds = _normalize_bounds(map_area_bounds)
+    if not isinstance(map_features, list):
+        raise ValueError("map_features はリストで指定してください。")
+
+    bounds_summary = _empty_waterway_river_bounds_summary()
+
+    for feature in map_features:
+        if not isinstance(feature, dict):
+            raise ValueError("map_features の各要素は辞書で指定してください。")
+        if feature.get("kind") != "river" or feature.get("source_waterway") != "river":
+            continue
+
+        bounds_summary["waterway_river_bounds_features"] += 1
+        feature_bounds = _normalize_bounds(feature.get("bounds"))
+        size_ratios = calculate_bounds_size_ratios(feature_bounds, map_area_bounds)
+        bounds_summary["waterway_river_bounds_max_area_ratio_to_map"] = max(
+            bounds_summary["waterway_river_bounds_max_area_ratio_to_map"],
+            size_ratios["area_ratio"],
+        )
+        bounds_summary["waterway_river_bounds_max_height_ratio_to_map"] = max(
+            bounds_summary["waterway_river_bounds_max_height_ratio_to_map"],
+            size_ratios["height_ratio"],
+        )
+        bounds_summary["waterway_river_bounds_max_width_ratio_to_map"] = max(
+            bounds_summary["waterway_river_bounds_max_width_ratio_to_map"],
+            size_ratios["width_ratio"],
+        )
+
+        if feature_intersects_grid_cell(feature_bounds, map_area_bounds):
+            bounds_summary["waterway_river_bounds_intersecting_map_features"] += 1
+        if _feature_covers_grid_cell(feature_bounds, map_area_bounds):
+            bounds_summary["waterway_river_bounds_covering_map_features"] += 1
+        if size_ratios["area_ratio"] >= LARGE_WATERWAY_RIVER_BOUNDS_AREA_RATIO_TO_MAP:
+            bounds_summary["waterway_river_bounds_large_area_features"] += 1
+
+    return bounds_summary
+
+
+def summarize_waterway_feature_matches_for_grid_cell_contexts(
+    grid_cell_contexts,
+    map_features,
+):
+    """Summarize source waterway tag counts for log output only."""
+    if not isinstance(grid_cell_contexts, list):
+        raise ValueError("grid_cell_contexts はリストで指定してください。")
+    if not isinstance(map_features, list):
+        raise ValueError("map_features はリストで指定してください。")
+
+    waterway_summary = _empty_waterway_feature_match_summary()
+    cell_keys_by_waterway = {waterway: set() for waterway in WATERWAY_SUMMARY_KEYS}
+    grid_cell_entries = []
+
+    for index, grid_cell_context in enumerate(grid_cell_contexts):
+        if not isinstance(grid_cell_context, dict):
+            raise ValueError("grid_cell_contexts の各要素は辞書で指定してください。")
+
+        grid_cell_bounds = {
+            "north": grid_cell_context.get("north"),
+            "south": grid_cell_context.get("south"),
+            "east": grid_cell_context.get("east"),
+            "west": grid_cell_context.get("west"),
+        }
+        grid_cell_entries.append(
+            (
+                (
+                    grid_cell_context.get("row_index", index),
+                    grid_cell_context.get("col_index", index),
+                ),
+                _normalize_bounds(grid_cell_bounds),
+            )
+        )
+
+    for feature in map_features:
+        if not isinstance(feature, dict):
+            raise ValueError("map_features の各要素は辞書で指定してください。")
+        if feature.get("kind") != "river":
+            continue
+
+        waterway_key = _waterway_summary_key(feature.get("source_waterway"))
+        waterway_summary[f"waterway_{waterway_key}_features"] += 1
+        feature_bounds = _normalize_bounds(feature.get("bounds"))
+
+        for cell_key, grid_cell_bounds in grid_cell_entries:
+            if feature_intersects_grid_cell(feature_bounds, grid_cell_bounds):
+                cell_keys_by_waterway[waterway_key].add(cell_key)
+
+    for waterway in WATERWAY_SUMMARY_KEYS:
+        waterway_summary[f"waterway_{waterway}_cells"] = len(
+            cell_keys_by_waterway[waterway]
+        )
+
+    return waterway_summary
+
+
+def summarize_river_feature_matches_for_grid_cell_contexts(
+    grid_cell_contexts,
+    map_features,
+):
+    """Summarize river bbox matches for log output without changing scoring."""
+    if not isinstance(grid_cell_contexts, list):
+        raise ValueError("grid_cell_contexts はリストで指定してください。")
+    if not isinstance(map_features, list):
+        raise ValueError("map_features はリストで指定してください。")
+
+    river_summary = _empty_river_feature_match_summary()
+    marked_river_overlaps = []
+
+    for grid_cell_context in grid_cell_contexts:
+        if not isinstance(grid_cell_context, dict):
+            raise ValueError("grid_cell_contexts の各要素は辞書で指定してください。")
+
+        grid_cell_bounds = {
+            "north": grid_cell_context.get("north"),
+            "south": grid_cell_context.get("south"),
+            "east": grid_cell_context.get("east"),
+            "west": grid_cell_context.get("west"),
+        }
+        grid_cell_bounds = _normalize_bounds(grid_cell_bounds)
+        cell_marked_overlaps = []
+        has_large_bounds = False
+        has_small_overlap = False
+
+        for feature in map_features:
+            if not isinstance(feature, dict):
+                raise ValueError("map_features の各要素は辞書で指定してください。")
+            if feature.get("kind") != "river":
+                continue
+
+            feature_bounds = _normalize_bounds(feature.get("bounds"))
+            if not feature_intersects_grid_cell(feature_bounds, grid_cell_bounds):
+                continue
+
+            size_ratios = calculate_bounds_size_ratios(
+                feature_bounds,
+                grid_cell_bounds,
+            )
+            overlap_ratio = calculate_bounds_overlap_ratio(
+                feature_bounds,
+                grid_cell_bounds,
+            )
+            is_large_river_bounds = (
+                size_ratios["area_ratio"] > MAX_RIVER_BOUNDS_AREA_RATIO_FOR_INTERSECTION
+                or size_ratios["height_ratio"]
+                > MAX_RIVER_BOUNDS_LENGTH_RATIO_FOR_INTERSECTION
+                or size_ratios["width_ratio"]
+                > MAX_RIVER_BOUNDS_LENGTH_RATIO_FOR_INTERSECTION
+            )
+
+            if is_large_river_bounds:
+                has_large_bounds = True
+            if overlap_ratio < MIN_LARGE_RIVER_OVERLAP_RATIO_FOR_INTERSECTION:
+                has_small_overlap = True
+            if (
+                not is_large_river_bounds
+                or overlap_ratio >= MIN_LARGE_RIVER_OVERLAP_RATIO_FOR_INTERSECTION
+            ):
+                cell_marked_overlaps.append(overlap_ratio)
+
+        if cell_marked_overlaps:
+            marked_river_overlaps.append(max(cell_marked_overlaps))
+        if has_large_bounds:
+            river_summary["river_large_bounds_cells"] += 1
+        if has_small_overlap:
+            river_summary["river_small_overlap_cells"] += 1
+
+    river_summary["river_cells"] = len(marked_river_overlaps)
+    if marked_river_overlaps:
+        river_summary["river_avg_overlap"] = (
+            sum(marked_river_overlaps) / len(marked_river_overlaps)
+        )
+        river_summary["river_max_overlap"] = max(marked_river_overlaps)
+
+    return river_summary
 
 
 def build_overpass_bbox_for_map_area(map_area, padding_meters=0):
@@ -394,6 +652,49 @@ def feature_intersects_grid_cell(feature_bounds, grid_cell_bounds):
     )
 
 
+def calculate_bounds_overlap_ratio(feature_bounds, grid_cell_bounds):
+    """Return the overlap area ratio within one GridCell bbox."""
+    feature_bounds = _normalize_bounds(feature_bounds)
+    grid_cell_bounds = _normalize_bounds(grid_cell_bounds)
+
+    overlap_height = max(
+        0.0,
+        min(feature_bounds["north"], grid_cell_bounds["north"])
+        - max(feature_bounds["south"], grid_cell_bounds["south"]),
+    )
+    overlap_width = max(
+        0.0,
+        min(feature_bounds["east"], grid_cell_bounds["east"])
+        - max(feature_bounds["west"], grid_cell_bounds["west"]),
+    )
+    grid_cell_area = (
+        (grid_cell_bounds["north"] - grid_cell_bounds["south"])
+        * (grid_cell_bounds["east"] - grid_cell_bounds["west"])
+    )
+    overlap_area = overlap_height * overlap_width
+
+    return min(max(overlap_area / grid_cell_area, 0.0), 1.0)
+
+
+def calculate_bounds_size_ratios(feature_bounds, grid_cell_bounds):
+    """Return feature bbox size ratios compared with one GridCell bbox."""
+    feature_bounds = _normalize_bounds(feature_bounds)
+    grid_cell_bounds = _normalize_bounds(grid_cell_bounds)
+
+    feature_height = feature_bounds["north"] - feature_bounds["south"]
+    feature_width = feature_bounds["east"] - feature_bounds["west"]
+    grid_cell_height = grid_cell_bounds["north"] - grid_cell_bounds["south"]
+    grid_cell_width = grid_cell_bounds["east"] - grid_cell_bounds["west"]
+    height_ratio = feature_height / grid_cell_height
+    width_ratio = feature_width / grid_cell_width
+
+    return {
+        "height_ratio": height_ratio,
+        "width_ratio": width_ratio,
+        "area_ratio": height_ratio * width_ratio,
+    }
+
+
 def _feature_covers_grid_cell(feature_bounds, grid_cell_bounds):
     feature_bounds = _normalize_bounds(feature_bounds)
     grid_cell_bounds = _normalize_bounds(grid_cell_bounds)
@@ -445,25 +746,50 @@ def build_feature_summary_for_grid_cell(grid_cell_bounds, map_features):
         if feature_kind == "building":
             feature_summary["building_count"] += 1
         elif feature_kind == "road":
-            feature_summary["road_count"] += 1
+            size_ratios = calculate_bounds_size_ratios(
+                feature_bounds,
+                grid_cell_bounds,
+            )
+            if (
+                size_ratios["area_ratio"] <= MAX_ROAD_BOUNDS_AREA_RATIO_FOR_COUNT
+                and size_ratios["height_ratio"]
+                <= MAX_ROAD_BOUNDS_LENGTH_RATIO_FOR_COUNT
+                and size_ratios["width_ratio"] <= MAX_ROAD_BOUNDS_LENGTH_RATIO_FOR_COUNT
+            ):
+                feature_summary["road_count"] += 1
         elif feature_kind == "water":
             feature_summary["water_coverage_ratio"] = max(
                 feature_summary["water_coverage_ratio"],
-                1.0
-                if _feature_covers_grid_cell(feature_bounds, grid_cell_bounds)
-                else 0.5,
+                calculate_bounds_overlap_ratio(feature_bounds, grid_cell_bounds),
             )
         elif feature_kind == "forest":
             feature_summary["forest_coverage_ratio"] = max(
                 feature_summary["forest_coverage_ratio"],
-                1.0
-                if _feature_covers_grid_cell(feature_bounds, grid_cell_bounds)
-                else 0.5,
+                calculate_bounds_overlap_ratio(feature_bounds, grid_cell_bounds),
             )
         elif feature_kind == "park":
             feature_summary["has_park"] = True
         elif feature_kind == "river":
-            feature_summary["has_river"] = True
+            size_ratios = calculate_bounds_size_ratios(
+                feature_bounds,
+                grid_cell_bounds,
+            )
+            overlap_ratio = calculate_bounds_overlap_ratio(
+                feature_bounds,
+                grid_cell_bounds,
+            )
+            is_large_river_bounds = (
+                size_ratios["area_ratio"] > MAX_RIVER_BOUNDS_AREA_RATIO_FOR_INTERSECTION
+                or size_ratios["height_ratio"]
+                > MAX_RIVER_BOUNDS_LENGTH_RATIO_FOR_INTERSECTION
+                or size_ratios["width_ratio"]
+                > MAX_RIVER_BOUNDS_LENGTH_RATIO_FOR_INTERSECTION
+            )
+            if (
+                not is_large_river_bounds
+                or overlap_ratio >= MIN_LARGE_RIVER_OVERLAP_RATIO_FOR_INTERSECTION
+            ):
+                feature_summary["has_river"] = True
         elif feature_kind == "coastline":
             feature_summary["is_coastal"] = True
 

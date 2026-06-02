@@ -1518,13 +1518,18 @@ class MapAreaCreateViewTests(TestCase):
             "is_coastal": True,
             "water_coverage_ratio": 0.1,
         }
+        second_feature_summary = {
+            "road_count": 5,
+            "forest_coverage_ratio": 0.5,
+        }
         expected_score = calculate_initial_score_from_feature_summary(feature_summary)
+        second_expected_score = calculate_initial_score_from_feature_summary(
+            second_feature_summary
+        )
+        expected_scores = [expected_score, second_expected_score]
         mock_overpass.return_value = {
             (0, 0): feature_summary,
-            (1, 0): {
-                "road_count": 5,
-                "forest_coverage_ratio": 0.5,
-            },
+            (1, 0): second_feature_summary,
         }
         payload = {
             **self.center_payload(),
@@ -1566,6 +1571,38 @@ class MapAreaCreateViewTests(TestCase):
         self.assertIn("coastal_cells=1", log_output)
         self.assertIn("water_cells=1", log_output)
         self.assertIn("forest_cells=1", log_output)
+        self.assertIn(f"score_min={min(expected_scores):.2f}", log_output)
+        self.assertIn(f"score_max={max(expected_scores):.2f}", log_output)
+        self.assertIn(
+            f"score_avg={sum(expected_scores) / len(expected_scores):.2f}",
+            log_output,
+        )
+        self.assertIn("Overpass auto waterway summary", log_output)
+        self.assertIn("waterway_river_features=0", log_output)
+        self.assertIn("waterway_stream_features=0", log_output)
+        self.assertIn("waterway_canal_features=0", log_output)
+        self.assertIn("waterway_unknown_features=0", log_output)
+        self.assertIn("waterway_river_cells=0", log_output)
+        self.assertIn("waterway_stream_cells=0", log_output)
+        self.assertIn("waterway_canal_cells=0", log_output)
+        self.assertIn("waterway_unknown_cells=0", log_output)
+        self.assertIn("Overpass auto waterway river bounds summary", log_output)
+        self.assertIn("waterway_river_bounds_features=0", log_output)
+        self.assertIn("waterway_river_bounds_intersecting_map_features=0", log_output)
+        self.assertIn("waterway_river_bounds_covering_map_features=0", log_output)
+        self.assertIn("waterway_river_bounds_large_area_features=0", log_output)
+        self.assertIn(
+            "waterway_river_bounds_max_area_ratio_to_map=0.0000",
+            log_output,
+        )
+        self.assertIn(
+            "waterway_river_bounds_max_height_ratio_to_map=0.0000",
+            log_output,
+        )
+        self.assertIn(
+            "waterway_river_bounds_max_width_ratio_to_map=0.0000",
+            log_output,
+        )
         self.assertNotIn("using fallback", log_output)
 
     @patch("maps.views.build_feature_summaries_for_map_area_from_overpass")

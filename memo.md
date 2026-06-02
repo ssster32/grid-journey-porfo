@@ -1,398 +1,235 @@
 # 引き継ぎメモ
 
-更新日: 2026-05-28
+更新日: 2026-06-02
 
-## プロジェクト概要
+## 概要
 
-- Django REST Framework を使った地図採点 API。
-- `MapArea` で地図範囲を登録し、`GridCell` に分割し、`GridRating` でユーザー採点を保存する。
-- ユーザー向けには、個人用の `MapArea` を「メモグリッド」、特定ユーザーに共有したものを「共有メモグリッド」と呼ぶ。
-- 共用 Mac 前提のため、Python は `.venv` を使う。
-- 作業は小さく分け、`API_SPEC.md`、`TASK.md`、README、実装の差をできるだけ作らない方針。
+- Django REST Framework の地図採点 API。
+- `MapArea` を作成すると、中心座標方式の `center_lat` / `center_lng` / `rows` / `cols` から範囲を計算し、同じ transaction 内で `GridCell` を自動生成する。
+- `GridCell.initial_score` / `calculated_score` は、通常は `region_feature_level` を fallback として使う。
+- `initial_score_mode=auto` の場合は、Overpass API由来の地物情報から `feature_summary` を作り、セルごとの初期スコアへ反映するところまで接続済み。
+- Overpass取得やfeature_summary生成が `ValueError` で失敗した場合、MapArea作成は止めず、従来どおり `region_feature_level` fallback でGridCellを作る。
 
 ## 作業前に読むファイル
 
 - `AGENTS.md`
-- `README.md`
 - `RULES.md`
 - `TASK.md`
-- `requirements.txt`
-- `config/settings.py`
-- `config/urls.py`
+- `README.md`
 - `API_SPEC.md`
 - `maps/models.py`
 - `maps/serializers.py`
 - `maps/services.py`
 - `maps/views.py`
-- `maps/urls.py`
 - `maps/tests.py`
-- `maps/admin.py`
-- `maps/static/maps/demo.html`
-- `maps/static/maps/demo.css`
-- `maps/static/maps/demo.js`
+- `maps/test_osm_services.py`
 
-## 現在の Git 状態
+## 現在の主な状態
 
-直近確認時点では、未コミット差分がある。
+### initial_score_mode
+
+- `MapArea.initial_score_mode` は `manual` / `auto`。
+- `manual`:
+  - Overpass helper は呼ばない。
+  - `generate_grid_cells_for_area()` が `region_feature_level` を使って `initial_score` / `calculated_score` を入れる。
+- `auto`:
+  - MapArea保存後、GridCell生成前に `build_feature_summaries_for_map_area_from_overpass()` を呼ぶ。
+  - 成功時は `feature_summaries_by_position` を `generate_grid_cells_for_area()` に渡す。
+  - 対応するsummaryがあるセルは自動判定スコア、ないセルは `region_feature_level` fallback。
+  - helperが `ValueError` の場合だけ握りつぶし、fallbackで作成継続。
+  - `generate_grid_cells_for_area()` 自体の失敗は従来どおり `400` でrollback。
+
+### Overpass / OSM helper
+
+`maps/services.py` に以下の流れがある。
 
 ```text
- M TASK.md
- M maps/static/maps/demo.css
- M maps/static/maps/demo.js
- M maps/tests.py
+build_overpass_bbox_for_map_area()
+build_overpass_query()
+fetch_osm_features_from_overpass()
+parse_overpass_elements_to_map_features()
+build_map_feature_from_osm_element()
+build_bounds_from_osm_element()
+classify_osm_element()
+build_feature_summaries_for_map_area_from_overpass()
 ```
 
 補足:
 
-- `TASK.md` はユーザーがタスク指示を管理しているため、明示依頼がない限り編集しない。
-- `maps/static/maps/demo.css` には、直近までの UI 調整差分が残っている。
-- 直近タスクでは `maps/static/maps/demo.js` と `maps/tests.py` を変更した。
-- `models.py` と migration は直近タスクでは変更していない。
+- `fetch_osm_features_from_overpass()` は `requests.post()` を使う。
+- HTTPヘッダー:
+  - `Accept: application/json`
+  - `Content-Type: text/plain; charset=utf-8`
+  - `User-Agent: portfolio-api-map-score/1.0`
+- Overpass QL本文は `query.encode("utf-8")` で送る。
+- HTTPステータスが200以外の場合、`ValueError` に `status_code` と `response.text` 先頭300文字までを含める。
+- レスポンス全文やクエリ全文はエラーやログに出さない。
+- `build_bounds_from_osm_element()` は既存の `north/south/east/west` と、Overpass形式の `minlat/minlon/maxlat/maxlon` に対応済み。
+- `parse_overpass_elements_to_map_features()` は、dict element の変換時に bounds不正などで `ValueError` が出た場合、そのelementだけスキップする。
+- `elements` 自体がlistでない場合、またはlist内の要素がdictでない場合は、従来どおり `ValueError`。
 
-## 現在の主な実装状態
+### feature_summary
 
-### model
-
-実装済み:
-
-- `MapArea`
-  - 地図として扱う範囲。
-  - `created_by` は nullable。
-  - 作成 API ではログイン中ユーザーを `created_by` に入れる。
-- `MapAreaShare`
-  - どの `MapArea` をどのユーザーに共有しているかを表す。
-  - `area` と `user` の組み合わせは一意。
-- `GridCell`
-  - `MapArea` を一定距離幅で分割した 1 マス。
-  - `area`, `row_index`, `col_index` の組み合わせで一意。
-  - 点数集計結果を保持する。
-- `GridRating`
-  - ユーザーが 1 つの `GridCell` に付けた採点。
-  - `grid` と `user` の組み合わせは一意。
-  - `score` は 1 から 10。
-
-作成済み migration:
-
-- `maps/migrations/0001_initial.py`
-- `maps/migrations/0002_gridrating.py`
-- `maps/migrations/0003_mapareashare.py`
-
-### 認証
-
-現在の地図 API はログイン必須。
-
-主に次を使う。
+対応している仮summary形式:
 
 ```python
-authentication_classes = [
-    TokenAuthentication,
-    BasicAuthentication,
-    SessionAuthentication,
-]
-permission_classes = [IsAuthenticated]
+{
+    "building_count": 0,
+    "road_count": 0,
+    "water_coverage_ratio": 0.0,
+    "forest_coverage_ratio": 0.0,
+    "has_park": False,
+    "has_river": False,
+    "is_coastal": False,
+}
 ```
 
-実装済み:
+`calculate_initial_score_from_feature_summary()` は `0.0〜3.0` のfloatを返す。
 
-- Basic 認証
-- Session 認証
-- Token 認証
-- `POST /api/auth/token/`
-
-JWT 認証はまだ実装しない方針。
-
-### service
-
-実装済み:
-
-- `calculate_bounds_from_center()`
-  - `center_lat` / `center_lng` / `grid_size_meters` / `rows` / `cols` から `north` / `south` / `east` / `west` を計算する。
-  - 経度方向は `cos(latitude)` を使って概算する。
-- `validate_center_grid_limits()`
-  - 一般ユーザー向けの作成上限を確認する。
-  - 現在は最大 500 マス、南北 30,000m、東西 30,000m。
-  - staff ユーザーはこの制限の対象外。
-- `generate_grid_cells_for_area()`
-  - `MapArea` から `GridCell` を自動生成する。
-  - 中心座標方式では、呼び出し側が指定した `rows` / `cols` / `lat_step` / `lng_step` を使う。
-  - 既に対象 `MapArea` に `GridCell` がある場合は `ValueError`。
-- `update_grid_cell_score()`
-  - 対象 `GridCell` の `GridRating` を集計する。
-  - 採点がある場合は平均点と採点数を保存する。
-  - `calculated_score` は `(initial_score + average_user_score) / 2`。
-  - 採点が 0 件なら `calculated_score = initial_score` に戻す。
-
-## 実装済み API
-
-### MapArea 作成 API
+現在の大まかな計算方針:
 
 ```text
-POST /api/maps/areas/
+base_score + diversity_bonus + context_bonus - penalty
 ```
 
-- 入力は中心座標方式。
-- `north` / `south` / `east` / `west` は作成入力では指定できない。
-- `center_lat` / `center_lng` / `grid_size_meters` / `rows` / `cols` を指定する。
-- ログイン中ユーザーで `MapArea` を作成する。
-- `created_by` はリクエストから受け取らず、サーバー側で `request.user` を入れる。
-- 作成後、同じ transaction 内で `generate_grid_cells_for_area(area, ...)` を呼び、`GridCell` も自動生成する。
-- GridCell 生成に失敗した場合、MapArea だけが保存される状態にはしない。
-- 一般ユーザーは、最大 500 マス、南北 30,000m、東西 30,000m を超えるメモグリッドを作成できない。
-- 管理者はこの制限の対象外。
+外部APIの結果を直接保存するDB構造はまだない。
 
-### MapArea 一覧 API
+### MapArea作成API
+
+`maps/views.py` の `MapAreaListCreateView.post()` で処理する。
+
+現在の流れ:
 
 ```text
-GET /api/maps/areas/
+serializer validation
+center_grid_options取得
+validate_center_grid_limits()
+transaction開始
+MapArea保存
+initial_score_mode=auto なら Overpass feature_summary作成を試す
+generate_grid_cells_for_area()
+201 Created
 ```
 
-- 自分が作成した `MapArea` と、自分に共有された `MapArea` を返す。
-- 自分のメモグリッドには `visibility: "private"`、`display_type: "メモグリッド"`、`is_owner: true` が付く。
-- 共有メモグリッドには `visibility: "shared"`、`display_type: "共有メモグリッド"`、`is_owner: false` が付く。
-- `created_by_username` を返す。
-- demo ページでは、自分のメモグリッドは `作成者: 自分`、共有メモグリッドは `作成者: <username>` と表示する。
-- 他ユーザーが作成し、自分に共有されていない `MapArea` は一覧に出ない。
+注意:
 
-### MapArea 詳細 API
+- APIレスポンスには Overpass 成功/失敗の情報を追加していない。
+- demo表示も変更していない。
+- Overpass失敗理由はユーザーには返さず、ログで確認する。
+
+## ログ
+
+`maps/views.py` で `logger = logging.getLogger(__name__)` を使用。
+
+### auto成功時
+
+成功ログ:
 
 ```text
-GET /api/maps/areas/{area_id}/
+Overpass auto initial score succeeded: area_id=... user_id=... initial_score_mode=auto summary_count=...
 ```
 
-- 自分が作成した `MapArea`、または自分に共有された `MapArea` だけ取得できる。
-- 共有されていない他ユーザーの `MapArea`、存在しない ID は `404 Not Found`。
-- `created_by=None` の `MapArea` も、自分に共有されていれば取得できる。
-
-### MapArea 削除 API
+feature_summary集計ログ:
 
 ```text
-DELETE /api/maps/areas/{area_id}/
+Overpass auto feature summary: area_id=... user_id=... summary_count=... building_cells=... road_cells=... park_cells=... river_cells=... coastal_cells=... water_cells=... forest_cells=... score_min=... score_max=... score_avg=...
 ```
 
-- 作成者だけ削除できる。
-- 共有されたユーザーは削除できない。
-- 削除成功時は `204 No Content`。
+`score_min` / `score_max` / `score_avg` は、各 `feature_summary` を `calculate_initial_score_from_feature_summary()` に通した値から算出し、小数2桁で出す。
 
-### GridCell 自動生成 API
+### auto失敗時
+
+warningログ:
 
 ```text
-POST /api/maps/areas/{area_id}/grids/
+Overpass auto initial score failed; using fallback: area_id=... user_id=... error=...
 ```
 
-- 対象 `MapArea` から `GridCell` を自動生成する。
-- `area.created_by == request.user` の場合だけ生成できる。
-- 共有されたユーザーは実行できない。
-- 他ユーザーの `MapArea` や `created_by is None` の `MapArea` は `403 Forbidden`。
-- 既に `GridCell` がある場合は `400 Bad Request`。
-- 通常は MapArea 作成時に自動生成されるため、demo では「GridCell を自動生成」ボタンは不要。
+注意:
 
-### 点数付きグリッド一覧 API
+- クエリ全文はログに出さない。
+- Overpassレスポンス全文はログに出さない。
+- 緯度経度の詳細範囲はログに出さない。
+- GridCellごとの詳細summaryはログに出さない。
 
-```text
-GET /api/maps/areas/{area_id}/grids/
-```
+## テスト構成
 
-- 自分が作成した `MapArea`、または自分に共有された `MapArea` の `GridCell` を取得できる。
-- 保存済みの点数集計値を読むだけで、再集計はしない。
-- 共有されていない他ユーザーの `MapArea` は `404 Not Found`。
+### `maps/tests.py`
 
-### 単体採点 API
+API、serializer、view、demo表示、認証、共有、採点などのテスト。
 
-```text
-POST /api/maps/grids/{grid_id}/ratings/
-```
+特に `MapAreaCreateViewTests` で確認済み:
 
-- ログイン中ユーザーが 1 つの `GridCell` に採点する。
-- 初回なら `GridRating` を作成し、同じユーザーの再採点なら更新する。
-- 採点後に `update_grid_cell_score(grid)` を呼ぶ。
-- 自分のメモグリッド、または自分に共有された共有メモグリッドの `GridCell` だけ採点できる。
-- 採点者は常にログイン中ユーザー。
-- 共有メモグリッドを採点しても、作成者ではなく共有されたユーザー自身の `GridRating` として保存される。
+- manualでは Overpass helper を呼ばない。
+- auto成功時は helper を呼び、summaryがあるセルは自動判定スコアになる。
+- auto成功時に `info` ログが出る。
+- auto成功時に feature_summary集計ログが出る。
+- auto失敗時は `warning` ログが出て、MapArea作成は `201 Created` のまま fallback する。
+- GridCell生成失敗時は従来どおり `400` でrollback。
 
-### 一括採点 API
+### `maps/test_osm_services.py`
 
-```text
-POST /api/maps/grids/bulk-ratings/
-```
+OSM / Overpass / feature_summary / initial_score 自動判定系のserviceテストを分離済み。
 
-- 複数の `GridCell` に同じ点数をまとめて付ける。
-- 各グリッドで初回採点なら作成、既存採点なら更新する。
-- 各グリッドで `update_grid_cell_score(grid)` を呼ぶ。
-- すべての `GridCell` が自分のメモグリッド、または自分に共有された共有メモグリッドに属する場合だけ採点できる。
-- 権限外または存在しない `GridCell` が 1 件でも含まれる場合は `400 Bad Request`。
-- 一部だけ採点して成功、という動きにはしない。
+主な確認済み:
 
-### 共有相手管理 API
+- OSMタグ分類。
+- OSM element bounds変換。
+- Overpass bounds形式 `minlat/minlon/maxlat/maxlon` の変換。
+- OSM elementから `map_features` 生成。
+- Overpass elementsから `map_features` list生成。
+- bounds不正のdict elementはスキップ。
+- dict以外のelementは `ValueError`。
+- Overpass query生成。
+- Overpass HTTP取得helperのendpoint/timeout/headers/UTF-8本文/エラー処理。
+- MapAreaからOverpass feature summaryを作るservice helper。
 
-```text
-GET /api/maps/areas/{area_id}/shares/
-POST /api/maps/areas/{area_id}/shares/
-DELETE /api/maps/areas/{area_id}/shares/{share_id}/
-```
+## 直近の確認結果
 
-- 作成者だけが共有相手一覧取得・追加・削除できる。
-- 共有されたユーザーは閲覧・採点はできるが、共有相手管理はできない。
-- 共有相手追加は `username` 指定。
-- レスポンスには `id` と `username` を返し、`email` は返さない。
-- 権限がない場合は、他ユーザーのデータ存在を推測しにくくするため `404 Not Found`。
-- 削除成功時は `204 No Content`。
-
-## 確認用 demo ページ
-
-```text
-GET /api/maps/demo/
-```
-
-ブラウザで既存 API を確認するための簡易 UI。
-本格的な地図 UI ではなく、API 動作確認用。
-
-demo ページ自体は認証なしで表示できる。
-実際の API 呼び出しでは、画面に入力した username/password から JavaScript が Basic 認証ヘッダーを作る。
-本番向けのログイン UI ではない。
-
-現在できること:
-
-- username/password 入力。
-- メモグリッド作成。
-- メモグリッド一覧取得。
-- メモグリッド選択。
-- MapArea 作成後の GridCell 自動生成。
-- GridCell 一覧取得。
-- 単体採点。
-- 一括採点。
-- 採点後の GridCell 一覧再取得。
-- `calculated_score` に応じた Score Map の色分け表示。
-- 共有相手一覧取得。
-- 共有相手 username による共有追加。
-- 共有相手一覧から共有解除。
-- メモグリッド削除。
-- Score Map のマスクリックによる GridCell 選択。
-- Score Map のドラッグ範囲選択。
-- Map Preview 上の GridCell クリック選択。
-- Map Preview 上の Shift + ドラッグ範囲選択。
-- 選択中 GridCell の採点パネルからの複数採点。
-
-メモグリッド一覧表示:
-
-- 共有メモグリッドは背景 `#EEEEFF`、枠線は背景より濃い青。
-- hover / 選択時は少し濃い青。
-- ボタン右下に `display_type / 作成者: ...` を小さめに表示。
-- 自分のメモグリッドは `作成者: 自分`。
-- 共有メモグリッドは `作成者: <created_by_username>`。
-- 作成者本人のメモグリッドだけ削除ボタンを表示する。
-
-Score Map:
-
-- 将来の地図背景に重ねる想定の、一枚の地図状の四角として表示。
-- `MapArea.east - MapArea.west` と `MapArea.north - MapArea.south` から概算した縦横比を反映する。
-- 正確な地図投影や外部地図表示はまだ行わない。
-- `row_index` / `col_index` に対応した簡易グリッド配置は維持。
-- 各マスは `calculated_score` を表示する。
-- スコア文字は小さめで、スコア値に応じて文字色を変えている。
-- グリッド自体の背景色は控えめ。
-- `GridCell ID`、`row/col` は確認用に小さく表示。
-- 表示モードは `全体表示` / `詳細表示`。
-
-選択中のマスパネル:
-
-- Score Map または Map Preview で選択した GridCell を表示する。
-- 行/列は画面上では 1 始まりの「縦/横」として表示する。
-- 再採点すると点数が更新される旨を表示する。
-- 採点に時間がかかる時は、メッセージ横にスピナーを表示する。
-- 採点後は選択が外れる。
-- `選択をすべて解除` ボタンは Map Preview の凡例横に配置している。
-
-Map Preview:
-
-- Leaflet ベース。
-- OpenStreetMap タイルを CDN から読み込む。
-- 選択中メモグリッドの `north/south/east/west` から範囲を作り、Leaflet 上に四角で表示する。
-- GridCell 境界を薄い rectangle として重ねる。
-- GridCell rectangle は `calculated_score` に応じて色分けする。
-- 地図タイルが見えるように、GridCell rectangle の塗りは薄め。
-- Map Preview の高さは Score Map に近い大きめの表示範囲に調整済み。
-- Map image URL 入力は削除済み。
-
-## 直近の作業: 2026-05-28 Map Preview 初期表示調整
-
-目的:
-
-- Map Preview の初期表示で、MapArea の長い方の辺が表示枠の約 95% 程度になるように調整した。
-
-変更内容:
-
-- `maps/static/maps/demo.js`
-  - `MAP_PREVIEW_TARGET_FILL_RATIO = 0.95` を追加。
-  - `MAP_PREVIEW_MIN_FIT_PADDING = 4` を追加。
-  - `mapPreviewFitPadding()` を追加。
-  - `elements.mapPreview.getBoundingClientRect()` で Map Preview の実サイズを取得し、`fitBounds()` 用 padding を動的に計算するようにした。
-  - `fitBounds()` 前に `invalidateSize()` を呼ぶようにした。
-  - `fitBounds()` に `padding: mapPreviewFitPadding()` と `maxZoom: MAP_PREVIEW_MAX_ZOOM` を渡すようにした。
-  - 追加ズーム処理を削除した。
-  - `zoomSnap: 0.25` / `zoomDelta: 0.25` を Leaflet map 作成時に追加した。
-- `maps/tests.py`
-  - demo 用 JS に、動的 padding、`zoomSnap`、`zoomDelta`、追加ズーム削除が反映されていることを確認するテストを追加した。
-
-確認済み:
+直近の作業中に確認済み:
 
 ```bash
-node --check maps/static/maps/demo.js
 .venv/bin/python manage.py check
-.venv/bin/python manage.py test maps.tests.MapDemoViewTests
-git diff --check -- maps/static/maps/demo.js maps/static/maps/demo.css maps/static/maps/demo.html maps/tests.py
+.venv/bin/python manage.py test maps.tests.MapAreaCreateViewTests
+.venv/bin/python manage.py test maps.test_osm_services
 .venv/bin/python manage.py test maps
 ```
 
-結果:
+確認済みの全体テスト結果:
 
-- `node --check` OK。
-- `System check identified no issues`。
-- `MapDemoViewTests` OK。
-- `maps` 全体テスト OK。
-- 直近確認時点では `213 tests` 通過。
+```text
+313 tests OK
+```
 
-未確認:
+## 現在の Git 状態メモ
 
-- 実ブラウザで、広め/狭め/縦長/横長のメモグリッドを選択した時に Map Preview の初期表示が約 95% 程度に見えるか。
-- 外部 CDN が使えない環境では Leaflet タイル表示自体は確認しにくい。
+直近確認時点で未コミット差分あり。
 
-## README の現状
+```text
+ M config/settings.py
+ M maps/tests.py
+ M maps/views.py
+```
 
-README には以下を記載済み。
+補足:
 
-- セットアップ手順。
-- Token 認証手順。
-- 中心座標方式での MapArea 作成。
-- MapArea 作成時の GridCell 自動生成。
-- 単体採点、一括採点。
-- MapArea 閲覧制限。
-- 他ユーザーでは採点できないことの確認。
-- 共有相手管理 API の curl 手動確認。
-- demo ページでの共有相手管理確認。
-- demo 操作手順。
-- 削除 API の手動確認。
+- `config/settings.py` は今回の引き継ぎメモ作成では触っていない。内容確認が必要。
+- 直近の主な実装差分は `maps/views.py` と `maps/tests.py`。
+- OSM service系の差分は作業履歴上多いが、直近の `git status --short` では `maps/services.py` / `maps/test_osm_services.py` は表示されていない状態だった。
 
 ## 次にやるとよいこと
 
-優先候補:
+候補:
 
-1. 実ブラウザで Map Preview の初期表示を手動確認する。
-2. Map Preview と Score Map の選択状態・色味・表示サイズが説明用に見やすいか確認する。
-3. README の demo 操作手順が、現在の UI と完全に一致しているか見直す。
-4. 共有メモグリッドで、閲覧・採点・削除不可・共有管理不可が demo 上でも直感的に分かるか確認する。
-
-まだ大きめに残っている設計課題:
-
-- ワールドグリッド用の `is_public` は未実装。
-- ユーザー検索 API、username オートコンプリート、email 共有は未実装。
-- Map Preview は CDN の Leaflet / OpenStreetMap タイルに依存しているため、本番向けの地図タイル利用方針は未確定。
-- GridCell 生成は概算計算であり、正確な地図投影までは扱っていない。
+1. `config/settings.py` の未コミット差分を確認し、意図した変更か整理する。
+2. `TASK.md` を次タスクに更新する。
+3. Overpass auto判定の実地確認を行う場合は、レート制限に注意し、まず狭い範囲で試す。
+4. auto判定の成功/失敗をAPIレスポンスやDBへ保存するかは未決定。必要なら設計タスクとして切り出す。
+5. Overpass APIの実利用が増える前に、キャッシュ・タイムアウト・レート制限・User-Agent表記を設計する。
 
 ## 注意点
 
-- `models.py` と migration は、指示がない限り変更しない。
-- `created_by=None` は public 扱いしない。
-- 共有されたユーザーは閲覧・採点だけ可能。
-- GridCell 自動生成、削除、共有相手管理は作成者だけ可能。
-- ワールドグリッド用の `is_public` はまだ未実装。
-- セキュリティ関連、認証方式、外部地図 API キーを触る場合は、作業前に影響を説明する。
+- `.venv` を使う。グローバルPython環境へ依存関係を入れない。
+- `.env`、`db.sqlite3`、秘密情報はGitに入れない。
+- 外部API接続をテストで直接行わない。テストではmockを使う。
+- `initial_score_mode=auto` のfallback仕様を変える場合は、API仕様とREADMEも更新する。

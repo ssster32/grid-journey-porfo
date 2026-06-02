@@ -25,6 +25,7 @@ from .serializers import (
 )
 from .services import (
     build_feature_summaries_for_map_area_from_overpass,
+    calculate_initial_score_from_feature_summary,
     generate_grid_cells_for_area,
     update_grid_cell_score,
     validate_center_grid_limits,
@@ -56,12 +57,21 @@ def rateable_grid_cells_for_user(user):
 
 
 def log_overpass_feature_summary(area, user_id, feature_summaries_by_position):
-    summaries = feature_summaries_by_position.values()
+    summaries = list(feature_summaries_by_position.values())
+    scores = [
+        calculate_initial_score_from_feature_summary(summary)
+        for summary in summaries
+    ]
+    score_min = min(scores) if scores else 0.0
+    score_max = max(scores) if scores else 0.0
+    score_avg = sum(scores) / len(scores) if scores else 0.0
+
     logger.info(
         "Overpass auto feature summary: "
         "area_id=%s user_id=%s summary_count=%s "
         "building_cells=%s road_cells=%s park_cells=%s river_cells=%s "
-        "coastal_cells=%s water_cells=%s forest_cells=%s",
+        "coastal_cells=%s water_cells=%s forest_cells=%s "
+        "score_min=%.2f score_max=%.2f score_avg=%.2f",
         area.id,
         user_id,
         len(feature_summaries_by_position),
@@ -72,6 +82,118 @@ def log_overpass_feature_summary(area, user_id, feature_summaries_by_position):
         sum(summary.get("is_coastal", False) is True for summary in summaries),
         sum(summary.get("water_coverage_ratio", 0) > 0 for summary in summaries),
         sum(summary.get("forest_coverage_ratio", 0) > 0 for summary in summaries),
+        score_min,
+        score_max,
+        score_avg,
+    )
+
+
+def log_overpass_river_summary(
+    area,
+    user_id,
+    feature_summaries_by_position,
+    river_summary=None,
+):
+    if river_summary is None:
+        summaries = list(feature_summaries_by_position.values())
+        river_summary = {
+            "river_cells": sum(
+                summary.get("has_river", False) is True for summary in summaries
+            ),
+            "river_avg_overlap": 0.0,
+            "river_max_overlap": 0.0,
+            "river_large_bounds_cells": 0,
+            "river_small_overlap_cells": 0,
+        }
+
+    logger.info(
+        "Overpass auto river summary: "
+        "area_id=%s user_id=%s river_cells=%s "
+        "river_avg_overlap=%.4f river_max_overlap=%.4f "
+        "river_large_bounds_cells=%s river_small_overlap_cells=%s",
+        area.id,
+        user_id,
+        river_summary.get("river_cells", 0),
+        river_summary.get("river_avg_overlap", 0.0),
+        river_summary.get("river_max_overlap", 0.0),
+        river_summary.get("river_large_bounds_cells", 0),
+        river_summary.get("river_small_overlap_cells", 0),
+    )
+
+
+def log_overpass_waterway_summary(
+    area,
+    user_id,
+    waterway_summary=None,
+):
+    if waterway_summary is None:
+        waterway_summary = {}
+
+    logger.info(
+        "Overpass auto waterway summary: "
+        "area_id=%s user_id=%s "
+        "waterway_river_features=%s waterway_stream_features=%s "
+        "waterway_canal_features=%s waterway_unknown_features=%s "
+        "waterway_river_cells=%s waterway_stream_cells=%s "
+        "waterway_canal_cells=%s waterway_unknown_cells=%s",
+        area.id,
+        user_id,
+        waterway_summary.get("waterway_river_features", 0),
+        waterway_summary.get("waterway_stream_features", 0),
+        waterway_summary.get("waterway_canal_features", 0),
+        waterway_summary.get("waterway_unknown_features", 0),
+        waterway_summary.get("waterway_river_cells", 0),
+        waterway_summary.get("waterway_stream_cells", 0),
+        waterway_summary.get("waterway_canal_cells", 0),
+        waterway_summary.get("waterway_unknown_cells", 0),
+    )
+
+
+def log_overpass_waterway_river_bounds_summary(
+    area,
+    user_id,
+    waterway_river_bounds_summary=None,
+):
+    if waterway_river_bounds_summary is None:
+        waterway_river_bounds_summary = {}
+
+    logger.info(
+        "Overpass auto waterway river bounds summary: "
+        "area_id=%s user_id=%s "
+        "waterway_river_bounds_features=%s "
+        "waterway_river_bounds_intersecting_map_features=%s "
+        "waterway_river_bounds_covering_map_features=%s "
+        "waterway_river_bounds_large_area_features=%s "
+        "waterway_river_bounds_max_area_ratio_to_map=%.4f "
+        "waterway_river_bounds_max_height_ratio_to_map=%.4f "
+        "waterway_river_bounds_max_width_ratio_to_map=%.4f",
+        area.id,
+        user_id,
+        waterway_river_bounds_summary.get("waterway_river_bounds_features", 0),
+        waterway_river_bounds_summary.get(
+            "waterway_river_bounds_intersecting_map_features",
+            0,
+        ),
+        waterway_river_bounds_summary.get(
+            "waterway_river_bounds_covering_map_features",
+            0,
+        ),
+        waterway_river_bounds_summary.get(
+            "waterway_river_bounds_large_area_features",
+            0,
+        ),
+        waterway_river_bounds_summary.get(
+            "waterway_river_bounds_max_area_ratio_to_map",
+            0.0,
+        ),
+        waterway_river_bounds_summary.get(
+            "waterway_river_bounds_max_height_ratio_to_map",
+            0.0,
+        ),
+        waterway_river_bounds_summary.get(
+            "waterway_river_bounds_max_width_ratio_to_map",
+            0.0,
+        ),
     )
 
 
@@ -178,6 +300,34 @@ class MapAreaListCreateView(APIView):
                             area,
                             request.user.id,
                             feature_summaries_by_position,
+                        )
+                        log_overpass_river_summary(
+                            area,
+                            request.user.id,
+                            feature_summaries_by_position,
+                            getattr(
+                                feature_summaries_by_position,
+                                "river_summary",
+                                None,
+                            ),
+                        )
+                        log_overpass_waterway_summary(
+                            area,
+                            request.user.id,
+                            getattr(
+                                feature_summaries_by_position,
+                                "waterway_summary",
+                                None,
+                            ),
+                        )
+                        log_overpass_waterway_river_bounds_summary(
+                            area,
+                            request.user.id,
+                            getattr(
+                                feature_summaries_by_position,
+                                "waterway_river_bounds_summary",
+                                None,
+                            ),
                         )
                     except ValueError as error:
                         logger.warning(

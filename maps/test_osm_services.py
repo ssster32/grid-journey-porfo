@@ -16,6 +16,8 @@ from .services import (
     build_map_feature_from_osm_element,
     build_overpass_bbox_for_map_area,
     build_overpass_query,
+    calculate_bounds_overlap_ratio,
+    calculate_bounds_size_ratios,
     calculate_initial_score_from_feature_summary,
     classify_osm_element,
     determine_initial_score_for_grid_cell,
@@ -23,6 +25,9 @@ from .services import (
     feature_intersects_grid_cell,
     generate_grid_cells_for_area,
     parse_overpass_elements_to_map_features,
+    summarize_river_feature_matches_for_grid_cell_contexts,
+    summarize_waterway_feature_matches_for_grid_cell_contexts,
+    summarize_waterway_river_bounds_for_map_area,
 )
 
 
@@ -710,6 +715,24 @@ class DetermineInitialScoreForGridCellTests(TestCase):
         self.assertEqual(map_feature["source_type"], "way")
         self.assertEqual(map_feature["source_id"], 456)
 
+    def test_build_map_feature_from_osm_element_keeps_source_waterway(self):
+        map_feature = build_map_feature_from_osm_element(
+            {
+                "type": "way",
+                "id": 789,
+                "tags": {"waterway": "canal"},
+                "bounds": {
+                    "north": 10.0,
+                    "south": 9.0,
+                    "east": 20.0,
+                    "west": 19.0,
+                },
+            }
+        )
+
+        self.assertEqual(map_feature["kind"], "river")
+        self.assertEqual(map_feature["source_waterway"], "canal")
+
     def test_build_map_feature_from_osm_element_returns_none_for_unknown_tags(self):
         self.assertIsNone(
             build_map_feature_from_osm_element(
@@ -955,6 +978,158 @@ class DetermineInitialScoreForGridCellTests(TestCase):
             )
         )
 
+    def test_calculate_bounds_overlap_ratio_returns_one_when_feature_covers_grid_cell(
+        self,
+    ):
+        ratio = calculate_bounds_overlap_ratio(
+            {
+                "north": 10.5,
+                "south": 8.5,
+                "east": 20.5,
+                "west": 18.5,
+            },
+            self.grid_bounds(),
+        )
+
+        self.assertEqual(ratio, 1.0)
+
+    def test_calculate_bounds_overlap_ratio_returns_half_for_half_overlap(self):
+        ratio = calculate_bounds_overlap_ratio(
+            {
+                "north": 10.0,
+                "south": 9.0,
+                "east": 19.5,
+                "west": 18.5,
+            },
+            self.grid_bounds(),
+        )
+
+        self.assertEqual(ratio, 0.5)
+
+    def test_calculate_bounds_overlap_ratio_returns_zero_when_not_overlapping(self):
+        ratio = calculate_bounds_overlap_ratio(
+            {
+                "north": 11.0,
+                "south": 10.5,
+                "east": 20.0,
+                "west": 19.0,
+            },
+            self.grid_bounds(),
+        )
+
+        self.assertEqual(ratio, 0.0)
+
+    def test_calculate_bounds_overlap_ratio_returns_zero_when_only_touching_boundary(
+        self,
+    ):
+        ratio = calculate_bounds_overlap_ratio(
+            {
+                "north": 10.5,
+                "south": 10.0,
+                "east": 20.0,
+                "west": 19.0,
+            },
+            self.grid_bounds(),
+        )
+
+        self.assertEqual(ratio, 0.0)
+
+    def test_calculate_bounds_overlap_ratio_invalid_bounds_raises_value_error(self):
+        invalid_bounds_list = (
+            None,
+            [],
+            {"north": 9.0, "south": 10.0, "east": 20.0, "west": 19.0},
+            {"north": 10.0, "south": 9.0, "east": 19.0, "west": 20.0},
+            {"north": 10.0, "south": 9.0, "east": 20.0, "west": True},
+        )
+
+        for invalid_bounds in invalid_bounds_list:
+            with self.subTest(invalid_bounds=invalid_bounds):
+                with self.assertRaises(ValueError):
+                    calculate_bounds_overlap_ratio(
+                        invalid_bounds,
+                        self.grid_bounds(),
+                    )
+
+        with self.assertRaises(ValueError):
+            calculate_bounds_overlap_ratio(
+                self.grid_bounds(),
+                {"north": 1.0, "south": 1.0, "east": 2.0, "west": 1.0},
+            )
+
+    def test_calculate_bounds_size_ratios_returns_one_for_same_size_bounds(self):
+        ratios = calculate_bounds_size_ratios(
+            {
+                "north": 10.0,
+                "south": 9.0,
+                "east": 20.0,
+                "west": 19.0,
+            },
+            self.grid_bounds(),
+        )
+
+        self.assertEqual(
+            ratios,
+            {
+                "height_ratio": 1.0,
+                "width_ratio": 1.0,
+                "area_ratio": 1.0,
+            },
+        )
+
+    def test_calculate_bounds_size_ratios_returns_larger_feature_ratios(self):
+        ratios = calculate_bounds_size_ratios(
+            {
+                "north": 10.5,
+                "south": 8.5,
+                "east": 22.5,
+                "west": 17.5,
+            },
+            self.grid_bounds(),
+        )
+
+        self.assertEqual(ratios["height_ratio"], 2.0)
+        self.assertEqual(ratios["width_ratio"], 5.0)
+        self.assertEqual(ratios["area_ratio"], 10.0)
+
+    def test_calculate_bounds_size_ratios_returns_smaller_feature_ratios(self):
+        ratios = calculate_bounds_size_ratios(
+            {
+                "north": 9.75,
+                "south": 9.25,
+                "east": 19.25,
+                "west": 19.0,
+            },
+            self.grid_bounds(),
+        )
+
+        self.assertEqual(ratios["height_ratio"], 0.5)
+        self.assertEqual(ratios["width_ratio"], 0.25)
+        self.assertEqual(ratios["area_ratio"], 0.125)
+
+    def test_calculate_bounds_size_ratios_invalid_bounds_raises_value_error(self):
+        invalid_bounds_list = (
+            None,
+            [],
+            {"north": 9.0, "south": 10.0, "east": 20.0, "west": 19.0},
+            {"north": 10.0, "south": 9.0, "east": 19.0, "west": 20.0},
+            {"north": 10.0, "south": 9.0, "east": 20.0, "west": True},
+        )
+
+        for invalid_bounds in invalid_bounds_list:
+            with self.subTest(invalid_bounds=invalid_bounds):
+                with self.assertRaises(ValueError):
+                    calculate_bounds_size_ratios(
+                        invalid_bounds,
+                        self.grid_bounds(),
+                    )
+
+        with self.assertRaises(ValueError):
+            calculate_bounds_size_ratios(
+                self.grid_bounds(),
+                {"north": 1.0, "south": 1.0, "east": 2.0, "west": 1.0},
+            )
+
     def test_build_feature_summary_counts_buildings_and_roads(self):
         summary = build_feature_summary_for_grid_cell(
             self.grid_bounds(),
@@ -992,6 +1167,84 @@ class DetermineInitialScoreForGridCellTests(TestCase):
         self.assertEqual(summary["building_count"], 2)
         self.assertEqual(summary["road_count"], 1)
 
+    def test_build_feature_summary_does_not_count_road_when_area_ratio_is_too_large(
+        self,
+    ):
+        summary = build_feature_summary_for_grid_cell(
+            self.grid_bounds(),
+            [
+                {
+                    "kind": "road",
+                    "bounds": {
+                        "north": 12.0,
+                        "south": 7.0,
+                        "east": 22.0,
+                        "west": 17.0,
+                    },
+                },
+            ],
+        )
+
+        self.assertEqual(summary["road_count"], 0)
+
+    def test_build_feature_summary_does_not_count_road_when_height_ratio_is_too_large(
+        self,
+    ):
+        summary = build_feature_summary_for_grid_cell(
+            self.grid_bounds(),
+            [
+                {
+                    "kind": "road",
+                    "bounds": {
+                        "north": 15.5,
+                        "south": 4.5,
+                        "east": 19.5,
+                        "west": 19.0,
+                    },
+                },
+            ],
+        )
+
+        self.assertEqual(summary["road_count"], 0)
+
+    def test_build_feature_summary_does_not_count_road_when_width_ratio_is_too_large(
+        self,
+    ):
+        summary = build_feature_summary_for_grid_cell(
+            self.grid_bounds(),
+            [
+                {
+                    "kind": "road",
+                    "bounds": {
+                        "north": 9.5,
+                        "south": 9.0,
+                        "east": 25.5,
+                        "west": 14.5,
+                    },
+                },
+            ],
+        )
+
+        self.assertEqual(summary["road_count"], 0)
+
+    def test_build_feature_summary_counts_road_at_size_ratio_thresholds(self):
+        summary = build_feature_summary_for_grid_cell(
+            self.grid_bounds(),
+            [
+                {
+                    "kind": "road",
+                    "bounds": {
+                        "north": 14.5,
+                        "south": 4.5,
+                        "east": 20.0,
+                        "west": 18.0,
+                    },
+                },
+            ],
+        )
+
+        self.assertEqual(summary["road_count"], 1)
+
     def test_build_feature_summary_sets_water_and_forest_ratios(self):
         summary = build_feature_summary_for_grid_cell(
             self.grid_bounds(),
@@ -1017,8 +1270,54 @@ class DetermineInitialScoreForGridCellTests(TestCase):
             ],
         )
 
-        self.assertEqual(summary["water_coverage_ratio"], 0.5)
+        self.assertAlmostEqual(summary["water_coverage_ratio"], 0.01)
         self.assertEqual(summary["forest_coverage_ratio"], 1.0)
+
+    def test_build_feature_summary_uses_max_water_and_forest_overlap_ratios(self):
+        summary = build_feature_summary_for_grid_cell(
+            self.grid_bounds(),
+            [
+                {
+                    "kind": "water",
+                    "bounds": {
+                        "north": 10.0,
+                        "south": 9.0,
+                        "east": 19.25,
+                        "west": 18.75,
+                    },
+                },
+                {
+                    "kind": "water",
+                    "bounds": {
+                        "north": 10.0,
+                        "south": 9.0,
+                        "east": 19.5,
+                        "west": 18.5,
+                    },
+                },
+                {
+                    "kind": "forest",
+                    "bounds": {
+                        "north": 9.5,
+                        "south": 9.0,
+                        "east": 20.0,
+                        "west": 19.0,
+                    },
+                },
+                {
+                    "kind": "forest",
+                    "bounds": {
+                        "north": 9.25,
+                        "south": 9.0,
+                        "east": 20.0,
+                        "west": 19.0,
+                    },
+                },
+            ],
+        )
+
+        self.assertEqual(summary["water_coverage_ratio"], 0.5)
+        self.assertEqual(summary["forest_coverage_ratio"], 0.5)
 
     def test_build_feature_summary_sets_boolean_features(self):
         summary = build_feature_summary_for_grid_cell(
@@ -1057,6 +1356,78 @@ class DetermineInitialScoreForGridCellTests(TestCase):
         self.assertTrue(summary["has_park"])
         self.assertTrue(summary["has_river"])
         self.assertTrue(summary["is_coastal"])
+
+    def test_build_feature_summary_marks_normal_size_river(self):
+        summary = build_feature_summary_for_grid_cell(
+            self.grid_bounds(),
+            [
+                {
+                    "kind": "river",
+                    "bounds": {
+                        "north": 9.8,
+                        "south": 9.2,
+                        "east": 19.8,
+                        "west": 19.2,
+                    },
+                },
+            ],
+        )
+
+        self.assertTrue(summary["has_river"])
+
+    def test_build_feature_summary_marks_large_river_with_enough_overlap(self):
+        summary = build_feature_summary_for_grid_cell(
+            self.grid_bounds(),
+            [
+                {
+                    "kind": "river",
+                    "bounds": {
+                        "north": 15.0,
+                        "south": 5.0,
+                        "east": 19.1,
+                        "west": 18.6,
+                    },
+                },
+            ],
+        )
+
+        self.assertTrue(summary["has_river"])
+
+    def test_build_feature_summary_does_not_mark_large_river_with_small_overlap(self):
+        summary = build_feature_summary_for_grid_cell(
+            self.grid_bounds(),
+            [
+                {
+                    "kind": "river",
+                    "bounds": {
+                        "north": 15.5,
+                        "south": 4.5,
+                        "east": 19.04,
+                        "west": 18.54,
+                    },
+                },
+            ],
+        )
+
+        self.assertFalse(summary["has_river"])
+
+    def test_build_feature_summary_marks_river_at_size_ratio_thresholds(self):
+        summary = build_feature_summary_for_grid_cell(
+            self.grid_bounds(),
+            [
+                {
+                    "kind": "river",
+                    "bounds": {
+                        "north": 14.5,
+                        "south": 4.5,
+                        "east": 20.0,
+                        "west": 18.0,
+                    },
+                },
+            ],
+        )
+
+        self.assertTrue(summary["has_river"])
 
     def test_build_feature_summary_ignores_unknown_kind_and_non_intersections(self):
         summary = build_feature_summary_for_grid_cell(
@@ -1379,6 +1750,583 @@ class DetermineInitialScoreForGridCellTests(TestCase):
                 with self.assertRaises(ValueError):
                     build_feature_summaries_for_grid_cell_contexts(
                         grid_cell_contexts,
+                        map_features,
+                    )
+
+    def test_summarize_river_feature_matches_returns_zero_without_river(self):
+        river_summary = summarize_river_feature_matches_for_grid_cell_contexts(
+            [
+                {
+                    "row_index": 0,
+                    "col_index": 0,
+                    "north": 10.0,
+                    "south": 9.0,
+                    "east": 20.0,
+                    "west": 19.0,
+                },
+            ],
+            [
+                {
+                    "kind": "building",
+                    "bounds": {
+                        "north": 9.9,
+                        "south": 9.8,
+                        "east": 19.2,
+                        "west": 19.1,
+                    },
+                },
+            ],
+        )
+
+        self.assertEqual(
+            river_summary,
+            {
+                "river_cells": 0,
+                "river_avg_overlap": 0.0,
+                "river_max_overlap": 0.0,
+                "river_large_bounds_cells": 0,
+                "river_small_overlap_cells": 0,
+            },
+        )
+
+    def test_summarize_river_feature_matches_counts_normal_river_overlap(self):
+        river_summary = summarize_river_feature_matches_for_grid_cell_contexts(
+            [
+                {
+                    "row_index": 0,
+                    "col_index": 0,
+                    "north": 10.0,
+                    "south": 9.0,
+                    "east": 20.0,
+                    "west": 19.0,
+                },
+            ],
+            [
+                {
+                    "kind": "river",
+                    "bounds": {
+                        "north": 9.8,
+                        "south": 9.2,
+                        "east": 19.8,
+                        "west": 19.2,
+                    },
+                },
+            ],
+        )
+
+        self.assertEqual(river_summary["river_cells"], 1)
+        self.assertAlmostEqual(river_summary["river_avg_overlap"], 0.36)
+        self.assertAlmostEqual(river_summary["river_max_overlap"], 0.36)
+        self.assertEqual(river_summary["river_large_bounds_cells"], 0)
+        self.assertEqual(river_summary["river_small_overlap_cells"], 0)
+
+    def test_summarize_river_feature_matches_counts_large_river_bounds(self):
+        river_summary = summarize_river_feature_matches_for_grid_cell_contexts(
+            [
+                {
+                    "row_index": 0,
+                    "col_index": 0,
+                    "north": 10.0,
+                    "south": 9.0,
+                    "east": 20.0,
+                    "west": 19.0,
+                },
+            ],
+            [
+                {
+                    "kind": "river",
+                    "bounds": {
+                        "north": 15.5,
+                        "south": 4.5,
+                        "east": 19.1,
+                        "west": 18.6,
+                    },
+                },
+            ],
+        )
+
+        self.assertEqual(river_summary["river_cells"], 1)
+        self.assertAlmostEqual(river_summary["river_avg_overlap"], 0.1)
+        self.assertAlmostEqual(river_summary["river_max_overlap"], 0.1)
+        self.assertEqual(river_summary["river_large_bounds_cells"], 1)
+        self.assertEqual(river_summary["river_small_overlap_cells"], 0)
+
+    def test_summarize_river_feature_matches_counts_small_overlap(self):
+        river_summary = summarize_river_feature_matches_for_grid_cell_contexts(
+            [
+                {
+                    "row_index": 0,
+                    "col_index": 0,
+                    "north": 10.0,
+                    "south": 9.0,
+                    "east": 20.0,
+                    "west": 19.0,
+                },
+            ],
+            [
+                {
+                    "kind": "river",
+                    "bounds": {
+                        "north": 15.5,
+                        "south": 4.5,
+                        "east": 19.04,
+                        "west": 18.54,
+                    },
+                },
+            ],
+        )
+
+        self.assertEqual(river_summary["river_cells"], 0)
+        self.assertEqual(river_summary["river_avg_overlap"], 0.0)
+        self.assertEqual(river_summary["river_max_overlap"], 0.0)
+        self.assertEqual(river_summary["river_large_bounds_cells"], 1)
+        self.assertEqual(river_summary["river_small_overlap_cells"], 1)
+
+    def test_summarize_waterway_feature_matches_returns_zero_without_waterway(self):
+        waterway_summary = summarize_waterway_feature_matches_for_grid_cell_contexts(
+            [
+                {
+                    "row_index": 0,
+                    "col_index": 0,
+                    "north": 10.0,
+                    "south": 9.0,
+                    "east": 20.0,
+                    "west": 19.0,
+                },
+            ],
+            [
+                {
+                    "kind": "building",
+                    "bounds": {
+                        "north": 9.9,
+                        "south": 9.8,
+                        "east": 19.2,
+                        "west": 19.1,
+                    },
+                },
+            ],
+        )
+
+        self.assertEqual(
+            waterway_summary,
+            {
+                "waterway_river_features": 0,
+                "waterway_river_cells": 0,
+                "waterway_stream_features": 0,
+                "waterway_stream_cells": 0,
+                "waterway_canal_features": 0,
+                "waterway_canal_cells": 0,
+                "waterway_unknown_features": 0,
+                "waterway_unknown_cells": 0,
+            },
+        )
+
+    def test_summarize_waterway_feature_matches_counts_feature_types(self):
+        grid_cell_contexts = [
+            {
+                "row_index": 0,
+                "col_index": 0,
+                "north": 10.0,
+                "south": 9.0,
+                "east": 20.0,
+                "west": 19.0,
+            },
+        ]
+        map_features = [
+            {
+                "kind": "river",
+                "source_waterway": "river",
+                "bounds": {
+                    "north": 9.9,
+                    "south": 9.8,
+                    "east": 19.2,
+                    "west": 19.1,
+                },
+            },
+            {
+                "kind": "river",
+                "source_waterway": "stream",
+                "bounds": {
+                    "north": 9.7,
+                    "south": 9.6,
+                    "east": 19.4,
+                    "west": 19.3,
+                },
+            },
+            {
+                "kind": "river",
+                "source_waterway": "canal",
+                "bounds": {
+                    "north": 9.5,
+                    "south": 9.4,
+                    "east": 19.6,
+                    "west": 19.5,
+                },
+            },
+            {
+                "kind": "river",
+                "source_waterway": "ditch",
+                "bounds": {
+                    "north": 9.3,
+                    "south": 9.2,
+                    "east": 19.8,
+                    "west": 19.7,
+                },
+            },
+            {
+                "kind": "river",
+                "bounds": {
+                    "north": 9.2,
+                    "south": 9.1,
+                    "east": 19.9,
+                    "west": 19.8,
+                },
+            },
+        ]
+
+        waterway_summary = summarize_waterway_feature_matches_for_grid_cell_contexts(
+            grid_cell_contexts,
+            map_features,
+        )
+
+        self.assertEqual(waterway_summary["waterway_river_features"], 1)
+        self.assertEqual(waterway_summary["waterway_stream_features"], 1)
+        self.assertEqual(waterway_summary["waterway_canal_features"], 1)
+        self.assertEqual(waterway_summary["waterway_unknown_features"], 2)
+
+    def test_summarize_waterway_feature_matches_counts_cells_once_per_type(self):
+        waterway_summary = summarize_waterway_feature_matches_for_grid_cell_contexts(
+            [
+                {
+                    "row_index": 0,
+                    "col_index": 0,
+                    "north": 10.0,
+                    "south": 9.0,
+                    "east": 20.0,
+                    "west": 19.0,
+                },
+                {
+                    "row_index": 0,
+                    "col_index": 1,
+                    "north": 10.0,
+                    "south": 9.0,
+                    "east": 21.0,
+                    "west": 20.0,
+                },
+            ],
+            [
+                {
+                    "kind": "river",
+                    "source_waterway": "canal",
+                    "bounds": {
+                        "north": 9.9,
+                        "south": 9.8,
+                        "east": 19.3,
+                        "west": 19.1,
+                    },
+                },
+                {
+                    "kind": "river",
+                    "source_waterway": "canal",
+                    "bounds": {
+                        "north": 9.7,
+                        "south": 9.6,
+                        "east": 19.5,
+                        "west": 19.2,
+                    },
+                },
+                {
+                    "kind": "river",
+                    "source_waterway": "stream",
+                    "bounds": {
+                        "north": 9.8,
+                        "south": 9.2,
+                        "east": 20.5,
+                        "west": 19.5,
+                    },
+                },
+            ],
+        )
+
+        self.assertEqual(waterway_summary["waterway_canal_features"], 2)
+        self.assertEqual(waterway_summary["waterway_canal_cells"], 1)
+        self.assertEqual(waterway_summary["waterway_stream_features"], 1)
+        self.assertEqual(waterway_summary["waterway_stream_cells"], 2)
+
+    def test_summarize_waterway_feature_matches_invalid_input_raises_value_error(self):
+        valid_context = {
+            "row_index": 0,
+            "col_index": 0,
+            "north": 10.0,
+            "south": 9.0,
+            "east": 20.0,
+            "west": 19.0,
+        }
+        valid_feature = {
+            "kind": "river",
+            "source_waterway": "canal",
+            "bounds": {
+                "north": 9.9,
+                "south": 9.8,
+                "east": 19.2,
+                "west": 19.1,
+            },
+        }
+        invalid_inputs = (
+            (None, []),
+            ([None], []),
+            ([{**valid_context, "north": 9.0}], []),
+            ([valid_context], None),
+            ([valid_context], [None]),
+            ([valid_context], [{**valid_feature, "bounds": None}]),
+        )
+
+        for grid_cell_contexts, map_features in invalid_inputs:
+            with self.subTest(
+                grid_cell_contexts=grid_cell_contexts,
+                map_features=map_features,
+            ):
+                with self.assertRaises(ValueError):
+                    summarize_waterway_feature_matches_for_grid_cell_contexts(
+                        grid_cell_contexts,
+                        map_features,
+                    )
+
+    def map_area_bounds(self):
+        return {
+            "north": 10.0,
+            "south": 9.0,
+            "east": 20.0,
+            "west": 19.0,
+        }
+
+    def test_summarize_waterway_river_bounds_returns_zero_without_river(self):
+        bounds_summary = summarize_waterway_river_bounds_for_map_area(
+            self.map_area_bounds(),
+            [
+                {
+                    "kind": "river",
+                    "source_waterway": "canal",
+                    "bounds": {
+                        "north": 10.5,
+                        "south": 8.5,
+                        "east": 20.5,
+                        "west": 18.5,
+                    },
+                },
+                {
+                    "kind": "building",
+                    "bounds": {
+                        "north": 9.9,
+                        "south": 9.8,
+                        "east": 19.2,
+                        "west": 19.1,
+                    },
+                },
+            ],
+        )
+
+        self.assertEqual(
+            bounds_summary,
+            {
+                "waterway_river_bounds_features": 0,
+                "waterway_river_bounds_intersecting_map_features": 0,
+                "waterway_river_bounds_covering_map_features": 0,
+                "waterway_river_bounds_large_area_features": 0,
+                "waterway_river_bounds_max_area_ratio_to_map": 0.0,
+                "waterway_river_bounds_max_height_ratio_to_map": 0.0,
+                "waterway_river_bounds_max_width_ratio_to_map": 0.0,
+            },
+        )
+
+    def test_summarize_waterway_river_bounds_counts_only_river_features(self):
+        bounds_summary = summarize_waterway_river_bounds_for_map_area(
+            self.map_area_bounds(),
+            [
+                {
+                    "kind": "river",
+                    "source_waterway": "river",
+                    "bounds": {
+                        "north": 9.9,
+                        "south": 9.8,
+                        "east": 19.2,
+                        "west": 19.1,
+                    },
+                },
+                {
+                    "kind": "river",
+                    "source_waterway": "river",
+                    "bounds": {
+                        "north": 9.7,
+                        "south": 9.6,
+                        "east": 19.4,
+                        "west": 19.3,
+                    },
+                },
+                {
+                    "kind": "river",
+                    "source_waterway": "stream",
+                    "bounds": {
+                        "north": 9.5,
+                        "south": 9.4,
+                        "east": 19.6,
+                        "west": 19.5,
+                    },
+                },
+                {
+                    "kind": "river",
+                    "source_waterway": "canal",
+                    "bounds": {
+                        "north": 9.3,
+                        "south": 9.2,
+                        "east": 19.8,
+                        "west": 19.7,
+                    },
+                },
+            ],
+        )
+
+        self.assertEqual(bounds_summary["waterway_river_bounds_features"], 2)
+
+    def test_summarize_waterway_river_bounds_counts_intersections_and_covering(self):
+        bounds_summary = summarize_waterway_river_bounds_for_map_area(
+            self.map_area_bounds(),
+            [
+                {
+                    "kind": "river",
+                    "source_waterway": "river",
+                    "bounds": {
+                        "north": 9.9,
+                        "south": 9.8,
+                        "east": 19.2,
+                        "west": 19.1,
+                    },
+                },
+                {
+                    "kind": "river",
+                    "source_waterway": "river",
+                    "bounds": {
+                        "north": 11.0,
+                        "south": 10.5,
+                        "east": 20.0,
+                        "west": 19.0,
+                    },
+                },
+                {
+                    "kind": "river",
+                    "source_waterway": "river",
+                    "bounds": {
+                        "north": 10.5,
+                        "south": 8.5,
+                        "east": 20.5,
+                        "west": 18.5,
+                    },
+                },
+            ],
+        )
+
+        self.assertEqual(
+            bounds_summary["waterway_river_bounds_intersecting_map_features"],
+            2,
+        )
+        self.assertEqual(
+            bounds_summary["waterway_river_bounds_covering_map_features"],
+            1,
+        )
+
+    def test_summarize_waterway_river_bounds_tracks_max_size_ratios(self):
+        bounds_summary = summarize_waterway_river_bounds_for_map_area(
+            self.map_area_bounds(),
+            [
+                {
+                    "kind": "river",
+                    "source_waterway": "river",
+                    "bounds": {
+                        "north": 10.5,
+                        "south": 8.5,
+                        "east": 20.5,
+                        "west": 18.5,
+                    },
+                },
+                {
+                    "kind": "river",
+                    "source_waterway": "river",
+                    "bounds": {
+                        "north": 12.0,
+                        "south": 9.0,
+                        "east": 19.25,
+                        "west": 19.0,
+                    },
+                },
+            ],
+        )
+
+        self.assertEqual(
+            bounds_summary["waterway_river_bounds_large_area_features"],
+            1,
+        )
+        self.assertEqual(
+            bounds_summary["waterway_river_bounds_max_area_ratio_to_map"],
+            4.0,
+        )
+        self.assertEqual(
+            bounds_summary["waterway_river_bounds_max_height_ratio_to_map"],
+            3.0,
+        )
+        self.assertEqual(
+            bounds_summary["waterway_river_bounds_max_width_ratio_to_map"],
+            2.0,
+        )
+
+    def test_summarize_waterway_river_bounds_counts_large_area_threshold(self):
+        bounds_summary = summarize_waterway_river_bounds_for_map_area(
+            self.map_area_bounds(),
+            [
+                {
+                    "kind": "river",
+                    "source_waterway": "river",
+                    "bounds": {
+                        "north": 10.0,
+                        "south": 9.0,
+                        "east": 20.0,
+                        "west": 19.0,
+                    },
+                },
+            ],
+        )
+
+        self.assertEqual(
+            bounds_summary["waterway_river_bounds_large_area_features"],
+            1,
+        )
+
+    def test_summarize_waterway_river_bounds_invalid_input_raises_value_error(self):
+        valid_feature = {
+            "kind": "river",
+            "source_waterway": "river",
+            "bounds": {
+                "north": 9.9,
+                "south": 9.8,
+                "east": 19.2,
+                "west": 19.1,
+            },
+        }
+        invalid_inputs = (
+            (None, []),
+            ({"north": 9.0, "south": 10.0, "east": 20.0, "west": 19.0}, []),
+            (self.map_area_bounds(), None),
+            (self.map_area_bounds(), [None]),
+            (self.map_area_bounds(), [{**valid_feature, "bounds": None}]),
+        )
+
+        for map_area_bounds, map_features in invalid_inputs:
+            with self.subTest(
+                map_area_bounds=map_area_bounds,
+                map_features=map_features,
+            ):
+                with self.assertRaises(ValueError):
+                    summarize_waterway_river_bounds_for_map_area(
+                        map_area_bounds,
                         map_features,
                     )
 
