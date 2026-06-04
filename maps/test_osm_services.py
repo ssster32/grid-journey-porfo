@@ -13,6 +13,7 @@ from .services import (
     MIN_FOREST_COVERAGE_RATIO_FOR_SCORE,
     MIN_RIVER_COVERAGE_RATIO_FOR_HAS_RIVER,
     ROAD_BASE_SCORE_MAX_BONUS,
+    WATERFRONT_CONTEXT_BONUS,
     build_bounds_from_osm_element,
     build_feature_summaries_for_map_area_from_overpass,
     build_feature_summaries_for_grid_cell_contexts,
@@ -27,6 +28,7 @@ from .services import (
     calculate_initial_score_breakdown_from_feature_summary,
     calculate_initial_score_from_feature_summary,
     classify_osm_element,
+    classify_railway_feature_surface_type,
     determine_initial_score_for_grid_cell,
     fetch_osm_features_from_overpass,
     feature_intersects_grid_cell,
@@ -34,6 +36,7 @@ from .services import (
     is_large_waterway_river_bounds_for_map_area,
     parse_overpass_elements_to_map_features,
     summarize_river_feature_matches_for_grid_cell_contexts,
+    summarize_railway_feature_matches_for_grid_cell_contexts,
     summarize_waterway_feature_matches_for_grid_cell_contexts,
     summarize_waterway_river_bounds_for_map_area,
     should_use_river_feature_for_grid_cell,
@@ -148,6 +151,10 @@ class DetermineInitialScoreForGridCellTests(TestCase):
             'nwr["leisure"="park"]',
             'nwr["leisure"="garden"]',
             'nwr["natural"="coastline"]',
+            'nwr["railway"="rail"]',
+            'nwr["railway"="subway"]',
+            'nwr["railway"="light_rail"]',
+            'nwr["railway"="tram"]',
         )
 
         self.assertIn("[out:json][timeout:25];", query)
@@ -360,6 +367,16 @@ class DetermineInitialScoreForGridCellTests(TestCase):
                     "west": 19.5,
                 },
             },
+            {
+                "kind": "railway",
+                "source_railway": "rail",
+                "bounds": {
+                    "north": 9.7,
+                    "south": 9.3,
+                    "east": 20.4,
+                    "west": 19.6,
+                },
+            },
         ]
 
         summaries = build_feature_summaries_for_map_area_from_overpass(
@@ -375,6 +392,10 @@ class DetermineInitialScoreForGridCellTests(TestCase):
         self.assertEqual(summaries[(0, 1)]["building_count"], 0)
         self.assertTrue(summaries[(0, 0)]["has_river"])
         self.assertTrue(summaries[(0, 1)]["has_river"])
+        self.assertEqual(summaries[(0, 0)]["surface_railway_count"], 1)
+        self.assertEqual(summaries[(0, 1)]["surface_railway_count"], 1)
+        self.assertEqual(summaries.railway_summary["railway_features"], 1)
+        self.assertEqual(summaries.railway_summary["surface_railway_cells"], 2)
         mock_fetch.assert_called_once_with(
             {
                 "north": 10.0,
@@ -559,6 +580,10 @@ class DetermineInitialScoreForGridCellTests(TestCase):
             ({"waterway": "stream"}, "river"),
             ({"waterway": "canal"}, "river"),
             ({"natural": "coastline"}, "coastline"),
+            ({"railway": "rail"}, "railway"),
+            ({"railway": "subway"}, "railway"),
+            ({"railway": "light_rail"}, "railway"),
+            ({"railway": "tram"}, "railway"),
         )
 
         for tags, expected_kind in test_cases:
@@ -588,6 +613,10 @@ class DetermineInitialScoreForGridCellTests(TestCase):
                 "park",
             ),
             (
+                {"railway": "rail", "highway": "service", "building": "yes"},
+                "railway",
+            ),
+            (
                 {"highway": "service", "building": "yes"},
                 "road",
             ),
@@ -599,6 +628,7 @@ class DetermineInitialScoreForGridCellTests(TestCase):
 
     def test_classify_osm_element_returns_none_for_unknown_tags(self):
         self.assertIsNone(classify_osm_element({"amenity": "cafe"}))
+        self.assertIsNone(classify_osm_element({"railway": "station"}))
 
     def test_classify_osm_element_invalid_tags_raises_value_error(self):
         for tags in (None, [], "building=yes"):
@@ -802,6 +832,32 @@ class DetermineInitialScoreForGridCellTests(TestCase):
         self.assertEqual(map_feature["kind"], "river")
         self.assertEqual(map_feature["source_waterway"], "canal")
 
+    def test_build_map_feature_from_osm_element_keeps_railway_source_tags(self):
+        map_feature = build_map_feature_from_osm_element(
+            {
+                "type": "way",
+                "id": 901,
+                "tags": {
+                    "railway": "subway",
+                    "tunnel": "yes",
+                    "layer": "-1",
+                    "bridge": "no",
+                },
+                "bounds": {
+                    "north": 10.0,
+                    "south": 9.0,
+                    "east": 20.0,
+                    "west": 19.0,
+                },
+            }
+        )
+
+        self.assertEqual(map_feature["kind"], "railway")
+        self.assertEqual(map_feature["source_railway"], "subway")
+        self.assertEqual(map_feature["source_tunnel"], "yes")
+        self.assertEqual(map_feature["source_layer"], "-1")
+        self.assertEqual(map_feature["source_bridge"], "no")
+
     def test_build_map_feature_from_osm_element_returns_none_for_unknown_tags(self):
         self.assertIsNone(
             build_map_feature_from_osm_element(
@@ -835,6 +891,42 @@ class DetermineInitialScoreForGridCellTests(TestCase):
             with self.subTest(element=element):
                 with self.assertRaises(ValueError):
                     build_map_feature_from_osm_element(element)
+
+    def test_classify_railway_feature_surface_type_returns_expected_type(self):
+        test_cases = (
+            ({"source_railway": "subway"}, "underground"),
+            ({"source_railway": "rail", "source_tunnel": "yes"}, "underground"),
+            ({"source_railway": "rail", "source_tunnel": "true"}, "underground"),
+            (
+                {
+                    "source_railway": "rail",
+                    "source_tunnel": "building_passage",
+                },
+                "underground",
+            ),
+            ({"source_railway": "rail", "source_layer": "-1"}, "underground"),
+            ({"source_railway": "rail"}, "surface"),
+            ({"source_railway": "light_rail"}, "surface"),
+            ({"source_railway": "tram"}, "surface"),
+            ({"source_railway": "rail", "source_layer": "abc"}, "surface"),
+            ({"source_railway": "station"}, "unknown"),
+            ({}, "unknown"),
+        )
+
+        for feature, expected_type in test_cases:
+            with self.subTest(feature=feature):
+                self.assertEqual(
+                    classify_railway_feature_surface_type(feature),
+                    expected_type,
+                )
+
+    def test_classify_railway_feature_surface_type_invalid_feature_raises_value_error(
+        self,
+    ):
+        for feature in (None, [], "railway"):
+            with self.subTest(feature=feature):
+                with self.assertRaises(ValueError):
+                    classify_railway_feature_surface_type(feature)
 
     def test_parse_overpass_elements_to_map_features_builds_multiple_features(self):
         map_features = parse_overpass_elements_to_map_features(
@@ -1289,6 +1381,92 @@ class DetermineInitialScoreForGridCellTests(TestCase):
 
         self.assertEqual(summary["building_count"], 2)
         self.assertEqual(summary["road_count"], 1)
+        self.assertEqual(summary["surface_railway_count"], 0)
+        self.assertEqual(summary["underground_railway_count"], 0)
+        self.assertEqual(summary["unknown_railway_count"], 0)
+
+    def test_build_feature_summary_counts_railways_by_surface_type(self):
+        summary = build_feature_summary_for_grid_cell(
+            self.grid_bounds(),
+            [
+                {
+                    "kind": "railway",
+                    "source_railway": "rail",
+                    "bounds": {
+                        "north": 9.9,
+                        "south": 9.8,
+                        "east": 19.2,
+                        "west": 19.1,
+                    },
+                },
+                {
+                    "kind": "railway",
+                    "source_railway": "subway",
+                    "bounds": {
+                        "north": 9.7,
+                        "south": 9.6,
+                        "east": 19.4,
+                        "west": 19.3,
+                    },
+                },
+                {
+                    "kind": "railway",
+                    "source_railway": "station",
+                    "bounds": {
+                        "north": 9.5,
+                        "south": 9.4,
+                        "east": 19.6,
+                        "west": 19.5,
+                    },
+                },
+                {
+                    "kind": "railway",
+                    "source_railway": "rail",
+                    "bounds": {
+                        "north": 8.9,
+                        "south": 8.8,
+                        "east": 19.2,
+                        "west": 19.1,
+                    },
+                },
+            ],
+        )
+
+        self.assertEqual(summary["surface_railway_count"], 1)
+        self.assertEqual(summary["underground_railway_count"], 1)
+        self.assertEqual(summary["unknown_railway_count"], 1)
+
+    def test_build_feature_summary_railways_do_not_affect_initial_score(self):
+        empty_summary = build_feature_summary_for_grid_cell(self.grid_bounds(), [])
+        railway_summary = build_feature_summary_for_grid_cell(
+            self.grid_bounds(),
+            [
+                {
+                    "kind": "railway",
+                    "source_railway": "rail",
+                    "bounds": {
+                        "north": 9.9,
+                        "south": 9.8,
+                        "east": 19.2,
+                        "west": 19.1,
+                    },
+                },
+            ],
+        )
+        empty_breakdown = calculate_initial_score_breakdown_from_feature_summary(
+            empty_summary
+        )
+        railway_breakdown = calculate_initial_score_breakdown_from_feature_summary(
+            railway_summary
+        )
+
+        self.assertEqual(
+            calculate_initial_score_from_feature_summary(railway_summary),
+            calculate_initial_score_from_feature_summary(empty_summary),
+        )
+        for key in ("base_score", "diversity_bonus", "context_bonus", "penalty"):
+            with self.subTest(key=key):
+                self.assertEqual(railway_breakdown[key], empty_breakdown[key])
 
     def test_build_feature_summary_does_not_count_road_when_area_ratio_is_too_large(
         self,
@@ -1753,6 +1931,9 @@ class DetermineInitialScoreForGridCellTests(TestCase):
                 "forest_coverage_ratio": 0.0,
                 "park_coverage_ratio": 0.0,
                 "river_coverage_ratio": 0.0,
+                "surface_railway_count": 0,
+                "underground_railway_count": 0,
+                "unknown_railway_count": 0,
                 "has_park": False,
                 "has_river": False,
                 "is_coastal": False,
@@ -1867,6 +2048,9 @@ class DetermineInitialScoreForGridCellTests(TestCase):
                 "forest_coverage_ratio": 0.0,
                 "park_coverage_ratio": 0.0,
                 "river_coverage_ratio": 0.0,
+                "surface_railway_count": 0,
+                "underground_railway_count": 0,
+                "unknown_railway_count": 0,
                 "has_park": False,
                 "has_river": False,
                 "is_coastal": False,
@@ -2060,6 +2244,9 @@ class DetermineInitialScoreForGridCellTests(TestCase):
                 "forest_coverage_ratio": 0.0,
                 "park_coverage_ratio": 0.0,
                 "river_coverage_ratio": 0.0,
+                "surface_railway_count": 0,
+                "underground_railway_count": 0,
+                "unknown_railway_count": 0,
                 "has_park": False,
                 "has_river": False,
                 "is_coastal": False,
@@ -2132,6 +2319,150 @@ class DetermineInitialScoreForGridCellTests(TestCase):
                 "river_small_overlap_cells": 0,
             },
         )
+
+    def test_summarize_railway_feature_matches_returns_zero_without_railway(self):
+        railway_summary = summarize_railway_feature_matches_for_grid_cell_contexts(
+            [
+                {
+                    "row_index": 0,
+                    "col_index": 0,
+                    "north": 10.0,
+                    "south": 9.0,
+                    "east": 20.0,
+                    "west": 19.0,
+                },
+            ],
+            [
+                {
+                    "kind": "building",
+                    "bounds": {
+                        "north": 9.9,
+                        "south": 9.8,
+                        "east": 19.2,
+                        "west": 19.1,
+                    },
+                },
+            ],
+        )
+
+        self.assertEqual(
+            railway_summary,
+            {
+                "railway_features": 0,
+                "surface_railway_features": 0,
+                "underground_railway_features": 0,
+                "unknown_railway_features": 0,
+                "railway_cells": 0,
+                "surface_railway_cells": 0,
+                "underground_railway_cells": 0,
+                "unknown_railway_cells": 0,
+            },
+        )
+
+    def test_summarize_railway_feature_matches_counts_features_and_cells(self):
+        grid_cell_contexts = [
+            {
+                "row_index": 0,
+                "col_index": 0,
+                "north": 10.0,
+                "south": 9.0,
+                "east": 20.0,
+                "west": 19.0,
+            },
+            {
+                "row_index": 0,
+                "col_index": 1,
+                "north": 10.0,
+                "south": 9.0,
+                "east": 21.0,
+                "west": 20.0,
+            },
+        ]
+        map_features = [
+            {
+                "kind": "railway",
+                "source_railway": "rail",
+                "bounds": {
+                    "north": 9.8,
+                    "south": 9.2,
+                    "east": 20.2,
+                    "west": 19.8,
+                },
+            },
+            {
+                "kind": "railway",
+                "source_railway": "subway",
+                "bounds": {
+                    "north": 9.7,
+                    "south": 9.3,
+                    "east": 20.8,
+                    "west": 20.2,
+                },
+            },
+            {
+                "kind": "railway",
+                "source_railway": "station",
+                "bounds": {
+                    "north": 9.6,
+                    "south": 9.4,
+                    "east": 19.7,
+                    "west": 19.3,
+                },
+            },
+        ]
+
+        railway_summary = summarize_railway_feature_matches_for_grid_cell_contexts(
+            grid_cell_contexts,
+            map_features,
+        )
+
+        self.assertEqual(railway_summary["railway_features"], 3)
+        self.assertEqual(railway_summary["surface_railway_features"], 1)
+        self.assertEqual(railway_summary["underground_railway_features"], 1)
+        self.assertEqual(railway_summary["unknown_railway_features"], 1)
+        self.assertEqual(railway_summary["railway_cells"], 2)
+        self.assertEqual(railway_summary["surface_railway_cells"], 2)
+        self.assertEqual(railway_summary["underground_railway_cells"], 1)
+        self.assertEqual(railway_summary["unknown_railway_cells"], 1)
+
+    def test_summarize_railway_feature_matches_invalid_input_raises_value_error(self):
+        valid_context = {
+            "row_index": 0,
+            "col_index": 0,
+            "north": 10.0,
+            "south": 9.0,
+            "east": 20.0,
+            "west": 19.0,
+        }
+        valid_feature = {
+            "kind": "railway",
+            "source_railway": "rail",
+            "bounds": {
+                "north": 9.9,
+                "south": 9.8,
+                "east": 19.2,
+                "west": 19.1,
+            },
+        }
+        invalid_inputs = (
+            (None, []),
+            ([None], []),
+            ([{**valid_context, "north": 9.0}], []),
+            ([valid_context], None),
+            ([valid_context], [None]),
+            ([valid_context], [{**valid_feature, "bounds": None}]),
+        )
+
+        for grid_cell_contexts, map_features in invalid_inputs:
+            with self.subTest(
+                grid_cell_contexts=grid_cell_contexts,
+                map_features=map_features,
+            ):
+                with self.assertRaises(ValueError):
+                    summarize_railway_feature_matches_for_grid_cell_contexts(
+                        grid_cell_contexts,
+                        map_features,
+                    )
 
     def test_summarize_river_feature_matches_counts_normal_river_overlap(self):
         river_summary = summarize_river_feature_matches_for_grid_cell_contexts(
@@ -2949,7 +3280,10 @@ class DetermineInitialScoreForGridCellTests(TestCase):
             "has_river_context",
             "has_forest_context",
             "has_coastal_context",
+            "is_likely_unreachable_water_cell",
+            "has_waterfront_context",
             "has_water_penalty",
+            "has_unreachable_water_penalty",
             "has_forest_penalty",
             "has_empty_cell_penalty",
         }
@@ -3060,9 +3394,80 @@ class DetermineInitialScoreForGridCellTests(TestCase):
         self.assertTrue(context_breakdown["has_forest_context"])
         self.assertTrue(context_breakdown["has_coastal_context"])
         self.assertTrue(water_breakdown["has_water_penalty"])
+        self.assertTrue(water_breakdown["has_unreachable_water_penalty"])
+        self.assertTrue(water_breakdown["is_likely_unreachable_water_cell"])
+        self.assertFalse(water_breakdown["has_waterfront_context"])
         self.assertTrue(water_breakdown["has_empty_cell_penalty"])
         self.assertTrue(forest_breakdown["has_forest_penalty"])
         self.assertTrue(forest_breakdown["has_empty_cell_penalty"])
+
+    def test_feature_summary_breakdown_limits_water_penalty_to_unreachable_water(self):
+        for feature_summary in (
+            {"water_coverage_ratio": 0.95, "building_count": 1},
+            {"water_coverage_ratio": 0.95, "road_count": 1},
+            {"water_coverage_ratio": 0.95, "has_park": True},
+            {"water_coverage_ratio": 0.95, "has_river": True},
+        ):
+            with self.subTest(feature_summary=feature_summary):
+                breakdown = calculate_initial_score_breakdown_from_feature_summary(
+                    feature_summary
+                )
+
+                self.assertFalse(breakdown["has_water_penalty"])
+                self.assertFalse(breakdown["has_unreachable_water_penalty"])
+                self.assertFalse(breakdown["is_likely_unreachable_water_cell"])
+                self.assertTrue(breakdown["has_waterfront_context"])
+
+    def test_feature_summary_breakdown_adds_waterfront_context_bonus(self):
+        for reachable_context in ({"has_park": True}, {"has_river": True}):
+            with self.subTest(reachable_context=reachable_context):
+                without_water = calculate_initial_score_breakdown_from_feature_summary(
+                    reachable_context
+                )
+                with_water = calculate_initial_score_breakdown_from_feature_summary(
+                    {
+                        **reachable_context,
+                        "water_coverage_ratio": 0.2,
+                    }
+                )
+
+                self.assertTrue(with_water["has_waterfront_context"])
+                self.assertAlmostEqual(
+                    with_water["context_bonus"],
+                    without_water["context_bonus"] + WATERFRONT_CONTEXT_BONUS,
+                )
+
+    def test_feature_summary_breakdown_uses_road_only_for_waterfront_reachability(self):
+        road_only = calculate_initial_score_breakdown_from_feature_summary(
+            {"road_count": 1}
+        )
+        road_waterfront = calculate_initial_score_breakdown_from_feature_summary(
+            {
+                "road_count": 1,
+                "water_coverage_ratio": 0.2,
+            }
+        )
+
+        self.assertEqual(road_waterfront["road_base_bonus"], 0.0)
+        self.assertEqual(
+            road_waterfront["feature_category_count"],
+            road_only["feature_category_count"] + 1,
+        )
+        self.assertTrue(road_waterfront["has_waterfront_context"])
+        self.assertAlmostEqual(
+            road_waterfront["context_bonus"],
+            road_only["context_bonus"] + WATERFRONT_CONTEXT_BONUS,
+        )
+
+    def test_feature_summary_breakdown_without_water_has_no_waterfront_context(self):
+        breakdown = calculate_initial_score_breakdown_from_feature_summary(
+            {
+                "building_count": 1,
+                "has_park": True,
+            }
+        )
+
+        self.assertFalse(breakdown["has_waterfront_context"])
 
     def test_invalid_feature_summary_breakdown_raises_value_error(self):
         invalid_summaries = (

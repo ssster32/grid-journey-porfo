@@ -1,286 +1,312 @@
-````markdown
-# TASK: road を initial_score の採点寄与から外し、building の base_score 寄与を弱める
+````markdown id="railway-log-task"
+# TASK: railway 系OSM地物を取得し、地上線路・地下線路の件数ログを追加する
 
 ## 背景
 
 Django製ポートフォリオ投稿サイトの MapArea / GridCell 自動初期スコア機能を実装中です。
 
-現在、`initial_score_mode=auto` の場合、Overpass API から OSM 地物を取得し、GridCellごとの `feature_summary` を作成し、`calculate_initial_score_from_feature_summary()` によって `initial_score` を自動計算しています。
+現在、`initial_score_mode=auto` の場合、Overpass API からOSM地物を取得し、GridCellごとの `feature_summary` を作成し、`calculate_initial_score_from_feature_summary()` によって `initial_score` を自動計算しています。
 
-直近では、スコア内訳確認のために以下を追加しました。
+直近では以下の調整を行いました。
 
-- `calculate_initial_score_breakdown_from_feature_summary()`
-- `Overpass auto score breakdown summary`
-- `base_score_avg`
-- `diversity_bonus_avg`
-- `context_bonus_avg`
-- `penalty_avg`
-- `building_base_cells`
-- `road_base_cells`
-- `park_context_cells`
-- `river_context_cells`
-- `forest_context_cells`
+- `road_count` を initial_score の採点寄与から外した
+- `building` の base_score 寄与を弱めた
+- `water penalty` を到達不能そうな水域セルに限定した
+- 到達可能そうな川沿い・水辺セルを `waterfront_context` として加点するようにした
+- `score breakdown summary` に `unreachable_water_penalty_cells` / `waterfront_context_cells` を追加した
 
-実データ確認では、以下のログになっています。
+現状、採点結果は概ね良い感じになっています。
 
-```text
-Overpass auto score breakdown summary:
-area_id=59
-user_id=1
-summary_count=225
-base_score_avg=1.45
-base_score_max=1.50
-diversity_bonus_avg=0.66
-diversity_bonus_max=0.90
-context_bonus_avg=0.27
-context_bonus_max=0.60
-penalty_avg=0.30
-penalty_max=2.40
-raw_score_avg=2.07
-raw_score_max=3.00
-clamped_score_avg=2.07
-clamped_score_max=3.00
-max_score_cells=1
-building_base_cells=225
-road_base_cells=225
-park_context_cells=146
-river_context_cells=117
-forest_context_cells=14
-coastal_context_cells=0
-water_penalty_cells=28
-forest_penalty_cells=0
-empty_cell_penalty_cells=0
-```
+次に、線路系のOSM地物を確認したいです。
 
-この結果から、現在の平均スコアが高めになる主因は `base_score` です。
+現在の `build_overpass_query()` では、主に以下を取得しています。
 
-特に、
+- `building`
+- `highway`
+- `water`
+- `waterway`
+- `forest`
+- `wood`
+- `park`
+- `garden`
+- `coastline`
 
-```text
-base_score_avg=1.45
-base_score_max=1.50
-building_base_cells=225
-road_base_cells=225
-```
+しかし、`railway` 系はまだ取得対象に含まれていません。
 
-となっており、建物・道路が全セルで基礎点を大きく押し上げています。
-
-しかし、道路が多いこと自体は必ずしも「面白い場所」「特徴的な場所」とは限りません。  
-住宅街や普通の市街地でも道路は多くなるため、`road_count` は initial_score の直接的な採点寄与から外したいです。
-
-一方で、建物は人の活動・店舗・施設密度の目安にはなるため、完全には外さず、base_scoreへの寄与を弱めたいです。
+また、`classify_osm_element()` でも、`railway` 系の分類はまだありません。
 
 ## 目的
 
-`road_count` を `initial_score` の採点寄与から外し、`building_count` による `base_score` 寄与を弱めてください。
+Overpass APIで `railway` 系OSM地物を取得し、GridCellごとに以下を集計できるようにしてください。
 
-目的は以下です。
+- 地上線路っぽい地物
+- 地下鉄・地下線路っぽい地物
 
-- 道路が多いだけの住宅街・市街地が高スコアになりすぎるのを防ぐ
-- 建物密度による都市部の底上げを弱める
-- 水辺・公園・川沿いなど、他の特徴があるセルを相対的に目立たせる
-- `road_count` の収集・ログは残し、将来の補助判定に使える余地は残す
-- 今回は `road_count` の検出処理自体は削除しない
+今回の目的は、まず実データ上でどの程度取得できるかを確認することです。
 
-## 現在の想定スコア式
-
-現在の `calculate_initial_score_breakdown_from_feature_summary()` では、おおよそ以下のような計算になっているはずです。
-
-```python
-building_base_bonus = min(building_count / 20, 1.0) * 0.7
-road_base_bonus = min(road_count / 10, 1.0) * 0.5
-base_score = 0.3 + building_base_bonus + road_base_bonus
-```
-
-また、`feature_categories` に `has_road` が含まれている場合、道路は diversity bonus にも影響しているはずです。
-
-```python
-feature_categories = [
-    has_building,
-    has_road,
-    has_park,
-    has_river,
-    is_coastal,
-    has_water,
-    has_scored_forest,
-]
-```
-
-今回、この `road` の採点寄与を外してください。
+そのため、今回の段階では **initial_score の採点にはまだ反映しない** でください。
 
 ## 実装方針
 
-### 1. base_score 関連の定数を追加する
+### 1. Overpass query に railway 系filterを追加する
 
-`services.py` に、base_score関連の定数を追加してください。
+`build_overpass_query()` の `target_filters` に、`railway` 系を追加してください。
+
+まずは以下を対象にしてください。
+
+```python
+'["railway"="rail"]',
+'["railway"="subway"]',
+'["railway"="light_rail"]',
+'["railway"="tram"]',
+```
+
+必要であれば、今後追加しやすいようにコメントを添えてください。
+
+ただし、今回の目的は件数ログなので、対象を広げすぎないでください。
+
+### 2. railway を classify_osm_element() で分類する
+
+`classify_osm_element(tags)` に railway 系の分岐を追加してください。
+
+想定:
+
+```python
+railway = tags.get("railway")
+
+if railway in {"rail", "subway", "light_rail", "tram"}:
+    return "railway"
+```
+
+優先順位は、既存の `coastline` / `waterway` / `water` / `forest` / `park` / `road` / `building` の扱いを壊さないように調整してください。
+
+基本的には、`highway` や `building` より前に railway を判定してよいと思います。
+
+### 3. map_feature に railway属性を保存する
+
+`build_map_feature_from_osm_element()` で、railway系のタグ情報を `map_feature` に残してください。
+
+想定項目:
+
+```python
+source_railway
+source_tunnel
+source_layer
+source_bridge
+```
+
+例:
+
+```python
+railway = tags.get("railway")
+if railway:
+    map_feature["source_railway"] = railway
+
+if "tunnel" in tags:
+    map_feature["source_tunnel"] = tags.get("tunnel")
+
+if "layer" in tags:
+    map_feature["source_layer"] = tags.get("layer")
+
+if "bridge" in tags:
+    map_feature["source_bridge"] = tags.get("bridge")
+```
+
+目的は、後から地上線路・地下線路の判定根拠を確認しやすくすることです。
+
+### 4. 地上線路・地下線路の分類関数を追加する
+
+`services.py` に、railway feature が地下寄りか地上寄りかを判定する関数を追加してください。
 
 想定名:
 
 ```python
-BASE_INITIAL_SCORE = 0.2
-BUILDING_BASE_SCORE_MAX_BONUS = 0.4
-BUILDING_COUNT_FOR_MAX_BASE_SCORE = 20
-ROAD_BASE_SCORE_MAX_BONUS = 0.0
-ROAD_COUNT_FOR_MAX_BASE_SCORE = 10
+classify_railway_feature_level(feature)
 ```
 
-または、既存命名に合わせて自然な名前にしてください。
-
-### 2. road_base_bonus を 0.0 にする
-
-`road_count` の収集処理は残してください。
-
-ただし、`initial_score` の計算では、道路によるbase_score加点をなくしてください。
-
-想定:
+または、
 
 ```python
-road_base_bonus = 0.0
+classify_railway_feature_surface_type(feature)
 ```
 
-`ROAD_BASE_SCORE_MAX_BONUS = 0.0` を使う形でも構いません。
-
-### 3. building_base_bonus を弱める
-
-建物によるbase_score寄与を、現在より弱めてください。
-
-想定:
+戻り値の例:
 
 ```python
-building_base_bonus = min(building_count / 20, 1.0) * 0.4
+"surface"
+"underground"
+"unknown"
 ```
 
-現在が `0.7` 相当なら、まずは `0.4` に下げてください。
-
-### 4. 固定base_scoreも少し下げる
-
-現在の固定基礎点が `0.3` の場合、以下のように弱めてください。
+判定の初期方針:
 
 ```python
-base_score = 0.2 + building_base_bonus + road_base_bonus
+source_railway = feature.get("source_railway")
+source_tunnel = feature.get("source_tunnel")
+source_layer = feature.get("source_layer")
 ```
 
-目的は、地物が少ないセルや、道路・建物だけのセルが高くなりすぎないようにすることです。
+地下線路扱いの条件例:
 
-### 5. road を diversity_bonus の feature_categories から外す
+- `source_railway == "subway"`
+- `source_tunnel == "yes"`
+- `source_tunnel == "true"`
+- `source_tunnel == "building_passage"` は必要なら地下寄り扱いにしてもよい
+- `source_layer` が数値として解釈でき、0未満
 
-道路は多くの場所に存在しすぎるため、「特徴カテゴリの多様性」に含めないようにしてください。
+地上線路扱いの条件例:
 
-現在のように `has_road` が `feature_categories` に含まれている場合は、以下のように外してください。
+- `source_railway in {"rail", "light_rail", "tram"}`
+- かつ `tunnel=yes` ではない
+- かつ `layer` が負数ではない
 
-変更前のイメージ:
+判定できないものは `"unknown"` にしてください。
+
+注意:
+
+- OSMタグには揺れがあるため、最初から完璧な分類を目指さないでください
+- `layer` は文字列の可能性があるので、安全に数値変換してください
+- 不正な `layer` 値で例外を出すより、`unknown` または地上寄り扱いに倒す方が安全です
+
+### 5. feature_summary に railway count を追加する
+
+`build_feature_summary_for_grid_cell()` の `feature_summary` に以下を追加してください。
 
 ```python
-feature_categories = [
-    has_building,
-    has_road,
-    has_park,
-    has_river,
-    is_coastal,
-    has_water,
-    has_scored_forest,
-]
+"surface_railway_count": 0,
+"underground_railway_count": 0,
+"unknown_railway_count": 0,
 ```
 
-変更後のイメージ:
-
-```python
-feature_categories = [
-    has_building,
-    has_park,
-    has_river,
-    is_coastal,
-    has_water,
-    has_scored_forest,
-]
-```
-
-`has_road` 自体はbreakdownに残して構いません。  
-ただし、スコア寄与には使わないでください。
-
-### 6. road_count の収集・ログは残す
-
-以下は削除しないでください。
-
-- `road_count` のfeature_summary収集
-- road bounds過検出抑制ロジック
-- `road_cells` ログ
-- `road_base_cells` ログ
-
-ただし、`road_base_cells` という名称が「道路がbase_scoreに効いているセル」と誤解される場合は、ログ項目名の変更または補足項目の追加を検討してください。
-
-安全にいくなら、既存ログ項目は残した上で、追加項目を出してください。
+`feature_kind == "railway"` の場合、GridCellとboundsが交差していれば、分類に応じてカウントしてください。
 
 例:
 
-```text
-road_cells=...
-road_scored_cells=0
+```python
+railway_type = classify_railway_feature_surface_type(feature)
+
+if railway_type == "surface":
+    feature_summary["surface_railway_count"] += 1
+elif railway_type == "underground":
+    feature_summary["underground_railway_count"] += 1
+else:
+    feature_summary["unknown_railway_count"] += 1
 ```
 
-ただし、既存テストへの影響が大きい場合は、`road_base_cells` を残しつつ、作業完了説明で「road_base_bonusは0になった」と説明してください。
+今回の段階では、railway count は **initial_score には使わない** でください。
 
-### 7. breakdownログは維持する
+### 6. railway summary を追加する
 
-`Overpass auto score breakdown summary` は引き続き出してください。
+`FeatureSummariesByPosition` に、ログ用の railway summary を持たせてください。
 
-今回の変更後に確認したい項目は以下です。
+既存の以下と同じような位置づけです。
 
-```text
-base_score_avg
-base_score_max
-building_base_cells
-road_base_cells
-road_scored_cells
-diversity_bonus_avg
-context_bonus_avg
-clamped_score_avg
-max_score_cells
+- `river_summary`
+- `waterway_summary`
+- `waterway_river_bounds_summary`
+
+新しく、以下のような関数を追加してください。
+
+```python
+summarize_railway_feature_matches_for_grid_cell_contexts(
+    grid_cell_contexts,
+    map_features,
+)
 ```
 
-`road_scored_cells` を追加した場合は、常に `0` になる想定です。
+集計したい項目:
 
-### 8. 既存のスコア式のうち、今回対象外の部分は変更しない
-
-今回は以下を変更しないでください。
-
-- `park` の判定
-- `river` の判定
-- `water` の判定
-- `forest` の閾値化済み挙動
-- `context_bonus`
-- `penalty`
-- `INITIAL_SCORE_MIN`
-- `INITIAL_SCORE_MAX`
-
-主な変更対象は以下です。
-
-- `base_score`
-- `building_base_bonus`
-- `road_base_bonus`
-- `feature_categories` における `has_road` の扱い
-
-## 期待される変化
-
-現在のログでは、
-
-```text
-base_score_avg=1.45
-clamped_score_avg=2.07
+```python
+railway_features
+surface_railway_features
+underground_railway_features
+unknown_railway_features
+railway_cells
+surface_railway_cells
+underground_railway_cells
+unknown_railway_cells
 ```
 
-でした。
+意味:
 
-変更後は、同じ大阪中心部 `15×15 / 200m` で、base_scoreが大きく下がる想定です。
+- `*_features`: OSM feature単位の件数
+- `*_cells`: その分類のrailwayが1件以上交差したGridCell数
 
-目安:
+### 7. build_feature_summaries_for_map_area_from_overpass() に railway summary を接続する
 
-```text
-base_score_avg: 1.45 → 0.5〜0.6前後
-clamped_score_avg: 2.07 → 1.2〜1.5前後
+`build_feature_summaries_for_map_area_from_overpass()` で、作成した `FeatureSummariesByPosition` に `railway_summary` を追加してください。
+
+想定:
+
+```python
+feature_summaries.railway_summary = (
+    summarize_railway_feature_matches_for_grid_cell_contexts(
+        grid_cell_contexts,
+        map_features,
+    )
+)
 ```
 
-ただし、実データでは `park` / `river` / `water` の重なりが大きいため、実際の変化はログで確認してください。
+### 8. views.py に railway summary ログを追加する
+
+`views.py` に railway summary 用のログ関数を追加してください。
+
+想定名:
+
+```python
+log_overpass_railway_summary(area, user_id, railway_summary=None)
+```
+
+ログ名:
+
+```text
+Overpass auto railway summary
+```
+
+出力項目の例:
+
+```text
+area_id=...
+user_id=...
+railway_features=...
+surface_railway_features=...
+underground_railway_features=...
+unknown_railway_features=...
+railway_cells=...
+surface_railway_cells=...
+underground_railway_cells=...
+unknown_railway_cells=...
+```
+
+`MapAreaListCreateView.post()` の `initial_score_mode=auto` 成功時に、既存ログと同じ流れで出力してください。
+
+### 9. 既存ログは壊さない
+
+以下の既存ログは維持してください。
+
+- `Overpass auto initial score succeeded`
+- `Overpass auto feature summary`
+- `Overpass auto score breakdown summary`
+- `Overpass auto river summary`
+- `Overpass auto scored river summary`
+- `Overpass auto scored natural coverage summary`
+- `Overpass auto waterway summary`
+- `Overpass auto waterway river bounds summary`
+
+今回のログは追加ログとして出してください。
+
+### 10. initial_score にはまだ使わない
+
+今回のTASKでは、railwayをスコアに反映しないでください。
+
+つまり、以下は行わないでください。
+
+- `railway_count` による base_score 加点
+- railway を diversity bonus に追加
+- railway を context bonus に追加
+- railway による penalty 追加
+
+今回の目的は、まず地上線路・地下線路がOSMからどの程度取れるか、ログで確認することです。
 
 ## テスト観点
 
@@ -290,30 +316,72 @@ clamped_score_avg: 2.07 → 1.2〜1.5前後
 
 以下を確認してください。
 
-- `road_count > 0` でも `road_base_bonus == 0.0` になる
-- `road_count > 0` でも、road単体では `base_score` が上がらない
-- `road_count > 0` でも、roadは `feature_category_count` に含まれない
-- `building_count > 0` の場合、`building_base_bonus` は従来より弱い係数で計算される
-- buildingの最大base bonusが `0.4` 相当になる
-- `base_score` の固定値が `0.2` 相当になる
-- `calculate_initial_score_from_feature_summary()` の戻り値が、breakdownの `clamped_score` と一致する
-- `has_road` はbreakdown上に残る
-- `road_count` が不正値の場合のバリデーションは維持される
-- `park` / `river` / `water` / `forest` / `coastal` の既存挙動は壊れない
+#### Overpass query
+
+- `build_overpass_query()` に `nwr["railway"="rail"]` が含まれる
+- `nwr["railway"="subway"]` が含まれる
+- `nwr["railway"="light_rail"]` が含まれる
+- `nwr["railway"="tram"]` が含まれる
+
+#### OSM分類
+
+- `classify_osm_element({"railway": "rail"}) == "railway"`
+- `classify_osm_element({"railway": "subway"}) == "railway"`
+- `classify_osm_element({"railway": "light_rail"}) == "railway"`
+- `classify_osm_element({"railway": "tram"}) == "railway"`
+- 未対応の `railway` 値は `None` または既存方針に合わせた扱いになる
+- 既存の `building` / `road` / `river` / `water` / `forest` / `park` / `coastline` 分類を壊さない
+
+#### map_feature変換
+
+- `build_map_feature_from_osm_element()` が railway element を `kind="railway"` として返す
+- `source_railway` が保存される
+- `tunnel` があれば `source_tunnel` が保存される
+- `layer` があれば `source_layer` が保存される
+- `bridge` があれば `source_bridge` が保存される
+
+#### railway分類関数
+
+- `railway=subway` は `underground` 扱いになる
+- `railway=rail` かつ `tunnel=yes` は `underground` 扱いになる
+- `railway=rail` かつ `layer=-1` は `underground` 扱いになる
+- `railway=rail` かつ tunnel/layerなしは `surface` 扱いになる
+- `railway=light_rail` かつ tunnel/layerなしは `surface` 扱いになる
+- `railway=tram` かつ tunnel/layerなしは `surface` 扱いになる
+- 不正な `layer` 値でも例外で落ちない
+
+#### feature_summary
+
+- `build_feature_summary_for_grid_cell()` の空summaryに `surface_railway_count` / `underground_railway_count` / `unknown_railway_count` が含まれる
+- 地上線路が交差した場合、`surface_railway_count` が増える
+- 地下線路が交差した場合、`underground_railway_count` が増える
+- 判定不能な線路が交差した場合、`unknown_railway_count` が増える
+- railway count は `calculate_initial_score_from_feature_summary()` の結果に影響しない
+- railway count は `calculate_initial_score_breakdown_from_feature_summary()` の `base_score` / `diversity_bonus` / `context_bonus` / `penalty` に影響しない
+
+#### railway summary
+
+- `summarize_railway_feature_matches_for_grid_cell_contexts()` が feature件数を分類別に集計する
+- `surface_railway_cells` が地上線路に交差したセル数になる
+- `underground_railway_cells` が地下線路に交差したセル数になる
+- `unknown_railway_cells` が判定不能線路に交差したセル数になる
+- railwayがない場合、すべて0になる
 
 ### views.py / ログ側のテスト
 
-既存の `initial_score_mode=auto` のログ確認テストを更新してください。
+既存の `initial_score_mode=auto` のログ確認テストに、railwayログ確認を追加してください。
 
 確認例:
 
-- `Overpass auto score breakdown summary` が引き続き出力される
-- `base_score_avg` が含まれる
-- `building_base_cells` が含まれる
-- `road_base_cells` が含まれる
-- `road_scored_cells` を追加した場合はログに含まれる
-- `road_scored_cells=0` になる
-- `diversity_bonus_avg` / `context_bonus_avg` / `penalty_avg` のログが壊れていない
+- `Overpass auto railway summary` がログに含まれる
+- `railway_features=` が含まれる
+- `surface_railway_features=` が含まれる
+- `underground_railway_features=` が含まれる
+- `unknown_railway_features=` が含まれる
+- `railway_cells=` が含まれる
+- `surface_railway_cells=` が含まれる
+- `underground_railway_cells=` が含まれる
+- `unknown_railway_cells=` が含まれる
 
 外部Overpass APIへの実リクエストは行わず、既存と同じようにモックで確認してください。
 
@@ -321,11 +389,11 @@ clamped_score_avg: 2.07 → 1.2〜1.5前後
 
 - 今回はDBカラム追加ではありません
 - モデルやマイグレーションは、必要がなければ変更しないでください
-- `road_count` の収集処理は削除しないでください
-- road bounds過検出抑制ロジックは削除しないでください
-- 今回は「roadを採点寄与から外す」だけで、「roadをfeature_summaryから消す」わけではありません
-- buildingは完全には外さず、弱めるだけにしてください
-- `context_bonus` と `penalty` は今回変更しないでください
+- railwayは今回、採点には使わないでください
+- railwayはまずログ確認用のfeatureとして扱ってください
+- roadの採点除外方針は維持してください
+- water / river / park / forest の既存採点ロジックは変更しないでください
+- 既存ログは削除しないでください
 - `memo.md` は今回は触らないでください
 - 確認コマンドやテストコマンドは実行しないでください
 
@@ -334,12 +402,13 @@ clamped_score_avg: 2.07 → 1.2〜1.5前後
 作業完了後、以下を説明してください。
 
 - 変更したファイル
-- 追加・変更したbase_score関連の定数
-- roadがどの採点寄与から外れたか
-- `road_count` の収集・ログを残したか
-- buildingのbase_score寄与をどの程度弱めたか
-- diversity bonus からroadを外したか
-- 追加・更新したログ項目
+- Overpass query に追加した railway filter
+- `classify_osm_element()` での railway 分類
+- railway feature に保存する source情報
+- 地上線路・地下線路・不明線路の判定条件
+- feature_summary に追加した railway count
+- 追加した railway summary 関数
+- 追加した railway ログ項目
 - 追加・更新したテスト観点
 - 実データ確認時に見るべきログ項目
 - 残る注意点
@@ -348,5 +417,6 @@ clamped_score_avg: 2.07 → 1.2〜1.5前後
 
 - 確認コマンドやテストコマンドを実行しないでください
 - コマンド実行結果を捏造しないでください
+- railwayを今回のinitial_score採点に反映しないでください
 - `memo.md` は明示指示がない限り変更しないでください
 ````

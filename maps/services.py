@@ -19,7 +19,11 @@ BUILDING_BASE_SCORE_MAX_BONUS = 0.4
 BUILDING_COUNT_FOR_MAX_BASE_SCORE = 20
 ROAD_BASE_SCORE_MAX_BONUS = 0.0
 ROAD_COUNT_FOR_MAX_BASE_SCORE = 10
+WATERFRONT_CONTEXT_BONUS = 0.15
 MIN_FOREST_COVERAGE_RATIO_FOR_SCORE = 0.10
+RAILWAY_SURFACE_TYPES = {"rail", "light_rail", "tram"}
+RAILWAY_UNDERGROUND_TYPES = {"subway"}
+RAILWAY_TARGET_TYPES = RAILWAY_SURFACE_TYPES | RAILWAY_UNDERGROUND_TYPES
 MAX_ROAD_BOUNDS_AREA_RATIO_FOR_COUNT = 20.0
 MAX_ROAD_BOUNDS_LENGTH_RATIO_FOR_COUNT = 10.0
 MAX_RIVER_BOUNDS_AREA_RATIO_FOR_INTERSECTION = 20.0
@@ -110,6 +114,7 @@ def classify_osm_element(tags):
     natural = tags.get("natural")
     landuse = tags.get("landuse")
     leisure = tags.get("leisure")
+    railway = tags.get("railway")
 
     if natural == "coastline":
         return "coastline"
@@ -121,6 +126,8 @@ def classify_osm_element(tags):
         return "forest"
     if leisure in {"park", "garden"}:
         return "park"
+    if railway in RAILWAY_TARGET_TYPES:
+        return "railway"
     if "highway" in tags:
         return "road"
     if "building" in tags:
@@ -207,9 +214,19 @@ def build_map_feature_from_osm_element(element):
         "source_type": element.get("type"),
         "source_id": element.get("id"),
     }
-    waterway = element.get("tags", {}).get("waterway")
+    tags = element.get("tags", {})
+    waterway = tags.get("waterway")
     if waterway:
         map_feature["source_waterway"] = waterway
+    railway = tags.get("railway")
+    if railway:
+        map_feature["source_railway"] = railway
+    if "tunnel" in tags:
+        map_feature["source_tunnel"] = tags.get("tunnel")
+    if "layer" in tags:
+        map_feature["source_layer"] = tags.get("layer")
+    if "bridge" in tags:
+        map_feature["source_bridge"] = tags.get("bridge")
 
     return map_feature
 
@@ -256,6 +273,10 @@ def build_overpass_query(bounds):
         '["leisure"="park"]',
         '["leisure"="garden"]',
         '["natural"="coastline"]',
+        '["railway"="rail"]',
+        '["railway"="subway"]',
+        '["railway"="light_rail"]',
+        '["railway"="tram"]',
     )
     query_lines = [
         "[out:json][timeout:25];",
@@ -387,6 +408,12 @@ def build_feature_summaries_for_map_area_from_overpass(
             map_features,
         )
     )
+    feature_summaries.railway_summary = (
+        summarize_railway_feature_matches_for_grid_cell_contexts(
+            grid_cell_contexts,
+            map_features,
+        )
+    )
     feature_summaries.waterway_river_bounds_summary = (
         summarize_waterway_river_bounds_for_map_area(
             map_area_bounds,
@@ -434,6 +461,119 @@ def _empty_waterway_river_bounds_summary():
         "waterway_river_bounds_max_height_ratio_to_map": 0.0,
         "waterway_river_bounds_max_width_ratio_to_map": 0.0,
     }
+
+
+def _empty_railway_feature_match_summary():
+    return {
+        "railway_features": 0,
+        "surface_railway_features": 0,
+        "underground_railway_features": 0,
+        "unknown_railway_features": 0,
+        "railway_cells": 0,
+        "surface_railway_cells": 0,
+        "underground_railway_cells": 0,
+        "unknown_railway_cells": 0,
+    }
+
+
+def _railway_layer_number(value):
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def classify_railway_feature_surface_type(feature):
+    """Classify one railway map feature as surface, underground, or unknown."""
+    if not isinstance(feature, dict):
+        raise ValueError("feature は辞書で指定してください。")
+
+    source_railway = feature.get("source_railway")
+    source_tunnel = str(feature.get("source_tunnel", "")).strip().lower()
+    source_layer = _railway_layer_number(feature.get("source_layer"))
+
+    if (
+        source_railway in RAILWAY_UNDERGROUND_TYPES
+        or source_tunnel in {"yes", "true", "building_passage"}
+        or (source_layer is not None and source_layer < 0)
+    ):
+        return "underground"
+
+    if (
+        source_railway in RAILWAY_SURFACE_TYPES
+        and source_tunnel not in {"yes", "true", "building_passage"}
+        and (source_layer is None or source_layer >= 0)
+    ):
+        return "surface"
+
+    return "unknown"
+
+
+def summarize_railway_feature_matches_for_grid_cell_contexts(
+    grid_cell_contexts,
+    map_features,
+):
+    """Summarize railway feature matches for log output only."""
+    if not isinstance(grid_cell_contexts, list):
+        raise ValueError("grid_cell_contexts はリストで指定してください。")
+    if not isinstance(map_features, list):
+        raise ValueError("map_features はリストで指定してください。")
+
+    railway_summary = _empty_railway_feature_match_summary()
+    cell_keys_by_type = {
+        "railway": set(),
+        "surface": set(),
+        "underground": set(),
+        "unknown": set(),
+    }
+    grid_cell_entries = []
+
+    for index, grid_cell_context in enumerate(grid_cell_contexts):
+        if not isinstance(grid_cell_context, dict):
+            raise ValueError("grid_cell_contexts の各要素は辞書で指定してください。")
+
+        grid_cell_bounds = {
+            "north": grid_cell_context.get("north"),
+            "south": grid_cell_context.get("south"),
+            "east": grid_cell_context.get("east"),
+            "west": grid_cell_context.get("west"),
+        }
+        grid_cell_entries.append(
+            (
+                (
+                    grid_cell_context.get("row_index", index),
+                    grid_cell_context.get("col_index", index),
+                ),
+                _normalize_bounds(grid_cell_bounds),
+            )
+        )
+
+    for feature in map_features:
+        if not isinstance(feature, dict):
+            raise ValueError("map_features の各要素は辞書で指定してください。")
+        if feature.get("kind") != "railway":
+            continue
+
+        railway_type = classify_railway_feature_surface_type(feature)
+        railway_summary["railway_features"] += 1
+        railway_summary[f"{railway_type}_railway_features"] += 1
+        feature_bounds = _normalize_bounds(feature.get("bounds"))
+
+        for cell_key, grid_cell_bounds in grid_cell_entries:
+            if feature_intersects_grid_cell(feature_bounds, grid_cell_bounds):
+                cell_keys_by_type["railway"].add(cell_key)
+                cell_keys_by_type[railway_type].add(cell_key)
+
+    railway_summary["railway_cells"] = len(cell_keys_by_type["railway"])
+    railway_summary["surface_railway_cells"] = len(cell_keys_by_type["surface"])
+    railway_summary["underground_railway_cells"] = len(
+        cell_keys_by_type["underground"]
+    )
+    railway_summary["unknown_railway_cells"] = len(cell_keys_by_type["unknown"])
+
+    return railway_summary
 
 
 def summarize_waterway_river_bounds_for_map_area(
@@ -804,6 +944,9 @@ def build_feature_summary_for_grid_cell(
         "forest_coverage_ratio": 0.0,
         "park_coverage_ratio": 0.0,
         "river_coverage_ratio": 0.0,
+        "surface_railway_count": 0,
+        "underground_railway_count": 0,
+        "unknown_railway_count": 0,
         "has_park": False,
         "has_river": False,
         "is_coastal": False,
@@ -822,6 +965,7 @@ def build_feature_summary_for_grid_cell(
             "park",
             "river",
             "coastline",
+            "railway",
         }:
             continue
 
@@ -890,6 +1034,9 @@ def build_feature_summary_for_grid_cell(
                 )
         elif feature_kind == "coastline":
             feature_summary["is_coastal"] = True
+        elif feature_kind == "railway":
+            railway_type = classify_railway_feature_surface_type(feature)
+            feature_summary[f"{railway_type}_railway_count"] += 1
 
     feature_summary["has_river"] = (
         feature_summary["river_coverage_ratio"] >= MIN_RIVER_COVERAGE_RATIO_FOR_HAS_RIVER
@@ -1019,6 +1166,18 @@ def calculate_initial_score_breakdown_from_feature_summary(feature_summary):
     has_river_context = has_river and has_building
     has_coastal_context = is_coastal and (has_building or has_road)
     has_forest_context = has_scored_forest and has_building
+    is_likely_unreachable_water_cell = (
+        water_coverage_ratio >= 0.95
+        and not has_building
+        and not has_road
+        and not has_park
+        and not has_river
+    )
+    has_waterfront_context = (
+        has_water
+        and not is_likely_unreachable_water_cell
+        and (has_building or has_road or has_park or has_river)
+    )
 
     context_bonus = 0.0
     if has_park_context:
@@ -1029,8 +1188,10 @@ def calculate_initial_score_breakdown_from_feature_summary(feature_summary):
         context_bonus += 0.3
     if has_forest_context:
         context_bonus += 0.15
+    if has_waterfront_context:
+        context_bonus += WATERFRONT_CONTEXT_BONUS
 
-    has_water_penalty = water_coverage_ratio >= 0.95
+    has_water_penalty = is_likely_unreachable_water_cell
     has_forest_penalty = (
         forest_coverage_ratio >= 0.95 and not has_building and not has_road
     )
@@ -1068,7 +1229,10 @@ def calculate_initial_score_breakdown_from_feature_summary(feature_summary):
         "has_river_context": has_river_context,
         "has_forest_context": has_forest_context,
         "has_coastal_context": has_coastal_context,
+        "is_likely_unreachable_water_cell": is_likely_unreachable_water_cell,
+        "has_waterfront_context": has_waterfront_context,
         "has_water_penalty": has_water_penalty,
+        "has_unreachable_water_penalty": is_likely_unreachable_water_cell,
         "has_forest_penalty": has_forest_penalty,
         "has_empty_cell_penalty": has_empty_cell_penalty,
     }

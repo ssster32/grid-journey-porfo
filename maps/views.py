@@ -125,7 +125,8 @@ def log_overpass_score_breakdown_summary(
         "building_base_cells=%s road_base_cells=%s road_scored_cells=%s "
         "park_context_cells=%s river_context_cells=%s "
         "forest_context_cells=%s coastal_context_cells=%s "
-        "water_penalty_cells=%s forest_penalty_cells=%s "
+        "water_penalty_cells=%s unreachable_water_penalty_cells=%s "
+        "waterfront_context_cells=%s forest_penalty_cells=%s "
         "empty_cell_penalty_cells=%s",
         area.id,
         user_id,
@@ -151,6 +152,11 @@ def log_overpass_score_breakdown_summary(
         sum(breakdown["has_forest_context"] for breakdown in breakdowns),
         sum(breakdown["has_coastal_context"] for breakdown in breakdowns),
         sum(breakdown["has_water_penalty"] for breakdown in breakdowns),
+        sum(
+            breakdown["is_likely_unreachable_water_cell"]
+            for breakdown in breakdowns
+        ),
+        sum(breakdown["has_waterfront_context"] for breakdown in breakdowns),
         sum(breakdown["has_forest_penalty"] for breakdown in breakdowns),
         sum(breakdown["has_empty_cell_penalty"] for breakdown in breakdowns),
     )
@@ -296,6 +302,34 @@ def log_overpass_waterway_summary(
         waterway_summary.get("waterway_stream_cells", 0),
         waterway_summary.get("waterway_canal_cells", 0),
         waterway_summary.get("waterway_unknown_cells", 0),
+    )
+
+
+def log_overpass_railway_summary(
+    area,
+    user_id,
+    railway_summary=None,
+):
+    if railway_summary is None:
+        railway_summary = {}
+
+    logger.info(
+        "Overpass auto railway summary: "
+        "area_id=%s user_id=%s "
+        "railway_features=%s surface_railway_features=%s "
+        "underground_railway_features=%s unknown_railway_features=%s "
+        "railway_cells=%s surface_railway_cells=%s "
+        "underground_railway_cells=%s unknown_railway_cells=%s",
+        area.id,
+        user_id,
+        railway_summary.get("railway_features", 0),
+        railway_summary.get("surface_railway_features", 0),
+        railway_summary.get("underground_railway_features", 0),
+        railway_summary.get("unknown_railway_features", 0),
+        railway_summary.get("railway_cells", 0),
+        railway_summary.get("surface_railway_cells", 0),
+        railway_summary.get("underground_railway_cells", 0),
+        railway_summary.get("unknown_railway_cells", 0),
     )
 
 
@@ -492,6 +526,15 @@ class MapAreaListCreateView(APIView):
                             getattr(
                                 feature_summaries_by_position,
                                 "waterway_summary",
+                                None,
+                            ),
+                        )
+                        log_overpass_railway_summary(
+                            area,
+                            request.user.id,
+                            getattr(
+                                feature_summaries_by_position,
+                                "railway_summary",
                                 None,
                             ),
                         )
