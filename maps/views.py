@@ -127,7 +127,34 @@ def log_overpass_score_breakdown_summary(
         "forest_context_cells=%s coastal_context_cells=%s "
         "water_penalty_cells=%s unreachable_water_penalty_cells=%s "
         "waterfront_context_cells=%s forest_penalty_cells=%s "
-        "empty_cell_penalty_cells=%s",
+        "empty_cell_penalty_cells=%s "
+        "surface_railway_context_cells=%s "
+        "surface_railway_context_bonus_avg=%.2f "
+        "surface_railway_context_bonus_max=%.2f "
+        "surface_station_context_cells=%s "
+        "surface_station_context_bonus_avg=%.2f "
+        "surface_station_context_bonus_max=%.2f "
+        "subway_station_context_cells=%s "
+        "subway_station_context_bonus_avg=%.2f "
+        "subway_station_context_bonus_max=%.2f "
+        "public_transport_station_context_cells=%s "
+        "public_transport_station_context_bonus_avg=%.2f "
+        "public_transport_station_context_bonus_max=%.2f "
+        "station_count_avg=%.2f "
+        "station_count_max=%.2f "
+        "station_density_cluster_count_avg=%.2f "
+        "station_density_cluster_count_max=%.2f "
+        "dense_station_density_cluster_count_max=%.2f "
+        "dense_station_cluster_context_cells=%s "
+        "major_station_cluster_context_cells=%s "
+        "station_density_bonus_avg=%.2f "
+        "station_density_bonus_max=%.2f "
+        "motorway_context_cells=%s "
+        "motorway_context_bonus_avg=%.2f "
+        "motorway_context_bonus_max=%.2f "
+        "trunk_context_cells=%s "
+        "trunk_context_bonus_avg=%.2f "
+        "trunk_context_bonus_max=%.2f",
         area.id,
         user_id,
         len(summaries),
@@ -159,6 +186,42 @@ def log_overpass_score_breakdown_summary(
         sum(breakdown["has_waterfront_context"] for breakdown in breakdowns),
         sum(breakdown["has_forest_penalty"] for breakdown in breakdowns),
         sum(breakdown["has_empty_cell_penalty"] for breakdown in breakdowns),
+        sum(breakdown["has_surface_railway_context"] for breakdown in breakdowns),
+        component_average("surface_railway_context_bonus"),
+        component_max("surface_railway_context_bonus"),
+        sum(breakdown["has_surface_station_context"] for breakdown in breakdowns),
+        component_average("surface_station_context_bonus"),
+        component_max("surface_station_context_bonus"),
+        sum(breakdown["has_subway_station_context"] for breakdown in breakdowns),
+        component_average("subway_station_context_bonus"),
+        component_max("subway_station_context_bonus"),
+        sum(
+            breakdown["has_public_transport_station_context"]
+            for breakdown in breakdowns
+        ),
+        component_average("public_transport_station_context_bonus"),
+        component_max("public_transport_station_context_bonus"),
+        component_average("scored_station_count"),
+        component_max("scored_station_count"),
+        component_average("station_cluster_count"),
+        component_max("station_cluster_count"),
+        component_max("dense_station_cluster_count"),
+        sum(
+            breakdown["has_dense_station_cluster_context"]
+            for breakdown in breakdowns
+        ),
+        sum(
+            breakdown["has_major_station_cluster_context"]
+            for breakdown in breakdowns
+        ),
+        component_average("station_density_bonus"),
+        component_max("station_density_bonus"),
+        sum(breakdown["has_motorway_context"] for breakdown in breakdowns),
+        component_average("motorway_context_bonus"),
+        component_max("motorway_context_bonus"),
+        sum(breakdown["has_trunk_context"] for breakdown in breakdowns),
+        component_average("trunk_context_bonus"),
+        component_max("trunk_context_bonus"),
     )
 
 
@@ -330,6 +393,231 @@ def log_overpass_railway_summary(
         railway_summary.get("surface_railway_cells", 0),
         railway_summary.get("underground_railway_cells", 0),
         railway_summary.get("unknown_railway_cells", 0),
+    )
+
+
+def log_overpass_station_summary(
+    area,
+    user_id,
+    station_summary=None,
+):
+    if station_summary is None:
+        station_summary = {}
+
+    logger.info(
+        "Overpass auto station summary: "
+        "area_id=%s user_id=%s "
+        "station_features=%s railway_station_features=%s "
+        "railway_halt_features=%s subway_station_features=%s "
+        "bus_station_features=%s public_transport_station_features=%s "
+        "unknown_station_features=%s "
+        "station_cells=%s railway_station_cells=%s "
+        "railway_halt_cells=%s subway_station_cells=%s "
+        "bus_station_cells=%s public_transport_station_cells=%s "
+        "unknown_station_cells=%s "
+        "station_cluster_cells=%s "
+        "dense_station_cluster_cells=%s "
+        "major_station_cluster_cells=%s "
+        "station_cluster_count_avg=%.2f "
+        "station_cluster_count_max=%s "
+        "dense_station_cluster_count_max=%s "
+        "major_station_cluster_count_max=%s",
+        area.id,
+        user_id,
+        station_summary.get("station_features", 0),
+        station_summary.get("railway_station_features", 0),
+        station_summary.get("railway_halt_features", 0),
+        station_summary.get("subway_station_features", 0),
+        station_summary.get("bus_station_features", 0),
+        station_summary.get("public_transport_station_features", 0),
+        station_summary.get("unknown_station_features", 0),
+        station_summary.get("station_cells", 0),
+        station_summary.get("railway_station_cells", 0),
+        station_summary.get("railway_halt_cells", 0),
+        station_summary.get("subway_station_cells", 0),
+        station_summary.get("bus_station_cells", 0),
+        station_summary.get("public_transport_station_cells", 0),
+        station_summary.get("unknown_station_cells", 0),
+        station_summary.get("station_cluster_cells", 0),
+        station_summary.get("dense_station_cluster_cells", 0),
+        station_summary.get("major_station_cluster_cells", 0),
+        station_summary.get("station_cluster_count_avg", 0.0),
+        station_summary.get("station_cluster_count_max", 0),
+        station_summary.get("dense_station_cluster_count_max", 0),
+        station_summary.get("major_station_cluster_count_max", 0),
+    )
+
+
+def log_overpass_expressway_summary(
+    area,
+    user_id,
+    expressway_summary=None,
+):
+    if expressway_summary is None:
+        expressway_summary = {}
+
+    logger.info(
+        "Overpass auto expressway summary: "
+        "area_id=%s user_id=%s "
+        "expressway_features=%s motorway_features=%s "
+        "motorway_link_features=%s trunk_features=%s "
+        "trunk_link_features=%s unknown_expressway_features=%s "
+        "expressway_cells=%s motorway_cells=%s "
+        "motorway_link_cells=%s trunk_cells=%s "
+        "trunk_link_cells=%s unknown_expressway_cells=%s",
+        area.id,
+        user_id,
+        expressway_summary.get("expressway_features", 0),
+        expressway_summary.get("motorway_features", 0),
+        expressway_summary.get("motorway_link_features", 0),
+        expressway_summary.get("trunk_features", 0),
+        expressway_summary.get("trunk_link_features", 0),
+        expressway_summary.get("unknown_expressway_features", 0),
+        expressway_summary.get("expressway_cells", 0),
+        expressway_summary.get("motorway_cells", 0),
+        expressway_summary.get("motorway_link_cells", 0),
+        expressway_summary.get("trunk_cells", 0),
+        expressway_summary.get("trunk_link_cells", 0),
+        expressway_summary.get("unknown_expressway_cells", 0),
+    )
+
+
+def log_overpass_expressway_bounds_summary(
+    area,
+    user_id,
+    expressway_bounds_summary=None,
+):
+    if expressway_bounds_summary is None:
+        expressway_bounds_summary = {}
+
+    logger.info(
+        "Overpass auto expressway bounds summary: "
+        "area_id=%s user_id=%s "
+        "expressway_features=%s expressway_cells=%s "
+        "expressway_avg_overlap=%.4f expressway_max_overlap=%.4f "
+        "expressway_large_bounds_features=%s "
+        "expressway_large_bounds_cells=%s "
+        "motorway_features=%s motorway_cells=%s "
+        "motorway_avg_overlap=%.4f motorway_max_overlap=%.4f "
+        "motorway_link_features=%s motorway_link_cells=%s "
+        "motorway_link_avg_overlap=%.4f motorway_link_max_overlap=%.4f "
+        "trunk_features=%s trunk_cells=%s "
+        "trunk_avg_overlap=%.4f trunk_max_overlap=%.4f "
+        "trunk_link_features=%s trunk_link_cells=%s "
+        "trunk_link_avg_overlap=%.4f trunk_link_max_overlap=%.4f "
+        "unknown_expressway_features=%s unknown_expressway_cells=%s "
+        "unknown_expressway_avg_overlap=%.4f "
+        "unknown_expressway_max_overlap=%.4f",
+        area.id,
+        user_id,
+        expressway_bounds_summary.get("expressway_features", 0),
+        expressway_bounds_summary.get("expressway_cells", 0),
+        expressway_bounds_summary.get("expressway_avg_overlap", 0.0),
+        expressway_bounds_summary.get("expressway_max_overlap", 0.0),
+        expressway_bounds_summary.get("expressway_large_bounds_features", 0),
+        expressway_bounds_summary.get("expressway_large_bounds_cells", 0),
+        expressway_bounds_summary.get("motorway_features", 0),
+        expressway_bounds_summary.get("motorway_cells", 0),
+        expressway_bounds_summary.get("motorway_avg_overlap", 0.0),
+        expressway_bounds_summary.get("motorway_max_overlap", 0.0),
+        expressway_bounds_summary.get("motorway_link_features", 0),
+        expressway_bounds_summary.get("motorway_link_cells", 0),
+        expressway_bounds_summary.get("motorway_link_avg_overlap", 0.0),
+        expressway_bounds_summary.get("motorway_link_max_overlap", 0.0),
+        expressway_bounds_summary.get("trunk_features", 0),
+        expressway_bounds_summary.get("trunk_cells", 0),
+        expressway_bounds_summary.get("trunk_avg_overlap", 0.0),
+        expressway_bounds_summary.get("trunk_max_overlap", 0.0),
+        expressway_bounds_summary.get("trunk_link_features", 0),
+        expressway_bounds_summary.get("trunk_link_cells", 0),
+        expressway_bounds_summary.get("trunk_link_avg_overlap", 0.0),
+        expressway_bounds_summary.get("trunk_link_max_overlap", 0.0),
+        expressway_bounds_summary.get("unknown_expressway_features", 0),
+        expressway_bounds_summary.get("unknown_expressway_cells", 0),
+        expressway_bounds_summary.get("unknown_expressway_avg_overlap", 0.0),
+        expressway_bounds_summary.get("unknown_expressway_max_overlap", 0.0),
+    )
+
+
+def log_overpass_effective_expressway_summary(
+    area,
+    user_id,
+    effective_expressway_summary=None,
+):
+    if effective_expressway_summary is None:
+        effective_expressway_summary = {}
+
+    logger.info(
+        "Overpass auto effective expressway summary: "
+        "area_id=%s user_id=%s "
+        "effective_expressway_features=%s "
+        "effective_expressway_cells=%s "
+        "effective_expressway_avg_overlap=%.4f "
+        "effective_expressway_max_overlap=%.4f "
+        "effective_motorway_features=%s effective_motorway_cells=%s "
+        "effective_motorway_avg_overlap=%.4f "
+        "effective_motorway_max_overlap=%.4f "
+        "effective_motorway_link_features=%s effective_motorway_link_cells=%s "
+        "effective_motorway_link_avg_overlap=%.4f "
+        "effective_motorway_link_max_overlap=%.4f "
+        "effective_trunk_features=%s effective_trunk_cells=%s "
+        "effective_trunk_avg_overlap=%.4f "
+        "effective_trunk_max_overlap=%.4f "
+        "effective_trunk_link_features=%s effective_trunk_link_cells=%s "
+        "effective_trunk_link_avg_overlap=%.4f "
+        "effective_trunk_link_max_overlap=%.4f "
+        "effective_unknown_expressway_features=%s "
+        "effective_unknown_expressway_cells=%s "
+        "effective_unknown_expressway_avg_overlap=%.4f "
+        "effective_unknown_expressway_max_overlap=%.4f "
+        "filtered_expressway_large_bounds_features=%s "
+        "filtered_expressway_large_bounds_cells=%s",
+        area.id,
+        user_id,
+        effective_expressway_summary.get("effective_expressway_features", 0),
+        effective_expressway_summary.get("effective_expressway_cells", 0),
+        effective_expressway_summary.get("effective_expressway_avg_overlap", 0.0),
+        effective_expressway_summary.get("effective_expressway_max_overlap", 0.0),
+        effective_expressway_summary.get("effective_motorway_features", 0),
+        effective_expressway_summary.get("effective_motorway_cells", 0),
+        effective_expressway_summary.get("effective_motorway_avg_overlap", 0.0),
+        effective_expressway_summary.get("effective_motorway_max_overlap", 0.0),
+        effective_expressway_summary.get("effective_motorway_link_features", 0),
+        effective_expressway_summary.get("effective_motorway_link_cells", 0),
+        effective_expressway_summary.get(
+            "effective_motorway_link_avg_overlap",
+            0.0,
+        ),
+        effective_expressway_summary.get(
+            "effective_motorway_link_max_overlap",
+            0.0,
+        ),
+        effective_expressway_summary.get("effective_trunk_features", 0),
+        effective_expressway_summary.get("effective_trunk_cells", 0),
+        effective_expressway_summary.get("effective_trunk_avg_overlap", 0.0),
+        effective_expressway_summary.get("effective_trunk_max_overlap", 0.0),
+        effective_expressway_summary.get("effective_trunk_link_features", 0),
+        effective_expressway_summary.get("effective_trunk_link_cells", 0),
+        effective_expressway_summary.get("effective_trunk_link_avg_overlap", 0.0),
+        effective_expressway_summary.get("effective_trunk_link_max_overlap", 0.0),
+        effective_expressway_summary.get("effective_unknown_expressway_features", 0),
+        effective_expressway_summary.get("effective_unknown_expressway_cells", 0),
+        effective_expressway_summary.get(
+            "effective_unknown_expressway_avg_overlap",
+            0.0,
+        ),
+        effective_expressway_summary.get(
+            "effective_unknown_expressway_max_overlap",
+            0.0,
+        ),
+        effective_expressway_summary.get(
+            "filtered_expressway_large_bounds_features",
+            0,
+        ),
+        effective_expressway_summary.get(
+            "filtered_expressway_large_bounds_cells",
+            0,
+        ),
     )
 
 
@@ -535,6 +823,42 @@ class MapAreaListCreateView(APIView):
                             getattr(
                                 feature_summaries_by_position,
                                 "railway_summary",
+                                None,
+                            ),
+                        )
+                        log_overpass_station_summary(
+                            area,
+                            request.user.id,
+                            getattr(
+                                feature_summaries_by_position,
+                                "station_summary",
+                                None,
+                            ),
+                        )
+                        log_overpass_expressway_summary(
+                            area,
+                            request.user.id,
+                            getattr(
+                                feature_summaries_by_position,
+                                "expressway_summary",
+                                None,
+                            ),
+                        )
+                        log_overpass_expressway_bounds_summary(
+                            area,
+                            request.user.id,
+                            getattr(
+                                feature_summaries_by_position,
+                                "expressway_bounds_summary",
+                                None,
+                            ),
+                        )
+                        log_overpass_effective_expressway_summary(
+                            area,
+                            request.user.id,
+                            getattr(
+                                feature_summaries_by_position,
+                                "effective_expressway_summary",
                                 None,
                             ),
                         )

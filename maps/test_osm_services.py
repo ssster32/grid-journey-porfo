@@ -13,6 +13,12 @@ from .services import (
     MIN_FOREST_COVERAGE_RATIO_FOR_SCORE,
     MIN_RIVER_COVERAGE_RATIO_FOR_HAS_RIVER,
     ROAD_BASE_SCORE_MAX_BONUS,
+    PUBLIC_TRANSPORT_STATION_CONTEXT_BONUS,
+    SURFACE_RAILWAY_CONTEXT_BONUS,
+    SURFACE_STATION_CONTEXT_BONUS,
+    SUBWAY_STATION_CONTEXT_BONUS,
+    MOTORWAY_CONTEXT_BONUS,
+    TRUNK_CONTEXT_BONUS,
     WATERFRONT_CONTEXT_BONUS,
     build_bounds_from_osm_element,
     build_feature_summaries_for_map_area_from_overpass,
@@ -27,16 +33,22 @@ from .services import (
     calculate_bounds_size_ratios,
     calculate_initial_score_breakdown_from_feature_summary,
     calculate_initial_score_from_feature_summary,
+    classify_expressway_feature_type,
     classify_osm_element,
     classify_railway_feature_surface_type,
+    classify_station_feature_type,
     determine_initial_score_for_grid_cell,
     fetch_osm_features_from_overpass,
     feature_intersects_grid_cell,
     generate_grid_cells_for_area,
     is_large_waterway_river_bounds_for_map_area,
     parse_overpass_elements_to_map_features,
+    summarize_effective_expressway_feature_matches_for_grid_cell_contexts,
+    summarize_expressway_bounds_for_grid_cell_contexts,
+    summarize_expressway_feature_matches_for_grid_cell_contexts,
     summarize_river_feature_matches_for_grid_cell_contexts,
     summarize_railway_feature_matches_for_grid_cell_contexts,
+    summarize_station_feature_matches_for_grid_cell_contexts,
     summarize_waterway_feature_matches_for_grid_cell_contexts,
     summarize_waterway_river_bounds_for_map_area,
     should_use_river_feature_for_grid_cell,
@@ -151,10 +163,19 @@ class DetermineInitialScoreForGridCellTests(TestCase):
             'nwr["leisure"="park"]',
             'nwr["leisure"="garden"]',
             'nwr["natural"="coastline"]',
+            'nwr["railway"="station"]',
+            'nwr["railway"="halt"]',
+            'nwr["station"="subway"]',
+            'nwr["public_transport"="station"]',
+            'nwr["amenity"="bus_station"]',
             'nwr["railway"="rail"]',
             'nwr["railway"="subway"]',
             'nwr["railway"="light_rail"]',
             'nwr["railway"="tram"]',
+            'nwr["highway"="motorway"]',
+            'nwr["highway"="motorway_link"]',
+            'nwr["highway"="trunk"]',
+            'nwr["highway"="trunk_link"]',
         )
 
         self.assertIn("[out:json][timeout:25];", query)
@@ -377,6 +398,26 @@ class DetermineInitialScoreForGridCellTests(TestCase):
                     "west": 19.6,
                 },
             },
+            {
+                "kind": "station",
+                "source_railway": "station",
+                "bounds": {
+                    "north": 9.6,
+                    "south": 9.4,
+                    "east": 20.4,
+                    "west": 19.6,
+                },
+            },
+            {
+                "kind": "expressway",
+                "source_highway": "motorway",
+                "bounds": {
+                    "north": 9.5,
+                    "south": 9.3,
+                    "east": 20.4,
+                    "west": 19.6,
+                },
+            },
         ]
 
         summaries = build_feature_summaries_for_map_area_from_overpass(
@@ -396,6 +437,31 @@ class DetermineInitialScoreForGridCellTests(TestCase):
         self.assertEqual(summaries[(0, 1)]["surface_railway_count"], 1)
         self.assertEqual(summaries.railway_summary["railway_features"], 1)
         self.assertEqual(summaries.railway_summary["surface_railway_cells"], 2)
+        self.assertEqual(summaries[(0, 0)]["railway_station_count"], 1)
+        self.assertEqual(summaries[(0, 1)]["railway_station_count"], 1)
+        self.assertEqual(summaries.station_summary["station_features"], 1)
+        self.assertEqual(summaries.station_summary["railway_station_cells"], 2)
+        self.assertEqual(summaries[(0, 0)]["motorway_count"], 1)
+        self.assertEqual(summaries[(0, 1)]["motorway_count"], 1)
+        self.assertEqual(summaries.expressway_summary["expressway_features"], 1)
+        self.assertEqual(summaries.expressway_summary["motorway_cells"], 2)
+        self.assertEqual(
+            summaries.expressway_bounds_summary["expressway_features"],
+            1,
+        )
+        self.assertEqual(summaries.expressway_bounds_summary["motorway_cells"], 2)
+        self.assertGreater(
+            summaries.expressway_bounds_summary["expressway_max_overlap"],
+            0,
+        )
+        self.assertEqual(
+            summaries.effective_expressway_summary["effective_expressway_features"],
+            1,
+        )
+        self.assertEqual(
+            summaries.effective_expressway_summary["effective_motorway_cells"],
+            2,
+        )
         mock_fetch.assert_called_once_with(
             {
                 "north": 10.0,
@@ -584,6 +650,15 @@ class DetermineInitialScoreForGridCellTests(TestCase):
             ({"railway": "subway"}, "railway"),
             ({"railway": "light_rail"}, "railway"),
             ({"railway": "tram"}, "railway"),
+            ({"railway": "station"}, "station"),
+            ({"railway": "halt"}, "station"),
+            ({"station": "subway"}, "station"),
+            ({"public_transport": "station"}, "station"),
+            ({"amenity": "bus_station"}, "station"),
+            ({"highway": "motorway"}, "expressway"),
+            ({"highway": "motorway_link"}, "expressway"),
+            ({"highway": "trunk"}, "expressway"),
+            ({"highway": "trunk_link"}, "expressway"),
         )
 
         for tags, expected_kind in test_cases:
@@ -613,8 +688,16 @@ class DetermineInitialScoreForGridCellTests(TestCase):
                 "park",
             ),
             (
+                {"railway": "station", "railway:ref": "A", "highway": "service"},
+                "station",
+            ),
+            (
                 {"railway": "rail", "highway": "service", "building": "yes"},
                 "railway",
+            ),
+            (
+                {"highway": "motorway", "building": "yes"},
+                "expressway",
             ),
             (
                 {"highway": "service", "building": "yes"},
@@ -628,7 +711,6 @@ class DetermineInitialScoreForGridCellTests(TestCase):
 
     def test_classify_osm_element_returns_none_for_unknown_tags(self):
         self.assertIsNone(classify_osm_element({"amenity": "cafe"}))
-        self.assertIsNone(classify_osm_element({"railway": "station"}))
 
     def test_classify_osm_element_invalid_tags_raises_value_error(self):
         for tags in (None, [], "building=yes"):
@@ -813,6 +895,7 @@ class DetermineInitialScoreForGridCellTests(TestCase):
         self.assertEqual(map_feature["source"], "osm")
         self.assertEqual(map_feature["source_type"], "way")
         self.assertEqual(map_feature["source_id"], 456)
+        self.assertEqual(map_feature["source_highway"], "residential")
 
     def test_build_map_feature_from_osm_element_keeps_source_waterway(self):
         map_feature = build_map_feature_from_osm_element(
@@ -857,6 +940,50 @@ class DetermineInitialScoreForGridCellTests(TestCase):
         self.assertEqual(map_feature["source_tunnel"], "yes")
         self.assertEqual(map_feature["source_layer"], "-1")
         self.assertEqual(map_feature["source_bridge"], "no")
+
+    def test_build_map_feature_from_osm_element_keeps_station_source_tags(self):
+        map_feature = build_map_feature_from_osm_element(
+            {
+                "type": "node",
+                "id": 902,
+                "tags": {
+                    "railway": "station",
+                    "station": "subway",
+                    "public_transport": "station",
+                    "amenity": "bus_station",
+                },
+                "bounds": {
+                    "north": 10.0,
+                    "south": 9.0,
+                    "east": 20.0,
+                    "west": 19.0,
+                },
+            }
+        )
+
+        self.assertEqual(map_feature["kind"], "station")
+        self.assertEqual(map_feature["source_railway"], "station")
+        self.assertEqual(map_feature["source_station"], "subway")
+        self.assertEqual(map_feature["source_public_transport"], "station")
+        self.assertEqual(map_feature["source_amenity"], "bus_station")
+
+    def test_build_map_feature_from_osm_element_keeps_expressway_source_tags(self):
+        map_feature = build_map_feature_from_osm_element(
+            {
+                "type": "way",
+                "id": 903,
+                "tags": {"highway": "motorway"},
+                "bounds": {
+                    "north": 10.0,
+                    "south": 9.0,
+                    "east": 20.0,
+                    "west": 19.0,
+                },
+            }
+        )
+
+        self.assertEqual(map_feature["kind"], "expressway")
+        self.assertEqual(map_feature["source_highway"], "motorway")
 
     def test_build_map_feature_from_osm_element_returns_none_for_unknown_tags(self):
         self.assertIsNone(
@@ -927,6 +1054,68 @@ class DetermineInitialScoreForGridCellTests(TestCase):
             with self.subTest(feature=feature):
                 with self.assertRaises(ValueError):
                     classify_railway_feature_surface_type(feature)
+
+    def test_classify_station_feature_type_returns_expected_type(self):
+        test_cases = (
+            ({"source_railway": "station"}, "railway_station"),
+            ({"source_railway": "halt"}, "railway_halt"),
+            ({"source_station": "subway"}, "subway_station"),
+            ({"source_amenity": "bus_station"}, "bus_station"),
+            (
+                {"source_public_transport": "station"},
+                "public_transport_station",
+            ),
+            ({}, "unknown"),
+        )
+
+        for feature, expected_type in test_cases:
+            with self.subTest(feature=feature):
+                self.assertEqual(
+                    classify_station_feature_type(feature),
+                    expected_type,
+                )
+
+    def test_classify_station_feature_type_prefers_subway_station(self):
+        station_type = classify_station_feature_type(
+            {
+                "source_railway": "station",
+                "source_station": "subway",
+                "source_public_transport": "station",
+            }
+        )
+
+        self.assertEqual(station_type, "subway_station")
+
+    def test_classify_station_feature_type_invalid_feature_raises_value_error(self):
+        for feature in (None, [], "station"):
+            with self.subTest(feature=feature):
+                with self.assertRaises(ValueError):
+                    classify_station_feature_type(feature)
+
+    def test_classify_expressway_feature_type_returns_expected_type(self):
+        test_cases = (
+            ({"source_highway": "motorway"}, "motorway"),
+            ({"source_highway": "motorway_link"}, "motorway_link"),
+            ({"source_highway": "trunk"}, "trunk"),
+            ({"source_highway": "trunk_link"}, "trunk_link"),
+            ({"source_highway": "residential"}, "unknown"),
+            ({}, "unknown"),
+        )
+
+        for feature, expected_type in test_cases:
+            with self.subTest(feature=feature):
+                self.assertEqual(
+                    classify_expressway_feature_type(feature),
+                    expected_type,
+                )
+
+    def test_classify_expressway_feature_type_invalid_feature_raises_value_error(
+        self,
+    ):
+        for feature in (None, [], "expressway"):
+            with self.subTest(feature=feature):
+                with self.assertRaises(ValueError):
+                    classify_expressway_feature_type(feature)
 
     def test_parse_overpass_elements_to_map_features_builds_multiple_features(self):
         map_features = parse_overpass_elements_to_map_features(
@@ -1384,6 +1573,17 @@ class DetermineInitialScoreForGridCellTests(TestCase):
         self.assertEqual(summary["surface_railway_count"], 0)
         self.assertEqual(summary["underground_railway_count"], 0)
         self.assertEqual(summary["unknown_railway_count"], 0)
+        self.assertEqual(summary["railway_station_count"], 0)
+        self.assertEqual(summary["railway_halt_count"], 0)
+        self.assertEqual(summary["subway_station_count"], 0)
+        self.assertEqual(summary["bus_station_count"], 0)
+        self.assertEqual(summary["public_transport_station_count"], 0)
+        self.assertEqual(summary["unknown_station_count"], 0)
+        self.assertEqual(summary["motorway_count"], 0)
+        self.assertEqual(summary["motorway_link_count"], 0)
+        self.assertEqual(summary["trunk_count"], 0)
+        self.assertEqual(summary["trunk_link_count"], 0)
+        self.assertEqual(summary["unknown_expressway_count"], 0)
 
     def test_build_feature_summary_counts_railways_by_surface_type(self):
         summary = build_feature_summary_for_grid_cell(
@@ -1436,14 +1636,26 @@ class DetermineInitialScoreForGridCellTests(TestCase):
         self.assertEqual(summary["underground_railway_count"], 1)
         self.assertEqual(summary["unknown_railway_count"], 1)
 
-    def test_build_feature_summary_railways_do_not_affect_initial_score(self):
+    def test_build_feature_summary_underground_and_unknown_railways_do_not_affect_initial_score(
+        self,
+    ):
         empty_summary = build_feature_summary_for_grid_cell(self.grid_bounds(), [])
         railway_summary = build_feature_summary_for_grid_cell(
             self.grid_bounds(),
             [
                 {
                     "kind": "railway",
-                    "source_railway": "rail",
+                    "source_railway": "subway",
+                    "bounds": {
+                        "north": 9.9,
+                        "south": 9.8,
+                        "east": 19.2,
+                        "west": 19.1,
+                    },
+                },
+                {
+                    "kind": "railway",
+                    "source_railway": "station",
                     "bounds": {
                         "north": 9.9,
                         "south": 9.8,
@@ -1467,6 +1679,295 @@ class DetermineInitialScoreForGridCellTests(TestCase):
         for key in ("base_score", "diversity_bonus", "context_bonus", "penalty"):
             with self.subTest(key=key):
                 self.assertEqual(railway_breakdown[key], empty_breakdown[key])
+
+    def test_build_feature_summary_counts_stations_by_type(self):
+        summary = build_feature_summary_for_grid_cell(
+            self.grid_bounds(),
+            [
+                {
+                    "kind": "station",
+                    "source_railway": "station",
+                    "bounds": {
+                        "north": 9.9,
+                        "south": 9.8,
+                        "east": 19.2,
+                        "west": 19.1,
+                    },
+                },
+                {
+                    "kind": "station",
+                    "source_railway": "halt",
+                    "bounds": {
+                        "north": 9.8,
+                        "south": 9.7,
+                        "east": 19.3,
+                        "west": 19.2,
+                    },
+                },
+                {
+                    "kind": "station",
+                    "source_station": "subway",
+                    "bounds": {
+                        "north": 9.7,
+                        "south": 9.6,
+                        "east": 19.4,
+                        "west": 19.3,
+                    },
+                },
+                {
+                    "kind": "station",
+                    "source_amenity": "bus_station",
+                    "bounds": {
+                        "north": 9.6,
+                        "south": 9.5,
+                        "east": 19.5,
+                        "west": 19.4,
+                    },
+                },
+                {
+                    "kind": "station",
+                    "source_public_transport": "station",
+                    "bounds": {
+                        "north": 9.5,
+                        "south": 9.4,
+                        "east": 19.6,
+                        "west": 19.5,
+                    },
+                },
+                {
+                    "kind": "station",
+                    "bounds": {
+                        "north": 9.4,
+                        "south": 9.3,
+                        "east": 19.7,
+                        "west": 19.6,
+                    },
+                },
+                {
+                    "kind": "station",
+                    "source_railway": "station",
+                    "bounds": {
+                        "north": 8.9,
+                        "south": 8.8,
+                        "east": 19.2,
+                        "west": 19.1,
+                    },
+                },
+            ],
+        )
+
+        self.assertEqual(summary["railway_station_count"], 1)
+        self.assertEqual(summary["railway_halt_count"], 1)
+        self.assertEqual(summary["subway_station_count"], 1)
+        self.assertEqual(summary["bus_station_count"], 1)
+        self.assertEqual(summary["public_transport_station_count"], 1)
+        self.assertEqual(summary["unknown_station_count"], 1)
+        self.assertEqual(summary["station_cluster_count"], 0)
+        self.assertEqual(summary["dense_station_cluster_count"], 0)
+
+    def test_build_feature_summary_counts_station_clusters_by_center_distance(self):
+        center_lat = 9.5
+        center_lng = 19.5
+        station_step = 100 / METERS_PER_DEGREE
+
+        def station_bounds(lat_offset):
+            center = center_lat + lat_offset
+            return {
+                "north": center + 0.0001,
+                "south": center - 0.0001,
+                "east": center_lng + 0.0001,
+                "west": center_lng - 0.0001,
+            }
+
+        summary = build_feature_summary_for_grid_cell(
+            self.grid_bounds(),
+            [
+                {
+                    "kind": "station",
+                    "source_railway": "station",
+                    "bounds": station_bounds(0),
+                },
+                {
+                    "kind": "station",
+                    "source_station": "subway",
+                    "bounds": station_bounds(station_step),
+                },
+                {
+                    "kind": "station",
+                    "source_public_transport": "station",
+                    "bounds": station_bounds(station_step * 2),
+                },
+                {
+                    "kind": "station",
+                    "source_amenity": "bus_station",
+                    "bounds": station_bounds(station_step * 3),
+                },
+                {
+                    "kind": "station",
+                    "bounds": station_bounds(station_step * 4),
+                },
+            ],
+        )
+
+        self.assertEqual(summary["railway_station_count"], 1)
+        self.assertEqual(summary["subway_station_count"], 1)
+        self.assertEqual(summary["public_transport_station_count"], 1)
+        self.assertEqual(summary["bus_station_count"], 1)
+        self.assertEqual(summary["unknown_station_count"], 1)
+        self.assertEqual(summary["station_cluster_count"], 3)
+        self.assertEqual(summary["dense_station_cluster_count"], 3)
+
+    def test_build_feature_summary_counts_expressways_by_type(self):
+        summary = build_feature_summary_for_grid_cell(
+            self.grid_bounds(),
+            [
+                {
+                    "kind": "expressway",
+                    "source_highway": "motorway",
+                    "bounds": {
+                        "north": 9.9,
+                        "south": 9.8,
+                        "east": 19.2,
+                        "west": 19.1,
+                    },
+                },
+                {
+                    "kind": "expressway",
+                    "source_highway": "motorway_link",
+                    "bounds": {
+                        "north": 9.8,
+                        "south": 9.7,
+                        "east": 19.3,
+                        "west": 19.2,
+                    },
+                },
+                {
+                    "kind": "expressway",
+                    "source_highway": "trunk",
+                    "bounds": {
+                        "north": 9.7,
+                        "south": 9.6,
+                        "east": 19.4,
+                        "west": 19.3,
+                    },
+                },
+                {
+                    "kind": "expressway",
+                    "source_highway": "trunk_link",
+                    "bounds": {
+                        "north": 9.6,
+                        "south": 9.5,
+                        "east": 19.5,
+                        "west": 19.4,
+                    },
+                },
+                {
+                    "kind": "expressway",
+                    "source_highway": "residential",
+                    "bounds": {
+                        "north": 9.5,
+                        "south": 9.4,
+                        "east": 19.6,
+                        "west": 19.5,
+                    },
+                },
+                {
+                    "kind": "expressway",
+                    "source_highway": "motorway",
+                    "bounds": {
+                        "north": 8.9,
+                        "south": 8.8,
+                        "east": 19.2,
+                        "west": 19.1,
+                    },
+                },
+            ],
+        )
+
+        self.assertEqual(summary["motorway_count"], 1)
+        self.assertEqual(summary["motorway_link_count"], 1)
+        self.assertEqual(summary["trunk_count"], 1)
+        self.assertEqual(summary["trunk_link_count"], 1)
+        self.assertEqual(summary["unknown_expressway_count"], 1)
+
+    def test_build_feature_summary_excludes_large_bounds_expressways(self):
+        summary = build_feature_summary_for_grid_cell(
+            self.grid_bounds(),
+            [
+                {
+                    "kind": "expressway",
+                    "source_highway": "motorway",
+                    "bounds": {
+                        "north": 15.5,
+                        "south": 4.5,
+                        "east": 19.1,
+                        "west": 18.9,
+                    },
+                },
+                {
+                    "kind": "expressway",
+                    "source_highway": "trunk",
+                    "bounds": {
+                        "north": 9.5,
+                        "south": 9.0,
+                        "east": 19.5,
+                        "west": 19.0,
+                    },
+                },
+            ],
+        )
+
+        self.assertEqual(summary["motorway_count"], 0)
+        self.assertEqual(summary["trunk_count"], 1)
+
+    def test_build_feature_summary_large_and_unknown_expressways_do_not_affect_initial_score(
+        self,
+    ):
+        empty_summary = build_feature_summary_for_grid_cell(self.grid_bounds(), [])
+        expressway_summary = build_feature_summary_for_grid_cell(
+            self.grid_bounds(),
+            [
+                {
+                    "kind": "expressway",
+                    "source_highway": "motorway",
+                    "bounds": {
+                        "north": 15.5,
+                        "south": 4.5,
+                        "east": 19.1,
+                        "west": 18.9,
+                    },
+                },
+                {
+                    "kind": "expressway",
+                    "source_highway": "residential",
+                    "bounds": {
+                        "north": 9.8,
+                        "south": 9.7,
+                        "east": 19.3,
+                        "west": 19.2,
+                    },
+                },
+            ],
+        )
+        empty_breakdown = calculate_initial_score_breakdown_from_feature_summary(
+            empty_summary
+        )
+        expressway_breakdown = calculate_initial_score_breakdown_from_feature_summary(
+            expressway_summary
+        )
+
+        self.assertEqual(
+            calculate_initial_score_from_feature_summary(expressway_summary),
+            calculate_initial_score_from_feature_summary(empty_summary),
+        )
+        self.assertEqual(expressway_summary["motorway_count"], 0)
+        self.assertEqual(expressway_summary["unknown_expressway_count"], 1)
+        for key in ("base_score", "diversity_bonus", "context_bonus", "penalty"):
+            with self.subTest(key=key):
+                self.assertEqual(
+                    expressway_breakdown[key],
+                    empty_breakdown[key],
+                )
 
     def test_build_feature_summary_does_not_count_road_when_area_ratio_is_too_large(
         self,
@@ -1934,6 +2435,19 @@ class DetermineInitialScoreForGridCellTests(TestCase):
                 "surface_railway_count": 0,
                 "underground_railway_count": 0,
                 "unknown_railway_count": 0,
+                "railway_station_count": 0,
+                "railway_halt_count": 0,
+                "subway_station_count": 0,
+                "bus_station_count": 0,
+                "public_transport_station_count": 0,
+                "unknown_station_count": 0,
+                "station_cluster_count": 0,
+                "dense_station_cluster_count": 0,
+                "motorway_count": 0,
+                "motorway_link_count": 0,
+                "trunk_count": 0,
+                "trunk_link_count": 0,
+                "unknown_expressway_count": 0,
                 "has_park": False,
                 "has_river": False,
                 "is_coastal": False,
@@ -2051,6 +2565,19 @@ class DetermineInitialScoreForGridCellTests(TestCase):
                 "surface_railway_count": 0,
                 "underground_railway_count": 0,
                 "unknown_railway_count": 0,
+                "railway_station_count": 0,
+                "railway_halt_count": 0,
+                "subway_station_count": 0,
+                "bus_station_count": 0,
+                "public_transport_station_count": 0,
+                "unknown_station_count": 0,
+                "station_cluster_count": 0,
+                "dense_station_cluster_count": 0,
+                "motorway_count": 0,
+                "motorway_link_count": 0,
+                "trunk_count": 0,
+                "trunk_link_count": 0,
+                "unknown_expressway_count": 0,
                 "has_park": False,
                 "has_river": False,
                 "is_coastal": False,
@@ -2247,6 +2774,19 @@ class DetermineInitialScoreForGridCellTests(TestCase):
                 "surface_railway_count": 0,
                 "underground_railway_count": 0,
                 "unknown_railway_count": 0,
+                "railway_station_count": 0,
+                "railway_halt_count": 0,
+                "subway_station_count": 0,
+                "bus_station_count": 0,
+                "public_transport_station_count": 0,
+                "unknown_station_count": 0,
+                "station_cluster_count": 0,
+                "dense_station_cluster_count": 0,
+                "motorway_count": 0,
+                "motorway_link_count": 0,
+                "trunk_count": 0,
+                "trunk_link_count": 0,
+                "unknown_expressway_count": 0,
                 "has_park": False,
                 "has_river": False,
                 "is_coastal": False,
@@ -2463,6 +3003,859 @@ class DetermineInitialScoreForGridCellTests(TestCase):
                         grid_cell_contexts,
                         map_features,
                     )
+
+    def test_summarize_station_feature_matches_returns_zero_without_station(self):
+        station_summary = summarize_station_feature_matches_for_grid_cell_contexts(
+            [
+                {
+                    "row_index": 0,
+                    "col_index": 0,
+                    "north": 10.0,
+                    "south": 9.0,
+                    "east": 20.0,
+                    "west": 19.0,
+                },
+            ],
+            [
+                {
+                    "kind": "building",
+                    "bounds": {
+                        "north": 9.9,
+                        "south": 9.8,
+                        "east": 19.2,
+                        "west": 19.1,
+                    },
+                },
+            ],
+        )
+
+        self.assertEqual(
+            station_summary,
+            {
+                "station_features": 0,
+                "railway_station_features": 0,
+                "railway_halt_features": 0,
+                "subway_station_features": 0,
+                "bus_station_features": 0,
+                "public_transport_station_features": 0,
+                "unknown_station_features": 0,
+                "station_cells": 0,
+                "railway_station_cells": 0,
+                "railway_halt_cells": 0,
+                "subway_station_cells": 0,
+                "bus_station_cells": 0,
+                "public_transport_station_cells": 0,
+                "unknown_station_cells": 0,
+                "station_cluster_cells": 0,
+                "dense_station_cluster_cells": 0,
+                "major_station_cluster_cells": 0,
+                "station_cluster_count_avg": 0.0,
+                "station_cluster_count_max": 0,
+                "dense_station_cluster_count_max": 0,
+                "major_station_cluster_count_max": 0,
+            },
+        )
+
+    def test_summarize_station_feature_matches_counts_features_and_cells(self):
+        grid_cell_contexts = [
+            {
+                "row_index": 0,
+                "col_index": 0,
+                "north": 10.0,
+                "south": 9.0,
+                "east": 20.0,
+                "west": 19.0,
+            },
+            {
+                "row_index": 0,
+                "col_index": 1,
+                "north": 10.0,
+                "south": 9.0,
+                "east": 21.0,
+                "west": 20.0,
+            },
+        ]
+        map_features = [
+            {
+                "kind": "station",
+                "source_railway": "station",
+                "bounds": {
+                    "north": 9.8,
+                    "south": 9.2,
+                    "east": 20.2,
+                    "west": 19.8,
+                },
+            },
+            {
+                "kind": "station",
+                "source_railway": "halt",
+                "bounds": {
+                    "north": 9.7,
+                    "south": 9.3,
+                    "east": 20.8,
+                    "west": 20.2,
+                },
+            },
+            {
+                "kind": "station",
+                "source_station": "subway",
+                "bounds": {
+                    "north": 9.6,
+                    "south": 9.4,
+                    "east": 19.7,
+                    "west": 19.3,
+                },
+            },
+            {
+                "kind": "station",
+                "source_amenity": "bus_station",
+                "bounds": {
+                    "north": 9.6,
+                    "south": 9.4,
+                    "east": 20.7,
+                    "west": 20.3,
+                },
+            },
+            {
+                "kind": "station",
+                "source_public_transport": "station",
+                "bounds": {
+                    "north": 8.8,
+                    "south": 8.6,
+                    "east": 19.7,
+                    "west": 19.3,
+                },
+            },
+            {
+                "kind": "station",
+                "bounds": {
+                    "north": 9.5,
+                    "south": 9.4,
+                    "east": 19.7,
+                    "west": 19.3,
+                },
+            },
+        ]
+
+        station_summary = summarize_station_feature_matches_for_grid_cell_contexts(
+            grid_cell_contexts,
+            map_features,
+        )
+
+        self.assertEqual(station_summary["station_features"], 6)
+        self.assertEqual(station_summary["railway_station_features"], 1)
+        self.assertEqual(station_summary["railway_halt_features"], 1)
+        self.assertEqual(station_summary["subway_station_features"], 1)
+        self.assertEqual(station_summary["bus_station_features"], 1)
+        self.assertEqual(station_summary["public_transport_station_features"], 1)
+        self.assertEqual(station_summary["unknown_station_features"], 1)
+        self.assertEqual(station_summary["station_cells"], 2)
+        self.assertEqual(station_summary["railway_station_cells"], 2)
+        self.assertEqual(station_summary["railway_halt_cells"], 1)
+        self.assertEqual(station_summary["subway_station_cells"], 1)
+        self.assertEqual(station_summary["bus_station_cells"], 1)
+        self.assertEqual(station_summary["public_transport_station_cells"], 0)
+        self.assertEqual(station_summary["unknown_station_cells"], 1)
+        self.assertEqual(station_summary["station_cluster_cells"], 0)
+        self.assertEqual(station_summary["dense_station_cluster_cells"], 0)
+        self.assertEqual(station_summary["major_station_cluster_cells"], 0)
+        self.assertEqual(station_summary["station_cluster_count_avg"], 0.0)
+        self.assertEqual(station_summary["station_cluster_count_max"], 0)
+        self.assertEqual(station_summary["dense_station_cluster_count_max"], 0)
+        self.assertEqual(station_summary["major_station_cluster_count_max"], 0)
+
+    def test_summarize_station_feature_matches_logs_center_distance_clusters(self):
+        center_lat = 9.5
+        center_lng = 19.5
+        station_step = 100 / METERS_PER_DEGREE
+        grid_cell_contexts = [
+            {
+                "row_index": 0,
+                "col_index": 0,
+                "north": 10.0,
+                "south": 9.0,
+                "east": 20.0,
+                "west": 19.0,
+            },
+        ]
+
+        def station_bounds(lat_offset):
+            center = center_lat + lat_offset
+            return {
+                "north": center + 0.0001,
+                "south": center - 0.0001,
+                "east": center_lng + 0.0001,
+                "west": center_lng - 0.0001,
+            }
+
+        map_features = [
+            {
+                "kind": "station",
+                "source_railway": "station",
+                "bounds": station_bounds(0),
+            },
+            {
+                "kind": "station",
+                "source_railway": "halt",
+                "bounds": station_bounds(station_step),
+            },
+            {
+                "kind": "station",
+                "source_station": "subway",
+                "bounds": station_bounds(station_step * 2),
+            },
+            {
+                "kind": "station",
+                "source_public_transport": "station",
+                "bounds": station_bounds(station_step * 3),
+            },
+            {
+                "kind": "station",
+                "source_amenity": "bus_station",
+                "bounds": station_bounds(station_step * 4),
+            },
+            {
+                "kind": "station",
+                "bounds": station_bounds(station_step * 5),
+            },
+        ]
+
+        station_summary = summarize_station_feature_matches_for_grid_cell_contexts(
+            grid_cell_contexts,
+            map_features,
+        )
+
+        self.assertEqual(station_summary["station_cluster_cells"], 1)
+        self.assertEqual(station_summary["dense_station_cluster_cells"], 1)
+        self.assertEqual(station_summary["major_station_cluster_cells"], 1)
+        self.assertEqual(station_summary["station_cluster_count_avg"], 4.0)
+        self.assertEqual(station_summary["station_cluster_count_max"], 4)
+        self.assertEqual(station_summary["dense_station_cluster_count_max"], 4)
+        self.assertEqual(station_summary["major_station_cluster_count_max"], 4)
+
+    def test_summarize_station_feature_matches_excludes_unscored_station_clusters(
+        self,
+    ):
+        center_lat = 9.5
+        center_lng = 19.5
+        station_step = 100 / METERS_PER_DEGREE
+
+        def station_bounds(lat_offset):
+            center = center_lat + lat_offset
+            return {
+                "north": center + 0.0001,
+                "south": center - 0.0001,
+                "east": center_lng + 0.0001,
+                "west": center_lng - 0.0001,
+            }
+
+        station_summary = summarize_station_feature_matches_for_grid_cell_contexts(
+            [
+                {
+                    "row_index": 0,
+                    "col_index": 0,
+                    "north": 10.0,
+                    "south": 9.0,
+                    "east": 20.0,
+                    "west": 19.0,
+                },
+            ],
+            [
+                {
+                    "kind": "station",
+                    "source_amenity": "bus_station",
+                    "bounds": station_bounds(0),
+                },
+                {
+                    "kind": "station",
+                    "bounds": station_bounds(station_step),
+                },
+            ],
+        )
+
+        self.assertEqual(station_summary["station_cluster_cells"], 0)
+        self.assertEqual(station_summary["dense_station_cluster_cells"], 0)
+        self.assertEqual(station_summary["major_station_cluster_cells"], 0)
+        self.assertEqual(station_summary["station_cluster_count_max"], 0)
+        self.assertEqual(station_summary["dense_station_cluster_count_max"], 0)
+        self.assertEqual(station_summary["major_station_cluster_count_max"], 0)
+
+    def test_summarize_expressway_feature_matches_returns_zero_without_expressway(
+        self,
+    ):
+        expressway_summary = (
+            summarize_expressway_feature_matches_for_grid_cell_contexts(
+                [
+                    {
+                        "row_index": 0,
+                        "col_index": 0,
+                        "north": 10.0,
+                        "south": 9.0,
+                        "east": 20.0,
+                        "west": 19.0,
+                    },
+                ],
+                [
+                    {
+                        "kind": "road",
+                        "bounds": {
+                            "north": 9.9,
+                            "south": 9.8,
+                            "east": 19.2,
+                            "west": 19.1,
+                        },
+                    },
+                ],
+            )
+        )
+
+        self.assertEqual(
+            expressway_summary,
+            {
+                "expressway_features": 0,
+                "motorway_features": 0,
+                "motorway_link_features": 0,
+                "trunk_features": 0,
+                "trunk_link_features": 0,
+                "unknown_expressway_features": 0,
+                "expressway_cells": 0,
+                "motorway_cells": 0,
+                "motorway_link_cells": 0,
+                "trunk_cells": 0,
+                "trunk_link_cells": 0,
+                "unknown_expressway_cells": 0,
+            },
+        )
+
+    def test_summarize_expressway_feature_matches_counts_features_and_cells(self):
+        grid_cell_contexts = [
+            {
+                "row_index": 0,
+                "col_index": 0,
+                "north": 10.0,
+                "south": 9.0,
+                "east": 20.0,
+                "west": 19.0,
+            },
+            {
+                "row_index": 0,
+                "col_index": 1,
+                "north": 10.0,
+                "south": 9.0,
+                "east": 21.0,
+                "west": 20.0,
+            },
+        ]
+        map_features = [
+            {
+                "kind": "expressway",
+                "source_highway": "motorway",
+                "bounds": {
+                    "north": 9.8,
+                    "south": 9.2,
+                    "east": 20.2,
+                    "west": 19.8,
+                },
+            },
+            {
+                "kind": "expressway",
+                "source_highway": "motorway_link",
+                "bounds": {
+                    "north": 9.7,
+                    "south": 9.3,
+                    "east": 20.8,
+                    "west": 20.2,
+                },
+            },
+            {
+                "kind": "expressway",
+                "source_highway": "trunk",
+                "bounds": {
+                    "north": 9.6,
+                    "south": 9.4,
+                    "east": 19.7,
+                    "west": 19.3,
+                },
+            },
+            {
+                "kind": "expressway",
+                "source_highway": "trunk_link",
+                "bounds": {
+                    "north": 9.6,
+                    "south": 9.4,
+                    "east": 20.7,
+                    "west": 20.3,
+                },
+            },
+            {
+                "kind": "expressway",
+                "source_highway": "residential",
+                "bounds": {
+                    "north": 9.5,
+                    "south": 9.4,
+                    "east": 19.7,
+                    "west": 19.3,
+                },
+            },
+        ]
+
+        expressway_summary = (
+            summarize_expressway_feature_matches_for_grid_cell_contexts(
+                grid_cell_contexts,
+                map_features,
+            )
+        )
+
+        self.assertEqual(expressway_summary["expressway_features"], 5)
+        self.assertEqual(expressway_summary["motorway_features"], 1)
+        self.assertEqual(expressway_summary["motorway_link_features"], 1)
+        self.assertEqual(expressway_summary["trunk_features"], 1)
+        self.assertEqual(expressway_summary["trunk_link_features"], 1)
+        self.assertEqual(expressway_summary["unknown_expressway_features"], 1)
+        self.assertEqual(expressway_summary["expressway_cells"], 2)
+        self.assertEqual(expressway_summary["motorway_cells"], 2)
+        self.assertEqual(expressway_summary["motorway_link_cells"], 1)
+        self.assertEqual(expressway_summary["trunk_cells"], 1)
+        self.assertEqual(expressway_summary["trunk_link_cells"], 1)
+        self.assertEqual(expressway_summary["unknown_expressway_cells"], 1)
+
+    def test_summarize_expressway_bounds_returns_zero_without_expressway(self):
+        bounds_summary = summarize_expressway_bounds_for_grid_cell_contexts(
+            [
+                {
+                    "row_index": 0,
+                    "col_index": 0,
+                    "north": 10.0,
+                    "south": 9.0,
+                    "east": 20.0,
+                    "west": 19.0,
+                },
+            ],
+            [
+                {
+                    "kind": "road",
+                    "bounds": {
+                        "north": 9.9,
+                        "south": 9.8,
+                        "east": 19.2,
+                        "west": 19.1,
+                    },
+                },
+            ],
+        )
+
+        self.assertEqual(
+            bounds_summary,
+            {
+                "expressway_features": 0,
+                "expressway_cells": 0,
+                "expressway_avg_overlap": 0.0,
+                "expressway_max_overlap": 0.0,
+                "expressway_large_bounds_features": 0,
+                "expressway_large_bounds_cells": 0,
+                "motorway_features": 0,
+                "motorway_cells": 0,
+                "motorway_avg_overlap": 0.0,
+                "motorway_max_overlap": 0.0,
+                "motorway_link_features": 0,
+                "motorway_link_cells": 0,
+                "motorway_link_avg_overlap": 0.0,
+                "motorway_link_max_overlap": 0.0,
+                "trunk_features": 0,
+                "trunk_cells": 0,
+                "trunk_avg_overlap": 0.0,
+                "trunk_max_overlap": 0.0,
+                "trunk_link_features": 0,
+                "trunk_link_cells": 0,
+                "trunk_link_avg_overlap": 0.0,
+                "trunk_link_max_overlap": 0.0,
+                "unknown_expressway_features": 0,
+                "unknown_expressway_cells": 0,
+                "unknown_expressway_avg_overlap": 0.0,
+                "unknown_expressway_max_overlap": 0.0,
+            },
+        )
+
+    def test_summarize_expressway_bounds_counts_overlap_and_large_bounds(self):
+        grid_cell_contexts = [
+            {
+                "row_index": 0,
+                "col_index": 0,
+                "north": 10.0,
+                "south": 9.0,
+                "east": 20.0,
+                "west": 19.0,
+            },
+            {
+                "row_index": 0,
+                "col_index": 1,
+                "north": 10.0,
+                "south": 9.0,
+                "east": 21.0,
+                "west": 20.0,
+            },
+        ]
+        map_features = [
+            {
+                "kind": "expressway",
+                "source_highway": "motorway",
+                "bounds": {
+                    "north": 10.0,
+                    "south": 9.0,
+                    "east": 20.5,
+                    "west": 19.5,
+                },
+            },
+            {
+                "kind": "expressway",
+                "source_highway": "motorway",
+                "bounds": {
+                    "north": 15.5,
+                    "south": 4.5,
+                    "east": 19.1,
+                    "west": 18.9,
+                },
+            },
+            {
+                "kind": "expressway",
+                "source_highway": "motorway_link",
+                "bounds": {
+                    "north": 9.5,
+                    "south": 9.0,
+                    "east": 20.5,
+                    "west": 20.0,
+                },
+            },
+            {
+                "kind": "expressway",
+                "source_highway": "trunk",
+                "bounds": {
+                    "north": 9.5,
+                    "south": 9.0,
+                    "east": 19.5,
+                    "west": 19.0,
+                },
+            },
+            {
+                "kind": "expressway",
+                "source_highway": "trunk_link",
+                "bounds": {
+                    "north": 9.5,
+                    "south": 9.0,
+                    "east": 20.4,
+                    "west": 20.0,
+                },
+            },
+            {
+                "kind": "expressway",
+                "source_highway": "residential",
+                "bounds": {
+                    "north": 9.2,
+                    "south": 9.1,
+                    "east": 19.2,
+                    "west": 19.1,
+                },
+            },
+        ]
+
+        bounds_summary = summarize_expressway_bounds_for_grid_cell_contexts(
+            grid_cell_contexts,
+            map_features,
+        )
+
+        self.assertEqual(bounds_summary["expressway_features"], 6)
+        self.assertEqual(bounds_summary["expressway_cells"], 2)
+        self.assertAlmostEqual(bounds_summary["expressway_avg_overlap"], 0.5)
+        self.assertAlmostEqual(bounds_summary["expressway_max_overlap"], 0.5)
+        self.assertEqual(bounds_summary["expressway_large_bounds_features"], 1)
+        self.assertEqual(bounds_summary["expressway_large_bounds_cells"], 1)
+        self.assertEqual(bounds_summary["motorway_features"], 2)
+        self.assertEqual(bounds_summary["motorway_cells"], 2)
+        self.assertAlmostEqual(bounds_summary["motorway_avg_overlap"], 0.5)
+        self.assertAlmostEqual(bounds_summary["motorway_max_overlap"], 0.5)
+        self.assertEqual(bounds_summary["motorway_link_features"], 1)
+        self.assertEqual(bounds_summary["motorway_link_cells"], 1)
+        self.assertAlmostEqual(bounds_summary["motorway_link_avg_overlap"], 0.25)
+        self.assertAlmostEqual(bounds_summary["motorway_link_max_overlap"], 0.25)
+        self.assertEqual(bounds_summary["trunk_features"], 1)
+        self.assertEqual(bounds_summary["trunk_cells"], 1)
+        self.assertAlmostEqual(bounds_summary["trunk_avg_overlap"], 0.25)
+        self.assertAlmostEqual(bounds_summary["trunk_max_overlap"], 0.25)
+        self.assertEqual(bounds_summary["trunk_link_features"], 1)
+        self.assertEqual(bounds_summary["trunk_link_cells"], 1)
+        self.assertAlmostEqual(bounds_summary["trunk_link_avg_overlap"], 0.2)
+        self.assertAlmostEqual(bounds_summary["trunk_link_max_overlap"], 0.2)
+        self.assertEqual(bounds_summary["unknown_expressway_features"], 1)
+        self.assertEqual(bounds_summary["unknown_expressway_cells"], 1)
+        self.assertAlmostEqual(
+            bounds_summary["unknown_expressway_avg_overlap"],
+            0.01,
+        )
+        self.assertAlmostEqual(
+            bounds_summary["unknown_expressway_max_overlap"],
+            0.01,
+        )
+
+    def test_summarize_expressway_bounds_invalid_input_raises_value_error(self):
+        valid_context = {
+            "row_index": 0,
+            "col_index": 0,
+            "north": 10.0,
+            "south": 9.0,
+            "east": 20.0,
+            "west": 19.0,
+        }
+        valid_feature = {
+            "kind": "expressway",
+            "source_highway": "motorway",
+            "bounds": {
+                "north": 9.9,
+                "south": 9.8,
+                "east": 19.2,
+                "west": 19.1,
+            },
+        }
+        invalid_inputs = (
+            (None, []),
+            ([None], []),
+            ([{**valid_context, "north": 9.0}], []),
+            ([valid_context], None),
+            ([valid_context], [None]),
+            ([valid_context], [{**valid_feature, "bounds": None}]),
+        )
+
+        for grid_cell_contexts, map_features in invalid_inputs:
+            with self.subTest(
+                grid_cell_contexts=grid_cell_contexts,
+                map_features=map_features,
+            ):
+                with self.assertRaises(ValueError):
+                    summarize_expressway_bounds_for_grid_cell_contexts(
+                        grid_cell_contexts,
+                        map_features,
+                    )
+
+    def test_summarize_effective_expressway_returns_zero_without_expressway(self):
+        summary = summarize_effective_expressway_feature_matches_for_grid_cell_contexts(
+            [
+                {
+                    "row_index": 0,
+                    "col_index": 0,
+                    "north": 10.0,
+                    "south": 9.0,
+                    "east": 20.0,
+                    "west": 19.0,
+                },
+            ],
+            [],
+        )
+
+        self.assertEqual(summary["effective_expressway_features"], 0)
+        self.assertEqual(summary["effective_expressway_cells"], 0)
+        self.assertEqual(summary["effective_expressway_avg_overlap"], 0.0)
+        self.assertEqual(summary["effective_motorway_features"], 0)
+        self.assertEqual(summary["filtered_expressway_large_bounds_features"], 0)
+        self.assertEqual(summary["filtered_expressway_large_bounds_cells"], 0)
+
+    def test_summarize_effective_expressway_excludes_large_bounds(self):
+        grid_cell_contexts = [
+            {
+                "row_index": 0,
+                "col_index": 0,
+                "north": 10.0,
+                "south": 9.0,
+                "east": 20.0,
+                "west": 19.0,
+            },
+            {
+                "row_index": 0,
+                "col_index": 1,
+                "north": 10.0,
+                "south": 9.0,
+                "east": 21.0,
+                "west": 20.0,
+            },
+        ]
+        map_features = [
+            {
+                "kind": "expressway",
+                "source_highway": "motorway",
+                "bounds": {
+                    "north": 10.0,
+                    "south": 9.0,
+                    "east": 20.5,
+                    "west": 19.5,
+                },
+            },
+            {
+                "kind": "expressway",
+                "source_highway": "motorway",
+                "bounds": {
+                    "north": 15.5,
+                    "south": 4.5,
+                    "east": 19.1,
+                    "west": 18.9,
+                },
+            },
+            {
+                "kind": "expressway",
+                "source_highway": "trunk",
+                "bounds": {
+                    "north": 9.5,
+                    "south": 9.0,
+                    "east": 19.5,
+                    "west": 19.0,
+                },
+            },
+        ]
+
+        summary = summarize_effective_expressway_feature_matches_for_grid_cell_contexts(
+            grid_cell_contexts,
+            map_features,
+        )
+
+        self.assertEqual(summary["effective_expressway_features"], 2)
+        self.assertEqual(summary["effective_expressway_cells"], 2)
+        self.assertAlmostEqual(summary["effective_expressway_avg_overlap"], 0.5)
+        self.assertAlmostEqual(summary["effective_expressway_max_overlap"], 0.5)
+        self.assertEqual(summary["effective_motorway_features"], 1)
+        self.assertEqual(summary["effective_motorway_cells"], 2)
+        self.assertAlmostEqual(summary["effective_motorway_avg_overlap"], 0.5)
+        self.assertEqual(summary["effective_trunk_features"], 1)
+        self.assertEqual(summary["effective_trunk_cells"], 1)
+        self.assertAlmostEqual(summary["effective_trunk_avg_overlap"], 0.25)
+        self.assertEqual(summary["filtered_expressway_large_bounds_features"], 1)
+        self.assertEqual(summary["filtered_expressway_large_bounds_cells"], 1)
+
+    def test_summarize_effective_expressway_invalid_input_raises_value_error(self):
+        valid_context = {
+            "row_index": 0,
+            "col_index": 0,
+            "north": 10.0,
+            "south": 9.0,
+            "east": 20.0,
+            "west": 19.0,
+        }
+        valid_feature = {
+            "kind": "expressway",
+            "source_highway": "motorway",
+            "bounds": {
+                "north": 9.9,
+                "south": 9.8,
+                "east": 19.2,
+                "west": 19.1,
+            },
+        }
+
+        for grid_cell_contexts, map_features in (
+            (None, []),
+            ([None], []),
+            ([valid_context], None),
+            ([valid_context], [None]),
+            ([valid_context], [{**valid_feature, "bounds": None}]),
+        ):
+            with self.subTest(
+                grid_cell_contexts=grid_cell_contexts,
+                map_features=map_features,
+            ):
+                with self.assertRaises(ValueError):
+                    summarize_effective_expressway_feature_matches_for_grid_cell_contexts(
+                        grid_cell_contexts,
+                        map_features,
+                    )
+
+    def test_summarize_station_and_expressway_feature_matches_invalid_input_raises_value_error(
+        self,
+    ):
+        valid_context = {
+            "row_index": 0,
+            "col_index": 0,
+            "north": 10.0,
+            "south": 9.0,
+            "east": 20.0,
+            "west": 19.0,
+        }
+        valid_station_feature = {
+            "kind": "station",
+            "source_railway": "station",
+            "bounds": {
+                "north": 9.9,
+                "south": 9.8,
+                "east": 19.2,
+                "west": 19.1,
+            },
+        }
+        valid_expressway_feature = {
+            "kind": "expressway",
+            "source_highway": "motorway",
+            "bounds": {
+                "north": 9.9,
+                "south": 9.8,
+                "east": 19.2,
+                "west": 19.1,
+            },
+        }
+        test_cases = (
+            (
+                summarize_station_feature_matches_for_grid_cell_contexts,
+                None,
+                [],
+            ),
+            (
+                summarize_station_feature_matches_for_grid_cell_contexts,
+                [None],
+                [],
+            ),
+            (
+                summarize_station_feature_matches_for_grid_cell_contexts,
+                [valid_context],
+                None,
+            ),
+            (
+                summarize_station_feature_matches_for_grid_cell_contexts,
+                [valid_context],
+                [None],
+            ),
+            (
+                summarize_station_feature_matches_for_grid_cell_contexts,
+                [valid_context],
+                [{**valid_station_feature, "bounds": None}],
+            ),
+            (
+                summarize_expressway_feature_matches_for_grid_cell_contexts,
+                None,
+                [],
+            ),
+            (
+                summarize_expressway_feature_matches_for_grid_cell_contexts,
+                [None],
+                [],
+            ),
+            (
+                summarize_expressway_feature_matches_for_grid_cell_contexts,
+                [valid_context],
+                None,
+            ),
+            (
+                summarize_expressway_feature_matches_for_grid_cell_contexts,
+                [valid_context],
+                [None],
+            ),
+            (
+                summarize_expressway_feature_matches_for_grid_cell_contexts,
+                [valid_context],
+                [{**valid_expressway_feature, "bounds": None}],
+            ),
+        )
+
+        for summary_function, grid_cell_contexts, map_features in test_cases:
+            with self.subTest(
+                summary_function=summary_function.__name__,
+                grid_cell_contexts=grid_cell_contexts,
+                map_features=map_features,
+            ):
+                with self.assertRaises(ValueError):
+                    summary_function(grid_cell_contexts, map_features)
 
     def test_summarize_river_feature_matches_counts_normal_river_overlap(self):
         river_summary = summarize_river_feature_matches_for_grid_cell_contexts(
@@ -3269,6 +4662,20 @@ class DetermineInitialScoreForGridCellTests(TestCase):
             "raw_score",
             "clamped_score",
             "feature_category_count",
+            "surface_railway_count",
+            "underground_railway_count",
+            "unknown_railway_count",
+            "railway_station_count",
+            "railway_halt_count",
+            "subway_station_count",
+            "bus_station_count",
+            "public_transport_station_count",
+            "unknown_station_count",
+            "motorway_count",
+            "motorway_link_count",
+            "trunk_count",
+            "trunk_link_count",
+            "unknown_expressway_count",
             "has_building",
             "has_road",
             "has_park",
@@ -3280,6 +4687,24 @@ class DetermineInitialScoreForGridCellTests(TestCase):
             "has_river_context",
             "has_forest_context",
             "has_coastal_context",
+            "has_surface_railway_context",
+            "surface_railway_context_bonus",
+            "has_surface_station_context",
+            "surface_station_context_bonus",
+            "has_subway_station_context",
+            "subway_station_context_bonus",
+            "has_public_transport_station_context",
+            "public_transport_station_context_bonus",
+            "scored_station_count",
+            "station_cluster_count",
+            "dense_station_cluster_count",
+            "station_density_bonus",
+            "has_dense_station_cluster_context",
+            "has_major_station_cluster_context",
+            "has_motorway_context",
+            "motorway_context_bonus",
+            "has_trunk_context",
+            "trunk_context_bonus",
             "is_likely_unreachable_water_cell",
             "has_waterfront_context",
             "has_water_penalty",
@@ -3366,6 +4791,511 @@ class DetermineInitialScoreForGridCellTests(TestCase):
         self.assertAlmostEqual(
             max_building_breakdown["base_score"],
             BASE_INITIAL_SCORE + BUILDING_BASE_SCORE_MAX_BONUS,
+        )
+
+    def test_feature_summary_breakdown_adds_surface_railway_context_bonus(self):
+        without_railway = calculate_initial_score_breakdown_from_feature_summary({})
+        with_surface_railway = calculate_initial_score_breakdown_from_feature_summary(
+            {"surface_railway_count": 1}
+        )
+
+        self.assertTrue(with_surface_railway["has_surface_railway_context"])
+        self.assertEqual(
+            with_surface_railway["surface_railway_context_bonus"],
+            SURFACE_RAILWAY_CONTEXT_BONUS,
+        )
+        self.assertAlmostEqual(
+            with_surface_railway["context_bonus"],
+            without_railway["context_bonus"] + SURFACE_RAILWAY_CONTEXT_BONUS,
+        )
+        self.assertGreater(
+            calculate_initial_score_from_feature_summary(
+                {"building_count": 1, "surface_railway_count": 1}
+            ),
+            calculate_initial_score_from_feature_summary({"building_count": 1}),
+        )
+
+    def test_feature_summary_breakdown_surface_railway_does_not_affect_other_factors(
+        self,
+    ):
+        without_railway = calculate_initial_score_breakdown_from_feature_summary({})
+        with_surface_railway = calculate_initial_score_breakdown_from_feature_summary(
+            {"surface_railway_count": 1}
+        )
+
+        for key in ("base_score", "diversity_bonus", "penalty"):
+            with self.subTest(key=key):
+                self.assertEqual(with_surface_railway[key], without_railway[key])
+
+    def test_feature_summary_breakdown_ignores_underground_and_unknown_railways(self):
+        without_railway = calculate_initial_score_breakdown_from_feature_summary({})
+        with_underground_railway = (
+            calculate_initial_score_breakdown_from_feature_summary(
+                {"underground_railway_count": 1}
+            )
+        )
+        with_unknown_railway = calculate_initial_score_breakdown_from_feature_summary(
+            {"unknown_railway_count": 1}
+        )
+
+        self.assertFalse(with_underground_railway["has_surface_railway_context"])
+        self.assertFalse(with_unknown_railway["has_surface_railway_context"])
+        self.assertEqual(
+            with_underground_railway["surface_railway_context_bonus"],
+            0.0,
+        )
+        self.assertEqual(with_unknown_railway["surface_railway_context_bonus"], 0.0)
+        self.assertEqual(
+            with_underground_railway["clamped_score"],
+            without_railway["clamped_score"],
+        )
+        self.assertEqual(
+            with_unknown_railway["clamped_score"],
+            without_railway["clamped_score"],
+        )
+
+    def test_feature_summary_breakdown_keeps_old_summary_without_railway_counts(self):
+        breakdown = calculate_initial_score_breakdown_from_feature_summary(
+            {"building_count": 1}
+        )
+
+        self.assertEqual(breakdown["surface_railway_count"], 0.0)
+        self.assertEqual(breakdown["underground_railway_count"], 0.0)
+        self.assertEqual(breakdown["unknown_railway_count"], 0.0)
+        self.assertEqual(breakdown["railway_station_count"], 0.0)
+        self.assertEqual(breakdown["railway_halt_count"], 0.0)
+        self.assertEqual(breakdown["subway_station_count"], 0.0)
+        self.assertEqual(breakdown["bus_station_count"], 0.0)
+        self.assertEqual(breakdown["public_transport_station_count"], 0.0)
+        self.assertEqual(breakdown["unknown_station_count"], 0.0)
+        self.assertEqual(breakdown["motorway_count"], 0.0)
+        self.assertEqual(breakdown["motorway_link_count"], 0.0)
+        self.assertEqual(breakdown["trunk_count"], 0.0)
+        self.assertEqual(breakdown["trunk_link_count"], 0.0)
+        self.assertEqual(breakdown["unknown_expressway_count"], 0.0)
+        self.assertFalse(breakdown["has_surface_railway_context"])
+        self.assertFalse(breakdown["has_surface_station_context"])
+        self.assertEqual(breakdown["surface_station_context_bonus"], 0.0)
+        self.assertFalse(breakdown["has_subway_station_context"])
+        self.assertEqual(breakdown["subway_station_context_bonus"], 0.0)
+        self.assertFalse(breakdown["has_public_transport_station_context"])
+        self.assertEqual(breakdown["public_transport_station_context_bonus"], 0.0)
+        self.assertEqual(breakdown["scored_station_count"], 0.0)
+        self.assertEqual(breakdown["station_cluster_count"], 0.0)
+        self.assertEqual(breakdown["dense_station_cluster_count"], 0.0)
+        self.assertEqual(breakdown["station_density_bonus"], 0.0)
+        self.assertFalse(breakdown["has_dense_station_cluster_context"])
+        self.assertFalse(breakdown["has_major_station_cluster_context"])
+        self.assertFalse(breakdown["has_motorway_context"])
+        self.assertEqual(breakdown["motorway_context_bonus"], 0.0)
+        self.assertFalse(breakdown["has_trunk_context"])
+        self.assertEqual(breakdown["trunk_context_bonus"], 0.0)
+
+    def test_feature_summary_breakdown_adds_surface_station_context_bonus(self):
+        without_station = calculate_initial_score_breakdown_from_feature_summary({})
+        station_count_keys = (
+            "railway_station_count",
+            "railway_halt_count",
+        )
+
+        for station_count_key in station_count_keys:
+            with self.subTest(station_count_key=station_count_key):
+                with_station = (
+                    calculate_initial_score_breakdown_from_feature_summary(
+                        {station_count_key: 1}
+                    )
+                )
+
+                self.assertTrue(with_station["has_surface_station_context"])
+                self.assertFalse(with_station["has_subway_station_context"])
+                self.assertFalse(
+                    with_station["has_public_transport_station_context"]
+                )
+                self.assertEqual(
+                    with_station["surface_station_context_bonus"],
+                    SURFACE_STATION_CONTEXT_BONUS,
+                )
+                self.assertEqual(
+                    with_station["subway_station_context_bonus"],
+                    0.0,
+                )
+                self.assertEqual(
+                    with_station["public_transport_station_context_bonus"],
+                    0.0,
+                )
+                self.assertAlmostEqual(
+                    with_station["context_bonus"],
+                    without_station["context_bonus"]
+                    + SURFACE_STATION_CONTEXT_BONUS,
+                )
+                self.assertGreater(
+                    calculate_initial_score_from_feature_summary(
+                        {"building_count": 1, station_count_key: 1}
+                    ),
+                    calculate_initial_score_from_feature_summary(
+                        {"building_count": 1}
+                    ),
+                )
+
+    def test_feature_summary_breakdown_adds_subway_station_context_bonus(self):
+        without_station = calculate_initial_score_breakdown_from_feature_summary({})
+        with_subway_station = calculate_initial_score_breakdown_from_feature_summary(
+            {"subway_station_count": 1}
+        )
+
+        self.assertFalse(with_subway_station["has_surface_station_context"])
+        self.assertTrue(with_subway_station["has_subway_station_context"])
+        self.assertFalse(
+            with_subway_station["has_public_transport_station_context"]
+        )
+        self.assertEqual(with_subway_station["surface_station_context_bonus"], 0.0)
+        self.assertEqual(
+            with_subway_station["subway_station_context_bonus"],
+            SUBWAY_STATION_CONTEXT_BONUS,
+        )
+        self.assertEqual(
+            with_subway_station["public_transport_station_context_bonus"],
+            0.0,
+        )
+        self.assertAlmostEqual(
+            with_subway_station["context_bonus"],
+            without_station["context_bonus"] + SUBWAY_STATION_CONTEXT_BONUS,
+        )
+
+    def test_feature_summary_breakdown_adds_public_transport_station_context_bonus(
+        self,
+    ):
+        without_station = calculate_initial_score_breakdown_from_feature_summary({})
+        with_public_transport_station = (
+            calculate_initial_score_breakdown_from_feature_summary(
+                {"public_transport_station_count": 1}
+            )
+        )
+
+        self.assertFalse(
+            with_public_transport_station["has_surface_station_context"]
+        )
+        self.assertFalse(with_public_transport_station["has_subway_station_context"])
+        self.assertTrue(
+            with_public_transport_station[
+                "has_public_transport_station_context"
+            ]
+        )
+        self.assertEqual(
+            with_public_transport_station["surface_station_context_bonus"],
+            0.0,
+        )
+        self.assertEqual(
+            with_public_transport_station["subway_station_context_bonus"],
+            0.0,
+        )
+        self.assertEqual(
+            with_public_transport_station[
+                "public_transport_station_context_bonus"
+            ],
+            PUBLIC_TRANSPORT_STATION_CONTEXT_BONUS,
+        )
+        self.assertAlmostEqual(
+            with_public_transport_station["context_bonus"],
+            without_station["context_bonus"]
+            + PUBLIC_TRANSPORT_STATION_CONTEXT_BONUS,
+        )
+
+    def test_feature_summary_breakdown_adds_multiple_station_context_bonuses(self):
+        without_station = calculate_initial_score_breakdown_from_feature_summary({})
+        with_station_types = calculate_initial_score_breakdown_from_feature_summary(
+            {
+                "railway_station_count": 1,
+                "subway_station_count": 1,
+                "public_transport_station_count": 1,
+            }
+        )
+
+        self.assertTrue(with_station_types["has_surface_station_context"])
+        self.assertTrue(with_station_types["has_subway_station_context"])
+        self.assertTrue(with_station_types["has_public_transport_station_context"])
+        self.assertEqual(with_station_types["scored_station_count"], 3.0)
+        self.assertEqual(with_station_types["station_cluster_count"], 0.0)
+        self.assertEqual(with_station_types["dense_station_cluster_count"], 0.0)
+        self.assertFalse(with_station_types["has_dense_station_cluster_context"])
+        self.assertFalse(with_station_types["has_major_station_cluster_context"])
+        self.assertEqual(with_station_types["station_density_bonus"], 0.0)
+        self.assertAlmostEqual(
+            with_station_types["context_bonus"],
+            without_station["context_bonus"]
+            + SURFACE_STATION_CONTEXT_BONUS
+            + SUBWAY_STATION_CONTEXT_BONUS
+            + PUBLIC_TRANSPORT_STATION_CONTEXT_BONUS,
+        )
+
+    def test_feature_summary_breakdown_does_not_use_station_count_for_density_bonus(
+        self,
+    ):
+        without_station = calculate_initial_score_breakdown_from_feature_summary({})
+        with_two_stations = calculate_initial_score_breakdown_from_feature_summary(
+            {
+                "railway_station_count": 1,
+                "public_transport_station_count": 1,
+            }
+        )
+
+        self.assertEqual(with_two_stations["scored_station_count"], 2.0)
+        self.assertFalse(with_two_stations["has_dense_station_cluster_context"])
+        self.assertFalse(with_two_stations["has_major_station_cluster_context"])
+        self.assertEqual(with_two_stations["station_density_bonus"], 0.0)
+        self.assertAlmostEqual(
+            with_two_stations["context_bonus"],
+            without_station["context_bonus"]
+            + SURFACE_STATION_CONTEXT_BONUS
+            + PUBLIC_TRANSPORT_STATION_CONTEXT_BONUS,
+        )
+
+    def test_feature_summary_breakdown_adds_dense_station_cluster_density_bonus(
+        self,
+    ):
+        without_station = calculate_initial_score_breakdown_from_feature_summary({})
+        with_dense_cluster = calculate_initial_score_breakdown_from_feature_summary(
+            {
+                "railway_station_count": 1,
+                "dense_station_cluster_count": 2,
+            }
+        )
+
+        self.assertEqual(with_dense_cluster["scored_station_count"], 1.0)
+        self.assertEqual(with_dense_cluster["dense_station_cluster_count"], 2.0)
+        self.assertTrue(with_dense_cluster["has_dense_station_cluster_context"])
+        self.assertFalse(with_dense_cluster["has_major_station_cluster_context"])
+        self.assertEqual(with_dense_cluster["station_density_bonus"], 0.40)
+        self.assertAlmostEqual(
+            with_dense_cluster["context_bonus"],
+            without_station["context_bonus"]
+            + SURFACE_STATION_CONTEXT_BONUS
+            + 0.40,
+        )
+
+    def test_feature_summary_breakdown_adds_major_station_cluster_density_bonus(
+        self,
+    ):
+        without_station = calculate_initial_score_breakdown_from_feature_summary({})
+        with_major_cluster = calculate_initial_score_breakdown_from_feature_summary(
+            {
+                "railway_station_count": 1,
+                "station_cluster_count": 3,
+            }
+        )
+
+        self.assertEqual(with_major_cluster["station_cluster_count"], 3.0)
+        self.assertFalse(with_major_cluster["has_dense_station_cluster_context"])
+        self.assertTrue(with_major_cluster["has_major_station_cluster_context"])
+        self.assertEqual(with_major_cluster["station_density_bonus"], 0.30)
+        self.assertAlmostEqual(
+            with_major_cluster["context_bonus"],
+            without_station["context_bonus"]
+            + SURFACE_STATION_CONTEXT_BONUS
+            + 0.30,
+        )
+
+    def test_feature_summary_breakdown_caps_station_cluster_density_bonus(self):
+        with_station_clusters = calculate_initial_score_breakdown_from_feature_summary(
+            {
+                "railway_station_count": 1,
+                "station_cluster_count": 5,
+                "dense_station_cluster_count": 5,
+            }
+        )
+
+        self.assertTrue(
+            with_station_clusters["has_dense_station_cluster_context"]
+        )
+        self.assertTrue(
+            with_station_clusters["has_major_station_cluster_context"]
+        )
+        self.assertEqual(with_station_clusters["station_density_bonus"], 0.70)
+
+    def test_feature_summary_breakdown_does_not_score_bus_station_context(self):
+        without_station = calculate_initial_score_breakdown_from_feature_summary({})
+        with_bus_station = calculate_initial_score_breakdown_from_feature_summary(
+            {"bus_station_count": 1}
+        )
+
+        self.assertEqual(with_bus_station["bus_station_count"], 1.0)
+        self.assertFalse(with_bus_station["has_surface_station_context"])
+        self.assertFalse(with_bus_station["has_subway_station_context"])
+        self.assertFalse(with_bus_station["has_public_transport_station_context"])
+        self.assertEqual(with_bus_station["surface_station_context_bonus"], 0.0)
+        self.assertEqual(with_bus_station["subway_station_context_bonus"], 0.0)
+        self.assertEqual(
+            with_bus_station["public_transport_station_context_bonus"],
+            0.0,
+        )
+        self.assertEqual(with_bus_station["scored_station_count"], 0.0)
+        self.assertEqual(with_bus_station["station_cluster_count"], 0.0)
+        self.assertEqual(with_bus_station["dense_station_cluster_count"], 0.0)
+        self.assertEqual(with_bus_station["station_density_bonus"], 0.0)
+        self.assertFalse(with_bus_station["has_dense_station_cluster_context"])
+        self.assertFalse(with_bus_station["has_major_station_cluster_context"])
+        self.assertEqual(
+            with_bus_station["clamped_score"],
+            without_station["clamped_score"],
+        )
+
+    def test_feature_summary_breakdown_station_does_not_affect_other_factors(self):
+        without_station = calculate_initial_score_breakdown_from_feature_summary({})
+        with_station = calculate_initial_score_breakdown_from_feature_summary(
+            {"railway_station_count": 1}
+        )
+
+        for key in ("base_score", "diversity_bonus", "penalty"):
+            with self.subTest(key=key):
+                self.assertEqual(with_station[key], without_station[key])
+
+    def test_feature_summary_breakdown_ignores_unknown_station(self):
+        without_station = calculate_initial_score_breakdown_from_feature_summary({})
+        with_unknown_station = calculate_initial_score_breakdown_from_feature_summary(
+            {"unknown_station_count": 1}
+        )
+
+        self.assertFalse(with_unknown_station["has_surface_station_context"])
+        self.assertEqual(with_unknown_station["surface_station_context_bonus"], 0.0)
+        self.assertFalse(with_unknown_station["has_subway_station_context"])
+        self.assertEqual(with_unknown_station["subway_station_context_bonus"], 0.0)
+        self.assertFalse(
+            with_unknown_station["has_public_transport_station_context"]
+        )
+        self.assertEqual(
+            with_unknown_station["public_transport_station_context_bonus"],
+            0.0,
+        )
+        self.assertEqual(with_unknown_station["scored_station_count"], 0.0)
+        self.assertEqual(with_unknown_station["station_cluster_count"], 0.0)
+        self.assertEqual(with_unknown_station["dense_station_cluster_count"], 0.0)
+        self.assertEqual(with_unknown_station["station_density_bonus"], 0.0)
+        self.assertFalse(with_unknown_station["has_dense_station_cluster_context"])
+        self.assertFalse(with_unknown_station["has_major_station_cluster_context"])
+        self.assertEqual(
+            with_unknown_station["clamped_score"],
+            without_station["clamped_score"],
+        )
+
+    def test_feature_summary_breakdown_adds_motorway_context_bonus(self):
+        without_motorway = calculate_initial_score_breakdown_from_feature_summary({})
+        motorway_count_keys = (
+            "motorway_count",
+            "motorway_link_count",
+        )
+
+        for motorway_count_key in motorway_count_keys:
+            with self.subTest(motorway_count_key=motorway_count_key):
+                with_motorway = (
+                    calculate_initial_score_breakdown_from_feature_summary(
+                        {motorway_count_key: 1}
+                    )
+                )
+
+                self.assertTrue(with_motorway["has_motorway_context"])
+                self.assertFalse(with_motorway["has_trunk_context"])
+                self.assertEqual(
+                    with_motorway["motorway_context_bonus"],
+                    MOTORWAY_CONTEXT_BONUS,
+                )
+                self.assertEqual(
+                    with_motorway["trunk_context_bonus"],
+                    0.0,
+                )
+                self.assertAlmostEqual(
+                    with_motorway["context_bonus"],
+                    without_motorway["context_bonus"] + MOTORWAY_CONTEXT_BONUS,
+                )
+                self.assertGreater(
+                    calculate_initial_score_from_feature_summary(
+                        {"building_count": 1, motorway_count_key: 1}
+                    ),
+                    calculate_initial_score_from_feature_summary(
+                        {"building_count": 1}
+                    ),
+                )
+
+    def test_feature_summary_breakdown_adds_trunk_context_bonus(self):
+        without_trunk = calculate_initial_score_breakdown_from_feature_summary({})
+        trunk_count_keys = (
+            "trunk_count",
+            "trunk_link_count",
+        )
+
+        for trunk_count_key in trunk_count_keys:
+            with self.subTest(trunk_count_key=trunk_count_key):
+                with_trunk = calculate_initial_score_breakdown_from_feature_summary(
+                    {trunk_count_key: 1}
+                )
+
+                self.assertFalse(with_trunk["has_motorway_context"])
+                self.assertTrue(with_trunk["has_trunk_context"])
+                self.assertEqual(with_trunk["motorway_context_bonus"], 0.0)
+                self.assertEqual(
+                    with_trunk["trunk_context_bonus"],
+                    TRUNK_CONTEXT_BONUS,
+                )
+                self.assertAlmostEqual(
+                    with_trunk["context_bonus"],
+                    without_trunk["context_bonus"] + TRUNK_CONTEXT_BONUS,
+                )
+                self.assertGreater(
+                    calculate_initial_score_from_feature_summary(
+                        {"building_count": 1, trunk_count_key: 1}
+                    ),
+                    calculate_initial_score_from_feature_summary(
+                        {"building_count": 1}
+                    ),
+                )
+
+    def test_feature_summary_breakdown_adds_motorway_and_trunk_context_bonuses(
+        self,
+    ):
+        without_expressway = calculate_initial_score_breakdown_from_feature_summary({})
+        with_motorway_and_trunk = calculate_initial_score_breakdown_from_feature_summary(
+            {"motorway_count": 1, "trunk_count": 1}
+        )
+
+        self.assertTrue(with_motorway_and_trunk["has_motorway_context"])
+        self.assertTrue(with_motorway_and_trunk["has_trunk_context"])
+        self.assertEqual(
+            with_motorway_and_trunk["motorway_context_bonus"],
+            MOTORWAY_CONTEXT_BONUS,
+        )
+        self.assertEqual(
+            with_motorway_and_trunk["trunk_context_bonus"],
+            TRUNK_CONTEXT_BONUS,
+        )
+        self.assertAlmostEqual(
+            with_motorway_and_trunk["context_bonus"],
+            without_expressway["context_bonus"]
+            + MOTORWAY_CONTEXT_BONUS
+            + TRUNK_CONTEXT_BONUS,
+        )
+
+    def test_feature_summary_breakdown_expressway_does_not_affect_other_factors(self):
+        without_expressway = calculate_initial_score_breakdown_from_feature_summary({})
+        with_expressway = calculate_initial_score_breakdown_from_feature_summary(
+            {"motorway_count": 1}
+        )
+
+        for key in ("base_score", "diversity_bonus", "penalty"):
+            with self.subTest(key=key):
+                self.assertEqual(with_expressway[key], without_expressway[key])
+
+    def test_feature_summary_breakdown_ignores_unknown_expressway(self):
+        without_expressway = calculate_initial_score_breakdown_from_feature_summary({})
+        with_unknown_expressway = calculate_initial_score_breakdown_from_feature_summary(
+            {"unknown_expressway_count": 1}
+        )
+
+        self.assertFalse(with_unknown_expressway["has_motorway_context"])
+        self.assertEqual(with_unknown_expressway["motorway_context_bonus"], 0.0)
+        self.assertFalse(with_unknown_expressway["has_trunk_context"])
+        self.assertEqual(with_unknown_expressway["trunk_context_bonus"], 0.0)
+        self.assertEqual(
+            with_unknown_expressway["clamped_score"],
+            without_expressway["clamped_score"],
         )
 
     def test_feature_summary_breakdown_tracks_context_and_penalties(self):
@@ -3480,6 +5410,22 @@ class DetermineInitialScoreForGridCellTests(TestCase):
             {"park_coverage_ratio": 1.1},
             {"river_coverage_ratio": 1.1},
             {"building_count": True},
+            {"surface_railway_count": -1},
+            {"underground_railway_count": float("inf")},
+            {"unknown_railway_count": True},
+            {"railway_station_count": -1},
+            {"railway_halt_count": float("inf")},
+            {"subway_station_count": True},
+            {"bus_station_count": -1},
+            {"public_transport_station_count": float("nan")},
+            {"unknown_station_count": True},
+            {"station_cluster_count": -1},
+            {"dense_station_cluster_count": float("inf")},
+            {"motorway_count": -1},
+            {"motorway_link_count": float("inf")},
+            {"trunk_count": True},
+            {"trunk_link_count": -1},
+            {"unknown_expressway_count": float("nan")},
         )
         for feature_summary in invalid_summaries:
             with self.subTest(feature_summary=feature_summary):
@@ -3499,6 +5445,22 @@ class DetermineInitialScoreForGridCellTests(TestCase):
             {"park_coverage_ratio": 1.1},
             {"river_coverage_ratio": 1.1},
             {"building_count": True},
+            {"surface_railway_count": -1},
+            {"underground_railway_count": float("inf")},
+            {"unknown_railway_count": True},
+            {"railway_station_count": -1},
+            {"railway_halt_count": float("inf")},
+            {"subway_station_count": True},
+            {"bus_station_count": -1},
+            {"public_transport_station_count": float("nan")},
+            {"unknown_station_count": True},
+            {"station_cluster_count": -1},
+            {"dense_station_cluster_count": float("inf")},
+            {"motorway_count": -1},
+            {"motorway_link_count": float("inf")},
+            {"trunk_count": True},
+            {"trunk_link_count": -1},
+            {"unknown_expressway_count": float("nan")},
         )
         for feature_summary in invalid_summaries:
             with self.subTest(feature_summary=feature_summary):

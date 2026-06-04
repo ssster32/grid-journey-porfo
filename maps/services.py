@@ -20,10 +20,20 @@ BUILDING_COUNT_FOR_MAX_BASE_SCORE = 20
 ROAD_BASE_SCORE_MAX_BONUS = 0.0
 ROAD_COUNT_FOR_MAX_BASE_SCORE = 10
 WATERFRONT_CONTEXT_BONUS = 0.15
+SURFACE_RAILWAY_CONTEXT_BONUS = 0.10
+SURFACE_STATION_CONTEXT_BONUS = 0.30
+SUBWAY_STATION_CONTEXT_BONUS = 0.20
+PUBLIC_TRANSPORT_STATION_CONTEXT_BONUS = 0.20
+MOTORWAY_CONTEXT_BONUS = 0.15
+TRUNK_CONTEXT_BONUS = 0.07
 MIN_FOREST_COVERAGE_RATIO_FOR_SCORE = 0.10
 RAILWAY_SURFACE_TYPES = {"rail", "light_rail", "tram"}
 RAILWAY_UNDERGROUND_TYPES = {"subway"}
 RAILWAY_TARGET_TYPES = RAILWAY_SURFACE_TYPES | RAILWAY_UNDERGROUND_TYPES
+STATION_RAILWAY_TYPES = {"station", "halt"}
+EXPRESSWAY_HIGHWAY_TYPES = {"motorway", "motorway_link", "trunk", "trunk_link"}
+MAX_EXPRESSWAY_BOUNDS_AREA_RATIO_FOR_LOG = 20.0
+MAX_EXPRESSWAY_BOUNDS_LENGTH_RATIO_FOR_LOG = 10.0
 MAX_ROAD_BOUNDS_AREA_RATIO_FOR_COUNT = 20.0
 MAX_ROAD_BOUNDS_LENGTH_RATIO_FOR_COUNT = 10.0
 MAX_RIVER_BOUNDS_AREA_RATIO_FOR_INTERSECTION = 20.0
@@ -41,6 +51,31 @@ class FeatureSummariesByPosition(dict):
 
 
 WATERWAY_SUMMARY_KEYS = ("river", "stream", "canal", "unknown")
+STATION_SUMMARY_KEYS = (
+    "railway_station",
+    "railway_halt",
+    "subway_station",
+    "bus_station",
+    "public_transport_station",
+    "unknown",
+)
+SCORED_STATION_SUMMARY_TYPES = {
+    "railway_station",
+    "railway_halt",
+    "subway_station",
+    "public_transport_station",
+}
+STATION_DENSE_CLUSTER_DISTANCE_METERS = 150
+STATION_BROAD_CLUSTER_DISTANCE_METERS = 300
+STATION_MAJOR_CLUSTER_MIN_FEATURES = 4
+STATION_DENSITY_MAJOR_CLUSTER_MIN_FEATURES = 3
+EXPRESSWAY_SUMMARY_KEYS = (
+    "motorway",
+    "motorway_link",
+    "trunk",
+    "trunk_link",
+    "unknown",
+)
 
 
 def _clamp_initial_score(score):
@@ -115,6 +150,7 @@ def classify_osm_element(tags):
     landuse = tags.get("landuse")
     leisure = tags.get("leisure")
     railway = tags.get("railway")
+    highway = tags.get("highway")
 
     if natural == "coastline":
         return "coastline"
@@ -126,8 +162,17 @@ def classify_osm_element(tags):
         return "forest"
     if leisure in {"park", "garden"}:
         return "park"
+    if (
+        railway in STATION_RAILWAY_TYPES
+        or tags.get("station") == "subway"
+        or tags.get("public_transport") == "station"
+        or tags.get("amenity") == "bus_station"
+    ):
+        return "station"
     if railway in RAILWAY_TARGET_TYPES:
         return "railway"
+    if highway in EXPRESSWAY_HIGHWAY_TYPES:
+        return "expressway"
     if "highway" in tags:
         return "road"
     if "building" in tags:
@@ -221,6 +266,14 @@ def build_map_feature_from_osm_element(element):
     railway = tags.get("railway")
     if railway:
         map_feature["source_railway"] = railway
+    if "station" in tags:
+        map_feature["source_station"] = tags.get("station")
+    if "public_transport" in tags:
+        map_feature["source_public_transport"] = tags.get("public_transport")
+    if "amenity" in tags:
+        map_feature["source_amenity"] = tags.get("amenity")
+    if "highway" in tags:
+        map_feature["source_highway"] = tags.get("highway")
     if "tunnel" in tags:
         map_feature["source_tunnel"] = tags.get("tunnel")
     if "layer" in tags:
@@ -273,10 +326,19 @@ def build_overpass_query(bounds):
         '["leisure"="park"]',
         '["leisure"="garden"]',
         '["natural"="coastline"]',
+        '["railway"="station"]',
+        '["railway"="halt"]',
+        '["station"="subway"]',
+        '["public_transport"="station"]',
+        '["amenity"="bus_station"]',
         '["railway"="rail"]',
         '["railway"="subway"]',
         '["railway"="light_rail"]',
         '["railway"="tram"]',
+        '["highway"="motorway"]',
+        '["highway"="motorway_link"]',
+        '["highway"="trunk"]',
+        '["highway"="trunk_link"]',
     )
     query_lines = [
         "[out:json][timeout:25];",
@@ -414,6 +476,30 @@ def build_feature_summaries_for_map_area_from_overpass(
             map_features,
         )
     )
+    feature_summaries.station_summary = (
+        summarize_station_feature_matches_for_grid_cell_contexts(
+            grid_cell_contexts,
+            map_features,
+        )
+    )
+    feature_summaries.expressway_summary = (
+        summarize_expressway_feature_matches_for_grid_cell_contexts(
+            grid_cell_contexts,
+            map_features,
+        )
+    )
+    feature_summaries.expressway_bounds_summary = (
+        summarize_expressway_bounds_for_grid_cell_contexts(
+            grid_cell_contexts,
+            map_features,
+        )
+    )
+    feature_summaries.effective_expressway_summary = (
+        summarize_effective_expressway_feature_matches_for_grid_cell_contexts(
+            grid_cell_contexts,
+            map_features,
+        )
+    )
     feature_summaries.waterway_river_bounds_summary = (
         summarize_waterway_river_bounds_for_map_area(
             map_area_bounds,
@@ -476,6 +562,75 @@ def _empty_railway_feature_match_summary():
     }
 
 
+def _empty_station_feature_match_summary():
+    summary = {
+        "station_features": 0,
+        "station_cells": 0,
+    }
+    for station_type in STATION_SUMMARY_KEYS[:-1]:
+        summary[f"{station_type}_features"] = 0
+        summary[f"{station_type}_cells"] = 0
+    summary["unknown_station_features"] = 0
+    summary["unknown_station_cells"] = 0
+    summary["station_cluster_cells"] = 0
+    summary["dense_station_cluster_cells"] = 0
+    summary["major_station_cluster_cells"] = 0
+    summary["station_cluster_count_avg"] = 0.0
+    summary["station_cluster_count_max"] = 0
+    summary["dense_station_cluster_count_max"] = 0
+    summary["major_station_cluster_count_max"] = 0
+    return summary
+
+
+def _empty_expressway_feature_match_summary():
+    summary = {
+        "expressway_features": 0,
+        "expressway_cells": 0,
+    }
+    for expressway_type in EXPRESSWAY_SUMMARY_KEYS[:-1]:
+        summary[f"{expressway_type}_features"] = 0
+        summary[f"{expressway_type}_cells"] = 0
+    summary["unknown_expressway_features"] = 0
+    summary["unknown_expressway_cells"] = 0
+    return summary
+
+
+def _empty_expressway_bounds_summary():
+    summary = {
+        "expressway_features": 0,
+        "expressway_cells": 0,
+        "expressway_avg_overlap": 0.0,
+        "expressway_max_overlap": 0.0,
+        "expressway_large_bounds_features": 0,
+        "expressway_large_bounds_cells": 0,
+    }
+    for expressway_type in EXPRESSWAY_SUMMARY_KEYS:
+        expressway_field = _expressway_summary_field(expressway_type)
+        summary[f"{expressway_field}_features"] = 0
+        summary[f"{expressway_field}_cells"] = 0
+        summary[f"{expressway_field}_avg_overlap"] = 0.0
+        summary[f"{expressway_field}_max_overlap"] = 0.0
+    return summary
+
+
+def _empty_effective_expressway_summary():
+    summary = {
+        "effective_expressway_features": 0,
+        "effective_expressway_cells": 0,
+        "effective_expressway_avg_overlap": 0.0,
+        "effective_expressway_max_overlap": 0.0,
+        "filtered_expressway_large_bounds_features": 0,
+        "filtered_expressway_large_bounds_cells": 0,
+    }
+    for expressway_type in EXPRESSWAY_SUMMARY_KEYS:
+        expressway_field = _expressway_summary_field(expressway_type)
+        summary[f"effective_{expressway_field}_features"] = 0
+        summary[f"effective_{expressway_field}_cells"] = 0
+        summary[f"effective_{expressway_field}_avg_overlap"] = 0.0
+        summary[f"effective_{expressway_field}_max_overlap"] = 0.0
+    return summary
+
+
 def _railway_layer_number(value):
     if value is None or isinstance(value, bool):
         return None
@@ -509,6 +664,114 @@ def classify_railway_feature_surface_type(feature):
         return "surface"
 
     return "unknown"
+
+
+def classify_station_feature_type(feature):
+    """Classify one station map feature for log-only summaries."""
+    if not isinstance(feature, dict):
+        raise ValueError("feature は辞書で指定してください。")
+
+    source_railway = feature.get("source_railway")
+    source_station = feature.get("source_station")
+    source_public_transport = feature.get("source_public_transport")
+    source_amenity = feature.get("source_amenity")
+
+    # station=subway is checked first so subway stations are visible in logs
+    # even when OSM also tags them as railway=station.
+    if source_station == "subway":
+        return "subway_station"
+    if source_railway == "station":
+        return "railway_station"
+    if source_railway == "halt":
+        return "railway_halt"
+    if source_amenity == "bus_station":
+        return "bus_station"
+    if source_public_transport == "station":
+        return "public_transport_station"
+
+    return "unknown"
+
+
+def classify_expressway_feature_type(feature):
+    """Classify one expressway map feature for log-only summaries."""
+    if not isinstance(feature, dict):
+        raise ValueError("feature は辞書で指定してください。")
+
+    source_highway = feature.get("source_highway")
+    if source_highway in EXPRESSWAY_HIGHWAY_TYPES:
+        return source_highway
+
+    return "unknown"
+
+
+def _station_summary_field(station_type):
+    if station_type == "unknown":
+        return "unknown_station"
+    return station_type
+
+
+def _bounds_center(bounds):
+    normalized_bounds = _normalize_bounds(bounds)
+    return (
+        (normalized_bounds["north"] + normalized_bounds["south"]) / 2,
+        (normalized_bounds["east"] + normalized_bounds["west"]) / 2,
+    )
+
+
+def _distance_between_points_meters(first_point, second_point):
+    first_lat, first_lng = first_point
+    second_lat, second_lng = second_point
+    average_lat = (first_lat + second_lat) / 2
+    lat_distance = (first_lat - second_lat) * METERS_PER_DEGREE
+    lng_distance = (
+        (first_lng - second_lng)
+        * METERS_PER_DEGREE
+        * max(cos(radians(average_lat)), MIN_LONGITUDE_COSINE)
+    )
+    return (lat_distance**2 + lng_distance**2) ** 0.5
+
+
+def _max_station_cluster_size(station_centers, distance_threshold_meters):
+    if len(station_centers) < 2:
+        return 0
+
+    neighbors = {index: set() for index in range(len(station_centers))}
+    for first_index, first_center in enumerate(station_centers):
+        for second_index in range(first_index + 1, len(station_centers)):
+            distance = _distance_between_points_meters(
+                first_center,
+                station_centers[second_index],
+            )
+            if distance <= distance_threshold_meters:
+                neighbors[first_index].add(second_index)
+                neighbors[second_index].add(first_index)
+
+    visited = set()
+    max_cluster_size = 0
+    for index in range(len(station_centers)):
+        if index in visited:
+            continue
+
+        stack = [index]
+        cluster_size = 0
+        while stack:
+            current_index = stack.pop()
+            if current_index in visited:
+                continue
+            visited.add(current_index)
+            cluster_size += 1
+            stack.extend(neighbors[current_index] - visited)
+
+        if cluster_size > 1:
+            max_cluster_size = max(max_cluster_size, cluster_size)
+
+    return max_cluster_size
+
+
+def _expressway_summary_field(expressway_type):
+    if expressway_type == "unknown":
+        return "unknown_expressway"
+    return expressway_type
 
 
 def summarize_railway_feature_matches_for_grid_cell_contexts(
@@ -574,6 +837,349 @@ def summarize_railway_feature_matches_for_grid_cell_contexts(
     railway_summary["unknown_railway_cells"] = len(cell_keys_by_type["unknown"])
 
     return railway_summary
+
+
+def _build_grid_cell_entries_for_summary(grid_cell_contexts):
+    grid_cell_entries = []
+    for index, grid_cell_context in enumerate(grid_cell_contexts):
+        if not isinstance(grid_cell_context, dict):
+            raise ValueError("grid_cell_contexts の各要素は辞書で指定してください。")
+
+        grid_cell_bounds = {
+            "north": grid_cell_context.get("north"),
+            "south": grid_cell_context.get("south"),
+            "east": grid_cell_context.get("east"),
+            "west": grid_cell_context.get("west"),
+        }
+        grid_cell_entries.append(
+            (
+                (
+                    grid_cell_context.get("row_index", index),
+                    grid_cell_context.get("col_index", index),
+                ),
+                _normalize_bounds(grid_cell_bounds),
+            )
+        )
+
+    return grid_cell_entries
+
+
+def summarize_station_feature_matches_for_grid_cell_contexts(
+    grid_cell_contexts,
+    map_features,
+):
+    """Summarize station feature matches for log output only."""
+    if not isinstance(grid_cell_contexts, list):
+        raise ValueError("grid_cell_contexts はリストで指定してください。")
+    if not isinstance(map_features, list):
+        raise ValueError("map_features はリストで指定してください。")
+
+    station_summary = _empty_station_feature_match_summary()
+    cell_keys_by_type = {"station": set()}
+    for station_type in STATION_SUMMARY_KEYS:
+        cell_keys_by_type[_station_summary_field(station_type)] = set()
+    grid_cell_entries = _build_grid_cell_entries_for_summary(grid_cell_contexts)
+    station_centers_by_cell = {
+        cell_key: [] for cell_key, _grid_cell_bounds in grid_cell_entries
+    }
+
+    for feature in map_features:
+        if not isinstance(feature, dict):
+            raise ValueError("map_features の各要素は辞書で指定してください。")
+        if feature.get("kind") != "station":
+            continue
+
+        station_type = classify_station_feature_type(feature)
+        station_field = _station_summary_field(station_type)
+        station_summary["station_features"] += 1
+        station_summary[f"{station_field}_features"] += 1
+        feature_bounds = _normalize_bounds(feature.get("bounds"))
+        feature_center = _bounds_center(feature_bounds)
+
+        for cell_key, grid_cell_bounds in grid_cell_entries:
+            if feature_intersects_grid_cell(feature_bounds, grid_cell_bounds):
+                cell_keys_by_type["station"].add(cell_key)
+                cell_keys_by_type[station_field].add(cell_key)
+                if station_type in SCORED_STATION_SUMMARY_TYPES:
+                    station_centers_by_cell[cell_key].append(feature_center)
+
+    station_summary["station_cells"] = len(cell_keys_by_type["station"])
+    for station_type in STATION_SUMMARY_KEYS:
+        station_field = _station_summary_field(station_type)
+        station_summary[f"{station_field}_cells"] = len(
+            cell_keys_by_type[station_field]
+        )
+
+    broad_cluster_counts = []
+    dense_cluster_counts = []
+    major_cluster_counts = []
+    for station_centers in station_centers_by_cell.values():
+        broad_cluster_count = _max_station_cluster_size(
+            station_centers,
+            STATION_BROAD_CLUSTER_DISTANCE_METERS,
+        )
+        dense_cluster_count = _max_station_cluster_size(
+            station_centers,
+            STATION_DENSE_CLUSTER_DISTANCE_METERS,
+        )
+        if broad_cluster_count > 0:
+            broad_cluster_counts.append(broad_cluster_count)
+        if dense_cluster_count > 0:
+            dense_cluster_counts.append(dense_cluster_count)
+        if broad_cluster_count >= STATION_MAJOR_CLUSTER_MIN_FEATURES:
+            major_cluster_counts.append(broad_cluster_count)
+
+    station_summary["station_cluster_cells"] = len(broad_cluster_counts)
+    station_summary["dense_station_cluster_cells"] = len(dense_cluster_counts)
+    station_summary["major_station_cluster_cells"] = len(major_cluster_counts)
+    if broad_cluster_counts:
+        station_summary["station_cluster_count_avg"] = (
+            sum(broad_cluster_counts) / len(broad_cluster_counts)
+        )
+        station_summary["station_cluster_count_max"] = max(broad_cluster_counts)
+    if dense_cluster_counts:
+        station_summary["dense_station_cluster_count_max"] = max(
+            dense_cluster_counts
+        )
+    if major_cluster_counts:
+        station_summary["major_station_cluster_count_max"] = max(
+            major_cluster_counts
+        )
+
+    return station_summary
+
+
+def summarize_expressway_feature_matches_for_grid_cell_contexts(
+    grid_cell_contexts,
+    map_features,
+):
+    """Summarize expressway feature matches for log output only."""
+    if not isinstance(grid_cell_contexts, list):
+        raise ValueError("grid_cell_contexts はリストで指定してください。")
+    if not isinstance(map_features, list):
+        raise ValueError("map_features はリストで指定してください。")
+
+    expressway_summary = _empty_expressway_feature_match_summary()
+    cell_keys_by_type = {"expressway": set()}
+    for expressway_type in EXPRESSWAY_SUMMARY_KEYS:
+        cell_keys_by_type[_expressway_summary_field(expressway_type)] = set()
+    grid_cell_entries = _build_grid_cell_entries_for_summary(grid_cell_contexts)
+
+    for feature in map_features:
+        if not isinstance(feature, dict):
+            raise ValueError("map_features の各要素は辞書で指定してください。")
+        if feature.get("kind") != "expressway":
+            continue
+
+        expressway_type = classify_expressway_feature_type(feature)
+        expressway_field = _expressway_summary_field(expressway_type)
+        expressway_summary["expressway_features"] += 1
+        expressway_summary[f"{expressway_field}_features"] += 1
+        feature_bounds = _normalize_bounds(feature.get("bounds"))
+
+        for cell_key, grid_cell_bounds in grid_cell_entries:
+            if feature_intersects_grid_cell(feature_bounds, grid_cell_bounds):
+                cell_keys_by_type["expressway"].add(cell_key)
+                cell_keys_by_type[expressway_field].add(cell_key)
+
+    expressway_summary["expressway_cells"] = len(cell_keys_by_type["expressway"])
+    for expressway_type in EXPRESSWAY_SUMMARY_KEYS:
+        expressway_field = _expressway_summary_field(expressway_type)
+        expressway_summary[f"{expressway_field}_cells"] = len(
+            cell_keys_by_type[expressway_field]
+        )
+
+    return expressway_summary
+
+
+def _store_max_overlap(cell_overlaps, cell_key, overlap_ratio):
+    cell_overlaps[cell_key] = max(cell_overlaps.get(cell_key, 0.0), overlap_ratio)
+
+
+def _set_overlap_summary(summary, prefix, cell_overlaps):
+    overlaps = list(cell_overlaps.values())
+    summary[f"{prefix}_cells"] = len(overlaps)
+    if overlaps:
+        summary[f"{prefix}_avg_overlap"] = sum(overlaps) / len(overlaps)
+        summary[f"{prefix}_max_overlap"] = max(overlaps)
+
+
+def summarize_expressway_bounds_for_grid_cell_contexts(
+    grid_cell_contexts,
+    map_features,
+):
+    """Summarize expressway bbox overlap and size ratios for log output only."""
+    if not isinstance(grid_cell_contexts, list):
+        raise ValueError("grid_cell_contexts はリストで指定してください。")
+    if not isinstance(map_features, list):
+        raise ValueError("map_features はリストで指定してください。")
+
+    bounds_summary = _empty_expressway_bounds_summary()
+    cell_overlaps_by_type = {"expressway": {}}
+    for expressway_type in EXPRESSWAY_SUMMARY_KEYS:
+        cell_overlaps_by_type[_expressway_summary_field(expressway_type)] = {}
+    large_bounds_cell_keys = set()
+    grid_cell_entries = _build_grid_cell_entries_for_summary(grid_cell_contexts)
+
+    for feature in map_features:
+        if not isinstance(feature, dict):
+            raise ValueError("map_features の各要素は辞書で指定してください。")
+        if feature.get("kind") != "expressway":
+            continue
+
+        expressway_type = classify_expressway_feature_type(feature)
+        expressway_field = _expressway_summary_field(expressway_type)
+        bounds_summary["expressway_features"] += 1
+        bounds_summary[f"{expressway_field}_features"] += 1
+        feature_bounds = _normalize_bounds(feature.get("bounds"))
+        is_large_feature = False
+
+        for cell_key, grid_cell_bounds in grid_cell_entries:
+            if not feature_intersects_grid_cell(feature_bounds, grid_cell_bounds):
+                continue
+
+            overlap_ratio = calculate_bounds_overlap_ratio(
+                feature_bounds,
+                grid_cell_bounds,
+            )
+            size_ratios = calculate_bounds_size_ratios(
+                feature_bounds,
+                grid_cell_bounds,
+            )
+            is_large_bounds = (
+                size_ratios["area_ratio"] > MAX_EXPRESSWAY_BOUNDS_AREA_RATIO_FOR_LOG
+                or size_ratios["height_ratio"]
+                > MAX_EXPRESSWAY_BOUNDS_LENGTH_RATIO_FOR_LOG
+                or size_ratios["width_ratio"]
+                > MAX_EXPRESSWAY_BOUNDS_LENGTH_RATIO_FOR_LOG
+            )
+
+            _store_max_overlap(
+                cell_overlaps_by_type["expressway"],
+                cell_key,
+                overlap_ratio,
+            )
+            _store_max_overlap(
+                cell_overlaps_by_type[expressway_field],
+                cell_key,
+                overlap_ratio,
+            )
+            if is_large_bounds:
+                is_large_feature = True
+                large_bounds_cell_keys.add(cell_key)
+
+        if is_large_feature:
+            bounds_summary["expressway_large_bounds_features"] += 1
+
+    _set_overlap_summary(
+        bounds_summary,
+        "expressway",
+        cell_overlaps_by_type["expressway"],
+    )
+    bounds_summary["expressway_large_bounds_cells"] = len(large_bounds_cell_keys)
+    for expressway_type in EXPRESSWAY_SUMMARY_KEYS:
+        expressway_field = _expressway_summary_field(expressway_type)
+        _set_overlap_summary(
+            bounds_summary,
+            expressway_field,
+            cell_overlaps_by_type[expressway_field],
+        )
+
+    return bounds_summary
+
+
+def _is_large_expressway_bounds_for_grid_cell(feature_bounds, grid_cell_bounds):
+    size_ratios = calculate_bounds_size_ratios(feature_bounds, grid_cell_bounds)
+    return (
+        size_ratios["area_ratio"] > MAX_EXPRESSWAY_BOUNDS_AREA_RATIO_FOR_LOG
+        or size_ratios["height_ratio"]
+        > MAX_EXPRESSWAY_BOUNDS_LENGTH_RATIO_FOR_LOG
+        or size_ratios["width_ratio"]
+        > MAX_EXPRESSWAY_BOUNDS_LENGTH_RATIO_FOR_LOG
+    )
+
+
+def summarize_effective_expressway_feature_matches_for_grid_cell_contexts(
+    grid_cell_contexts,
+    map_features,
+):
+    """Summarize expressways after excluding large-bounds candidates."""
+    if not isinstance(grid_cell_contexts, list):
+        raise ValueError("grid_cell_contexts はリストで指定してください。")
+    if not isinstance(map_features, list):
+        raise ValueError("map_features はリストで指定してください。")
+
+    effective_summary = _empty_effective_expressway_summary()
+    cell_overlaps_by_type = {"effective_expressway": {}}
+    for expressway_type in EXPRESSWAY_SUMMARY_KEYS:
+        expressway_field = _expressway_summary_field(expressway_type)
+        cell_overlaps_by_type[f"effective_{expressway_field}"] = {}
+    filtered_large_bounds_cell_keys = set()
+    grid_cell_entries = _build_grid_cell_entries_for_summary(grid_cell_contexts)
+
+    for feature in map_features:
+        if not isinstance(feature, dict):
+            raise ValueError("map_features の各要素は辞書で指定してください。")
+        if feature.get("kind") != "expressway":
+            continue
+
+        expressway_type = classify_expressway_feature_type(feature)
+        expressway_field = _expressway_summary_field(expressway_type)
+        feature_bounds = _normalize_bounds(feature.get("bounds"))
+        intersecting_overlaps = []
+        large_bounds_cell_keys = set()
+
+        for cell_key, grid_cell_bounds in grid_cell_entries:
+            if not feature_intersects_grid_cell(feature_bounds, grid_cell_bounds):
+                continue
+
+            overlap_ratio = calculate_bounds_overlap_ratio(
+                feature_bounds,
+                grid_cell_bounds,
+            )
+            intersecting_overlaps.append((cell_key, overlap_ratio))
+            if _is_large_expressway_bounds_for_grid_cell(
+                feature_bounds,
+                grid_cell_bounds,
+            ):
+                large_bounds_cell_keys.add(cell_key)
+
+        if large_bounds_cell_keys:
+            effective_summary["filtered_expressway_large_bounds_features"] += 1
+            filtered_large_bounds_cell_keys.update(large_bounds_cell_keys)
+            continue
+
+        effective_summary["effective_expressway_features"] += 1
+        effective_summary[f"effective_{expressway_field}_features"] += 1
+        for cell_key, overlap_ratio in intersecting_overlaps:
+            _store_max_overlap(
+                cell_overlaps_by_type["effective_expressway"],
+                cell_key,
+                overlap_ratio,
+            )
+            _store_max_overlap(
+                cell_overlaps_by_type[f"effective_{expressway_field}"],
+                cell_key,
+                overlap_ratio,
+            )
+
+    effective_summary["filtered_expressway_large_bounds_cells"] = len(
+        filtered_large_bounds_cell_keys
+    )
+    _set_overlap_summary(
+        effective_summary,
+        "effective_expressway",
+        cell_overlaps_by_type["effective_expressway"],
+    )
+    for expressway_type in EXPRESSWAY_SUMMARY_KEYS:
+        expressway_field = _expressway_summary_field(expressway_type)
+        _set_overlap_summary(
+            effective_summary,
+            f"effective_{expressway_field}",
+            cell_overlaps_by_type[f"effective_{expressway_field}"],
+        )
+
+    return effective_summary
 
 
 def summarize_waterway_river_bounds_for_map_area(
@@ -947,10 +1553,24 @@ def build_feature_summary_for_grid_cell(
         "surface_railway_count": 0,
         "underground_railway_count": 0,
         "unknown_railway_count": 0,
+        "railway_station_count": 0,
+        "railway_halt_count": 0,
+        "subway_station_count": 0,
+        "bus_station_count": 0,
+        "public_transport_station_count": 0,
+        "unknown_station_count": 0,
+        "station_cluster_count": 0,
+        "dense_station_cluster_count": 0,
+        "motorway_count": 0,
+        "motorway_link_count": 0,
+        "trunk_count": 0,
+        "trunk_link_count": 0,
+        "unknown_expressway_count": 0,
         "has_park": False,
         "has_river": False,
         "is_coastal": False,
     }
+    station_centers = []
 
     for feature in map_features:
         if not isinstance(feature, dict):
@@ -966,6 +1586,8 @@ def build_feature_summary_for_grid_cell(
             "river",
             "coastline",
             "railway",
+            "station",
+            "expressway",
         }:
             continue
 
@@ -1037,7 +1659,34 @@ def build_feature_summary_for_grid_cell(
         elif feature_kind == "railway":
             railway_type = classify_railway_feature_surface_type(feature)
             feature_summary[f"{railway_type}_railway_count"] += 1
+        elif feature_kind == "station":
+            station_type = classify_station_feature_type(feature)
+            if station_type == "unknown":
+                feature_summary["unknown_station_count"] += 1
+            else:
+                feature_summary[f"{station_type}_count"] += 1
+                if station_type in SCORED_STATION_SUMMARY_TYPES:
+                    station_centers.append(_bounds_center(feature_bounds))
+        elif feature_kind == "expressway":
+            if _is_large_expressway_bounds_for_grid_cell(
+                feature_bounds,
+                grid_cell_bounds,
+            ):
+                continue
+            expressway_type = classify_expressway_feature_type(feature)
+            if expressway_type == "unknown":
+                feature_summary["unknown_expressway_count"] += 1
+            else:
+                feature_summary[f"{expressway_type}_count"] += 1
 
+    feature_summary["station_cluster_count"] = _max_station_cluster_size(
+        station_centers,
+        STATION_BROAD_CLUSTER_DISTANCE_METERS,
+    )
+    feature_summary["dense_station_cluster_count"] = _max_station_cluster_size(
+        station_centers,
+        STATION_DENSE_CLUSTER_DISTANCE_METERS,
+    )
     feature_summary["has_river"] = (
         feature_summary["river_coverage_ratio"] >= MIN_RIVER_COVERAGE_RATIO_FOR_HAS_RIVER
     )
@@ -1108,12 +1757,64 @@ def build_feature_summaries_for_grid_cell_contexts(
 
 
 def calculate_initial_score_breakdown_from_feature_summary(feature_summary):
-    """Calculate score details from feature summary data without changing rules."""
+    """Calculate score details from feature summary data."""
     if not isinstance(feature_summary, dict):
         raise ValueError("feature_summary は辞書で指定してください。")
 
     building_count = _feature_number(feature_summary, "building_count")
     road_count = _feature_number(feature_summary, "road_count")
+    surface_railway_count = _feature_number(
+        feature_summary,
+        "surface_railway_count",
+    )
+    underground_railway_count = _feature_number(
+        feature_summary,
+        "underground_railway_count",
+    )
+    unknown_railway_count = _feature_number(
+        feature_summary,
+        "unknown_railway_count",
+    )
+    railway_station_count = _feature_number(
+        feature_summary,
+        "railway_station_count",
+    )
+    railway_halt_count = _feature_number(
+        feature_summary,
+        "railway_halt_count",
+    )
+    subway_station_count = _feature_number(
+        feature_summary,
+        "subway_station_count",
+    )
+    bus_station_count = _feature_number(
+        feature_summary,
+        "bus_station_count",
+    )
+    public_transport_station_count = _feature_number(
+        feature_summary,
+        "public_transport_station_count",
+    )
+    unknown_station_count = _feature_number(
+        feature_summary,
+        "unknown_station_count",
+    )
+    station_cluster_count = _feature_number(
+        feature_summary,
+        "station_cluster_count",
+    )
+    dense_station_cluster_count = _feature_number(
+        feature_summary,
+        "dense_station_cluster_count",
+    )
+    motorway_count = _feature_number(feature_summary, "motorway_count")
+    motorway_link_count = _feature_number(feature_summary, "motorway_link_count")
+    trunk_count = _feature_number(feature_summary, "trunk_count")
+    trunk_link_count = _feature_number(feature_summary, "trunk_link_count")
+    unknown_expressway_count = _feature_number(
+        feature_summary,
+        "unknown_expressway_count",
+    )
     water_coverage_ratio = _feature_ratio(feature_summary, "water_coverage_ratio")
     forest_coverage_ratio = _feature_ratio(feature_summary, "forest_coverage_ratio")
     has_park_value = bool(feature_summary.get("has_park", False))
@@ -1166,6 +1867,24 @@ def calculate_initial_score_breakdown_from_feature_summary(feature_summary):
     has_river_context = has_river and has_building
     has_coastal_context = is_coastal and (has_building or has_road)
     has_forest_context = has_scored_forest and has_building
+    has_surface_railway_context = surface_railway_count > 0
+    has_surface_station_context = (
+        railway_station_count > 0 or railway_halt_count > 0
+    )
+    has_subway_station_context = subway_station_count > 0
+    has_public_transport_station_context = public_transport_station_count > 0
+    scored_station_count = (
+        railway_station_count
+        + railway_halt_count
+        + subway_station_count
+        + public_transport_station_count
+    )
+    has_dense_station_cluster_context = dense_station_cluster_count >= 2
+    has_major_station_cluster_context = (
+        station_cluster_count >= STATION_DENSITY_MAJOR_CLUSTER_MIN_FEATURES
+    )
+    has_motorway_context = motorway_count > 0 or motorway_link_count > 0
+    has_trunk_context = trunk_count > 0 or trunk_link_count > 0
     is_likely_unreachable_water_cell = (
         water_coverage_ratio >= 0.95
         and not has_building
@@ -1190,6 +1909,41 @@ def calculate_initial_score_breakdown_from_feature_summary(feature_summary):
         context_bonus += 0.15
     if has_waterfront_context:
         context_bonus += WATERFRONT_CONTEXT_BONUS
+    surface_railway_context_bonus = (
+        SURFACE_RAILWAY_CONTEXT_BONUS if has_surface_railway_context else 0.0
+    )
+    context_bonus += surface_railway_context_bonus
+    surface_station_context_bonus = (
+        SURFACE_STATION_CONTEXT_BONUS
+        if has_surface_station_context
+        else 0.0
+    )
+    context_bonus += surface_station_context_bonus
+    subway_station_context_bonus = (
+        SUBWAY_STATION_CONTEXT_BONUS
+        if has_subway_station_context
+        else 0.0
+    )
+    context_bonus += subway_station_context_bonus
+    public_transport_station_context_bonus = (
+        PUBLIC_TRANSPORT_STATION_CONTEXT_BONUS
+        if has_public_transport_station_context
+        else 0.0
+    )
+    context_bonus += public_transport_station_context_bonus
+    station_density_bonus = 0.0
+    if has_dense_station_cluster_context:
+        station_density_bonus += 0.40
+    if has_major_station_cluster_context:
+        station_density_bonus += 0.30
+    station_density_bonus = min(station_density_bonus, 0.70)
+    context_bonus += station_density_bonus
+    motorway_context_bonus = (
+        MOTORWAY_CONTEXT_BONUS if has_motorway_context else 0.0
+    )
+    context_bonus += motorway_context_bonus
+    trunk_context_bonus = TRUNK_CONTEXT_BONUS if has_trunk_context else 0.0
+    context_bonus += trunk_context_bonus
 
     has_water_penalty = is_likely_unreachable_water_cell
     has_forest_penalty = (
@@ -1218,6 +1972,20 @@ def calculate_initial_score_breakdown_from_feature_summary(feature_summary):
         "raw_score": raw_score,
         "clamped_score": clamped_score,
         "feature_category_count": feature_category_count,
+        "surface_railway_count": surface_railway_count,
+        "underground_railway_count": underground_railway_count,
+        "unknown_railway_count": unknown_railway_count,
+        "railway_station_count": railway_station_count,
+        "railway_halt_count": railway_halt_count,
+        "subway_station_count": subway_station_count,
+        "bus_station_count": bus_station_count,
+        "public_transport_station_count": public_transport_station_count,
+        "unknown_station_count": unknown_station_count,
+        "motorway_count": motorway_count,
+        "motorway_link_count": motorway_link_count,
+        "trunk_count": trunk_count,
+        "trunk_link_count": trunk_link_count,
+        "unknown_expressway_count": unknown_expressway_count,
         "has_building": has_building,
         "has_road": has_road,
         "has_park": has_park,
@@ -1229,6 +1997,28 @@ def calculate_initial_score_breakdown_from_feature_summary(feature_summary):
         "has_river_context": has_river_context,
         "has_forest_context": has_forest_context,
         "has_coastal_context": has_coastal_context,
+        "has_surface_railway_context": has_surface_railway_context,
+        "surface_railway_context_bonus": surface_railway_context_bonus,
+        "has_surface_station_context": has_surface_station_context,
+        "surface_station_context_bonus": surface_station_context_bonus,
+        "has_subway_station_context": has_subway_station_context,
+        "subway_station_context_bonus": subway_station_context_bonus,
+        "has_public_transport_station_context": (
+            has_public_transport_station_context
+        ),
+        "public_transport_station_context_bonus": (
+            public_transport_station_context_bonus
+        ),
+        "scored_station_count": scored_station_count,
+        "station_cluster_count": station_cluster_count,
+        "dense_station_cluster_count": dense_station_cluster_count,
+        "station_density_bonus": station_density_bonus,
+        "has_dense_station_cluster_context": has_dense_station_cluster_context,
+        "has_major_station_cluster_context": has_major_station_cluster_context,
+        "has_motorway_context": has_motorway_context,
+        "motorway_context_bonus": motorway_context_bonus,
+        "has_trunk_context": has_trunk_context,
+        "trunk_context_bonus": trunk_context_bonus,
         "is_likely_unreachable_water_cell": is_likely_unreachable_water_cell,
         "has_waterfront_context": has_waterfront_context,
         "has_water_penalty": has_water_penalty,

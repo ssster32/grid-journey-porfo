@@ -22,12 +22,23 @@ SECRET_KEY = os.environ.get(
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.environ.get("DJANGO_DEBUG", "True") == "True"
 
+# ALLOWED_HOSTS = [".onrender.com", "localhost", "127.0.0.1"]
+# RENDER_EXTERNAL_HOSTNAME = os.environ.get("RENDER_EXTERNAL_HOSTNAME")
+# if RENDER_EXTERNAL_HOSTNAME:
+# ALLOWED_HOSTS.append(RENDER_EXTERNAL_HOSTNAME)
 ALLOWED_HOSTS = [
     host.strip()
     for host in os.environ.get("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1").split(",")
     if host.strip()
 ]
 
+# CSRF_TRUSTED_ORIGINS = [
+# "https://* onrender com"
+# ]
+
+# SECRET_KEY = os.environ.get('SECRET_KEY', 'django-insecure-CHANGE_ME_IN_PROD')
+
+# DEBUG = 'RENDER' not in os.environ
 
 # Application definition
 
@@ -41,16 +52,6 @@ INSTALLED_APPS = [
     "rest_framework",
     "rest_framework.authtoken",
     "maps",
-]
-
-MIDDLEWARE = [
-    "django.middleware.security.SecurityMiddleware",
-    "django.contrib.sessions.middleware.SessionMiddleware",
-    "django.middleware.common.CommonMiddleware",
-    "django.middleware.csrf.CsrfViewMiddleware",
-    "django.contrib.auth.middleware.AuthenticationMiddleware",
-    "django.contrib.messages.middleware.MessageMiddleware",
-    "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
 
 ROOT_URLCONF = "config.urls"
@@ -77,6 +78,17 @@ WSGI_APPLICATION = "config.wsgi.application"
 # https://docs.djangoproject.com/en/6.0/ref/settings/#databases
 
 DATABASES = {
+#    "default": {dj_database_url.config(
+#        # Renderの環境変数 DATABASE_URLを読み込む
+#        default=os.environ.get('DATABASE_URL'),
+#
+#        # 接続を600秒間維持（パフォーマンス向上）
+#        conn_max_age=600,
+#
+#        # SSL接続を強制（Renderでは必須）
+#        ssl_require=True
+#    )
+#    }
     "default": {
         "ENGINE": "django.db.backends.sqlite3",
         "NAME": BASE_DIR / "db.sqlite3",
@@ -119,6 +131,29 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/6.0/howto/static-files/
 
 STATIC_URL = "static/"
+
+## 1. 収集先の設定（本番で必須）
+#STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
+
+## 2. WhiteNoiseストレージ設定（Django 4.2以降）
+#STORAGES = {
+#"default": { ... },
+#"staticfiles": {
+#"BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
+#},
+#}
+
+# 3. Middlewareの追加（Securityの直下推奨）
+MIDDLEWARE = [
+"django.middleware.security.SecurityMiddleware",
+# "whitenoise.middleware.WhiteNoiseMiddleware",
+"django.contrib.sessions.middleware.SessionMiddleware",
+"django.middleware.common.CommonMiddleware",
+"django.middleware.csrf.CsrfViewMiddleware",
+"django.contrib.auth.middleware.AuthenticationMiddleware",
+"django.contrib.messages.middleware.MessageMiddleware",
+"django.middleware.clickjacking.XFrameOptionsMiddleware",
+]
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
