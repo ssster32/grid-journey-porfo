@@ -34,6 +34,7 @@ from .services import (
     calculate_initial_score_breakdown_from_feature_summary,
     calculate_initial_score_from_feature_summary,
     classify_expressway_feature_type,
+    classify_landmark_feature_type,
     classify_osm_element,
     classify_railway_feature_surface_type,
     classify_station_feature_type,
@@ -46,6 +47,7 @@ from .services import (
     summarize_effective_expressway_feature_matches_for_grid_cell_contexts,
     summarize_expressway_bounds_for_grid_cell_contexts,
     summarize_expressway_feature_matches_for_grid_cell_contexts,
+    summarize_landmark_feature_matches_for_grid_cell_contexts,
     summarize_river_feature_matches_for_grid_cell_contexts,
     summarize_railway_feature_matches_for_grid_cell_contexts,
     summarize_station_feature_matches_for_grid_cell_contexts,
@@ -176,6 +178,15 @@ class DetermineInitialScoreForGridCellTests(TestCase):
             'nwr["highway"="motorway_link"]',
             'nwr["highway"="trunk"]',
             'nwr["highway"="trunk_link"]',
+            'nwr["tourism"="attraction"]',
+            'nwr["tourism"="museum"]',
+            'nwr["tourism"="gallery"]',
+            'nwr["tourism"="viewpoint"]',
+            'nwr["historic"="castle"]',
+            'nwr["historic"="monument"]',
+            'nwr["historic"="memorial"]',
+            'nwr["historic"="ruins"]',
+            'nwr["historic"="archaeological_site"]',
         )
 
         self.assertIn("[out:json][timeout:25];", query)
@@ -418,6 +429,16 @@ class DetermineInitialScoreForGridCellTests(TestCase):
                     "west": 19.6,
                 },
             },
+            {
+                "kind": "landmark",
+                "source_historic": "castle",
+                "bounds": {
+                    "north": 9.4,
+                    "south": 9.2,
+                    "east": 20.4,
+                    "west": 19.6,
+                },
+            },
         ]
 
         summaries = build_feature_summaries_for_map_area_from_overpass(
@@ -441,6 +462,10 @@ class DetermineInitialScoreForGridCellTests(TestCase):
         self.assertEqual(summaries[(0, 1)]["railway_station_count"], 1)
         self.assertEqual(summaries.station_summary["station_features"], 1)
         self.assertEqual(summaries.station_summary["railway_station_cells"], 2)
+        self.assertEqual(summaries[(0, 0)]["historic_castle_count"], 1)
+        self.assertEqual(summaries[(0, 1)]["historic_castle_count"], 1)
+        self.assertEqual(summaries.landmark_summary["landmark_features"], 1)
+        self.assertEqual(summaries.landmark_summary["historic_castle_cells"], 2)
         self.assertEqual(summaries[(0, 0)]["motorway_count"], 1)
         self.assertEqual(summaries[(0, 1)]["motorway_count"], 1)
         self.assertEqual(summaries.expressway_summary["expressway_features"], 1)
@@ -659,6 +684,15 @@ class DetermineInitialScoreForGridCellTests(TestCase):
             ({"highway": "motorway_link"}, "expressway"),
             ({"highway": "trunk"}, "expressway"),
             ({"highway": "trunk_link"}, "expressway"),
+            ({"tourism": "attraction"}, "landmark"),
+            ({"tourism": "museum"}, "landmark"),
+            ({"tourism": "gallery"}, "landmark"),
+            ({"tourism": "viewpoint"}, "landmark"),
+            ({"historic": "castle"}, "landmark"),
+            ({"historic": "monument"}, "landmark"),
+            ({"historic": "memorial"}, "landmark"),
+            ({"historic": "ruins"}, "landmark"),
+            ({"historic": "archaeological_site"}, "landmark"),
         )
 
         for tags, expected_kind in test_cases:
@@ -698,6 +732,10 @@ class DetermineInitialScoreForGridCellTests(TestCase):
             (
                 {"highway": "motorway", "building": "yes"},
                 "expressway",
+            ),
+            (
+                {"tourism": "museum", "building": "yes"},
+                "landmark",
             ),
             (
                 {"highway": "service", "building": "yes"},
@@ -985,6 +1023,25 @@ class DetermineInitialScoreForGridCellTests(TestCase):
         self.assertEqual(map_feature["kind"], "expressway")
         self.assertEqual(map_feature["source_highway"], "motorway")
 
+    def test_build_map_feature_from_osm_element_keeps_landmark_source_tags(self):
+        map_feature = build_map_feature_from_osm_element(
+            {
+                "type": "way",
+                "id": 904,
+                "tags": {"tourism": "museum", "historic": "castle"},
+                "bounds": {
+                    "north": 10.0,
+                    "south": 9.0,
+                    "east": 20.0,
+                    "west": 19.0,
+                },
+            }
+        )
+
+        self.assertEqual(map_feature["kind"], "landmark")
+        self.assertEqual(map_feature["source_tourism"], "museum")
+        self.assertEqual(map_feature["source_historic"], "castle")
+
     def test_build_map_feature_from_osm_element_returns_none_for_unknown_tags(self):
         self.assertIsNone(
             build_map_feature_from_osm_element(
@@ -1091,6 +1148,47 @@ class DetermineInitialScoreForGridCellTests(TestCase):
             with self.subTest(feature=feature):
                 with self.assertRaises(ValueError):
                     classify_station_feature_type(feature)
+
+    def test_classify_landmark_feature_type_returns_expected_type(self):
+        test_cases = (
+            ({"source_tourism": "attraction"}, "tourism_attraction"),
+            ({"source_tourism": "museum"}, "tourism_museum"),
+            ({"source_tourism": "gallery"}, "tourism_gallery"),
+            ({"source_tourism": "viewpoint"}, "tourism_viewpoint"),
+            ({"source_historic": "castle"}, "historic_castle"),
+            ({"source_historic": "monument"}, "historic_monument"),
+            ({"source_historic": "memorial"}, "historic_memorial"),
+            ({"source_historic": "ruins"}, "historic_ruins"),
+            (
+                {"source_historic": "archaeological_site"},
+                "historic_archaeological_site",
+            ),
+            ({"source_tourism": "hotel"}, "unknown"),
+            ({}, "unknown"),
+        )
+
+        for feature, expected_type in test_cases:
+            with self.subTest(feature=feature):
+                self.assertEqual(
+                    classify_landmark_feature_type(feature),
+                    expected_type,
+                )
+
+    def test_classify_landmark_feature_type_prefers_tourism_type(self):
+        landmark_type = classify_landmark_feature_type(
+            {
+                "source_tourism": "museum",
+                "source_historic": "castle",
+            }
+        )
+
+        self.assertEqual(landmark_type, "tourism_museum")
+
+    def test_classify_landmark_feature_type_invalid_feature_raises_value_error(self):
+        for feature in (None, [], "landmark"):
+            with self.subTest(feature=feature):
+                with self.assertRaises(ValueError):
+                    classify_landmark_feature_type(feature)
 
     def test_classify_expressway_feature_type_returns_expected_type(self):
         test_cases = (
@@ -1817,6 +1915,157 @@ class DetermineInitialScoreForGridCellTests(TestCase):
         self.assertEqual(summary["station_cluster_count"], 3)
         self.assertEqual(summary["dense_station_cluster_count"], 3)
 
+    def test_build_feature_summary_counts_landmarks_by_type(self):
+        summary = build_feature_summary_for_grid_cell(
+            self.grid_bounds(),
+            [
+                {
+                    "kind": "landmark",
+                    "source_tourism": "attraction",
+                    "bounds": {
+                        "north": 9.9,
+                        "south": 9.8,
+                        "east": 19.2,
+                        "west": 19.1,
+                    },
+                },
+                {
+                    "kind": "landmark",
+                    "source_tourism": "museum",
+                    "bounds": {
+                        "north": 9.8,
+                        "south": 9.7,
+                        "east": 19.3,
+                        "west": 19.2,
+                    },
+                },
+                {
+                    "kind": "landmark",
+                    "source_tourism": "gallery",
+                    "bounds": {
+                        "north": 9.7,
+                        "south": 9.6,
+                        "east": 19.4,
+                        "west": 19.3,
+                    },
+                },
+                {
+                    "kind": "landmark",
+                    "source_tourism": "viewpoint",
+                    "bounds": {
+                        "north": 9.6,
+                        "south": 9.5,
+                        "east": 19.5,
+                        "west": 19.4,
+                    },
+                },
+                {
+                    "kind": "landmark",
+                    "source_historic": "castle",
+                    "bounds": {
+                        "north": 9.5,
+                        "south": 9.4,
+                        "east": 19.6,
+                        "west": 19.5,
+                    },
+                },
+                {
+                    "kind": "landmark",
+                    "source_historic": "monument",
+                    "bounds": {
+                        "north": 9.4,
+                        "south": 9.3,
+                        "east": 19.7,
+                        "west": 19.6,
+                    },
+                },
+                {
+                    "kind": "landmark",
+                    "source_historic": "memorial",
+                    "bounds": {
+                        "north": 9.3,
+                        "south": 9.2,
+                        "east": 19.8,
+                        "west": 19.7,
+                    },
+                },
+                {
+                    "kind": "landmark",
+                    "source_historic": "ruins",
+                    "bounds": {
+                        "north": 9.2,
+                        "south": 9.1,
+                        "east": 19.9,
+                        "west": 19.8,
+                    },
+                },
+                {
+                    "kind": "landmark",
+                    "source_historic": "archaeological_site",
+                    "bounds": {
+                        "north": 9.1,
+                        "south": 9.0,
+                        "east": 20.0,
+                        "west": 19.9,
+                    },
+                },
+                {
+                    "kind": "landmark",
+                    "source_tourism": "hotel",
+                    "bounds": {
+                        "north": 9.9,
+                        "south": 9.8,
+                        "east": 19.8,
+                        "west": 19.7,
+                    },
+                },
+                {
+                    "kind": "landmark",
+                    "source_historic": "castle",
+                    "bounds": {
+                        "north": 8.9,
+                        "south": 8.8,
+                        "east": 19.2,
+                        "west": 19.1,
+                    },
+                },
+            ],
+        )
+
+        self.assertEqual(summary["tourism_attraction_count"], 1)
+        self.assertEqual(summary["tourism_museum_count"], 1)
+        self.assertEqual(summary["tourism_gallery_count"], 1)
+        self.assertEqual(summary["tourism_viewpoint_count"], 1)
+        self.assertEqual(summary["historic_castle_count"], 1)
+        self.assertEqual(summary["historic_monument_count"], 1)
+        self.assertEqual(summary["historic_memorial_count"], 1)
+        self.assertEqual(summary["historic_ruins_count"], 1)
+        self.assertEqual(summary["historic_archaeological_site_count"], 1)
+        self.assertEqual(summary["unknown_landmark_count"], 1)
+
+    def test_build_feature_summary_landmarks_do_not_affect_initial_score(self):
+        empty_summary = build_feature_summary_for_grid_cell(self.grid_bounds(), [])
+        landmark_summary = build_feature_summary_for_grid_cell(
+            self.grid_bounds(),
+            [
+                {
+                    "kind": "landmark",
+                    "source_tourism": "attraction",
+                    "bounds": {
+                        "north": 9.9,
+                        "south": 9.8,
+                        "east": 19.2,
+                        "west": 19.1,
+                    },
+                },
+            ],
+        )
+
+        self.assertEqual(
+            calculate_initial_score_from_feature_summary(landmark_summary),
+            calculate_initial_score_from_feature_summary(empty_summary),
+        )
+
     def test_build_feature_summary_counts_expressways_by_type(self):
         summary = build_feature_summary_for_grid_cell(
             self.grid_bounds(),
@@ -2448,6 +2697,16 @@ class DetermineInitialScoreForGridCellTests(TestCase):
                 "trunk_count": 0,
                 "trunk_link_count": 0,
                 "unknown_expressway_count": 0,
+                "tourism_attraction_count": 0,
+                "tourism_museum_count": 0,
+                "tourism_gallery_count": 0,
+                "tourism_viewpoint_count": 0,
+                "historic_castle_count": 0,
+                "historic_monument_count": 0,
+                "historic_memorial_count": 0,
+                "historic_ruins_count": 0,
+                "historic_archaeological_site_count": 0,
+                "unknown_landmark_count": 0,
                 "has_park": False,
                 "has_river": False,
                 "is_coastal": False,
@@ -2578,6 +2837,16 @@ class DetermineInitialScoreForGridCellTests(TestCase):
                 "trunk_count": 0,
                 "trunk_link_count": 0,
                 "unknown_expressway_count": 0,
+                "tourism_attraction_count": 0,
+                "tourism_museum_count": 0,
+                "tourism_gallery_count": 0,
+                "tourism_viewpoint_count": 0,
+                "historic_castle_count": 0,
+                "historic_monument_count": 0,
+                "historic_memorial_count": 0,
+                "historic_ruins_count": 0,
+                "historic_archaeological_site_count": 0,
+                "unknown_landmark_count": 0,
                 "has_park": False,
                 "has_river": False,
                 "is_coastal": False,
@@ -2787,6 +3056,16 @@ class DetermineInitialScoreForGridCellTests(TestCase):
                 "trunk_count": 0,
                 "trunk_link_count": 0,
                 "unknown_expressway_count": 0,
+                "tourism_attraction_count": 0,
+                "tourism_museum_count": 0,
+                "tourism_gallery_count": 0,
+                "tourism_viewpoint_count": 0,
+                "historic_castle_count": 0,
+                "historic_monument_count": 0,
+                "historic_memorial_count": 0,
+                "historic_ruins_count": 0,
+                "historic_archaeological_site_count": 0,
+                "unknown_landmark_count": 0,
                 "has_park": False,
                 "has_river": False,
                 "is_coastal": False,
@@ -3279,6 +3558,212 @@ class DetermineInitialScoreForGridCellTests(TestCase):
         self.assertEqual(station_summary["station_cluster_count_max"], 0)
         self.assertEqual(station_summary["dense_station_cluster_count_max"], 0)
         self.assertEqual(station_summary["major_station_cluster_count_max"], 0)
+
+    def test_summarize_landmark_feature_matches_returns_zero_without_landmark(self):
+        landmark_summary = summarize_landmark_feature_matches_for_grid_cell_contexts(
+            [
+                {
+                    "row_index": 0,
+                    "col_index": 0,
+                    "north": 10.0,
+                    "south": 9.0,
+                    "east": 20.0,
+                    "west": 19.0,
+                },
+            ],
+            [
+                {
+                    "kind": "building",
+                    "bounds": {
+                        "north": 9.9,
+                        "south": 9.8,
+                        "east": 19.2,
+                        "west": 19.1,
+                    },
+                },
+            ],
+        )
+
+        self.assertEqual(
+            landmark_summary,
+            {
+                "landmark_features": 0,
+                "landmark_cells": 0,
+                "tourism_attraction_features": 0,
+                "tourism_attraction_cells": 0,
+                "tourism_museum_features": 0,
+                "tourism_museum_cells": 0,
+                "tourism_gallery_features": 0,
+                "tourism_gallery_cells": 0,
+                "tourism_viewpoint_features": 0,
+                "tourism_viewpoint_cells": 0,
+                "historic_castle_features": 0,
+                "historic_castle_cells": 0,
+                "historic_monument_features": 0,
+                "historic_monument_cells": 0,
+                "historic_memorial_features": 0,
+                "historic_memorial_cells": 0,
+                "historic_ruins_features": 0,
+                "historic_ruins_cells": 0,
+                "historic_archaeological_site_features": 0,
+                "historic_archaeological_site_cells": 0,
+                "unknown_landmark_features": 0,
+                "unknown_landmark_cells": 0,
+            },
+        )
+
+    def test_summarize_landmark_feature_matches_counts_features_and_cells(self):
+        grid_cell_contexts = [
+            {
+                "row_index": 0,
+                "col_index": 0,
+                "north": 10.0,
+                "south": 9.0,
+                "east": 20.0,
+                "west": 19.0,
+            },
+            {
+                "row_index": 0,
+                "col_index": 1,
+                "north": 10.0,
+                "south": 9.0,
+                "east": 21.0,
+                "west": 20.0,
+            },
+        ]
+        map_features = [
+            {
+                "kind": "landmark",
+                "source_tourism": "attraction",
+                "bounds": {
+                    "north": 9.8,
+                    "south": 9.2,
+                    "east": 20.2,
+                    "west": 19.8,
+                },
+            },
+            {
+                "kind": "landmark",
+                "source_tourism": "museum",
+                "bounds": {
+                    "north": 9.7,
+                    "south": 9.3,
+                    "east": 20.8,
+                    "west": 20.2,
+                },
+            },
+            {
+                "kind": "landmark",
+                "source_tourism": "gallery",
+                "bounds": {
+                    "north": 9.6,
+                    "south": 9.4,
+                    "east": 19.7,
+                    "west": 19.3,
+                },
+            },
+            {
+                "kind": "landmark",
+                "source_tourism": "viewpoint",
+                "bounds": {
+                    "north": 9.5,
+                    "south": 9.4,
+                    "east": 20.7,
+                    "west": 20.3,
+                },
+            },
+            {
+                "kind": "landmark",
+                "source_historic": "castle",
+                "bounds": {
+                    "north": 9.4,
+                    "south": 9.3,
+                    "east": 19.7,
+                    "west": 19.3,
+                },
+            },
+            {
+                "kind": "landmark",
+                "source_historic": "monument",
+                "bounds": {
+                    "north": 9.3,
+                    "south": 9.2,
+                    "east": 19.7,
+                    "west": 19.3,
+                },
+            },
+            {
+                "kind": "landmark",
+                "source_historic": "memorial",
+                "bounds": {
+                    "north": 9.2,
+                    "south": 9.1,
+                    "east": 19.7,
+                    "west": 19.3,
+                },
+            },
+            {
+                "kind": "landmark",
+                "source_historic": "ruins",
+                "bounds": {
+                    "north": 9.1,
+                    "south": 9.0,
+                    "east": 19.7,
+                    "west": 19.3,
+                },
+            },
+            {
+                "kind": "landmark",
+                "source_historic": "archaeological_site",
+                "bounds": {
+                    "north": 8.9,
+                    "south": 8.8,
+                    "east": 19.7,
+                    "west": 19.3,
+                },
+            },
+            {
+                "kind": "landmark",
+                "source_tourism": "hotel",
+                "bounds": {
+                    "north": 9.1,
+                    "south": 9.0,
+                    "east": 20.7,
+                    "west": 20.3,
+                },
+            },
+        ]
+
+        landmark_summary = summarize_landmark_feature_matches_for_grid_cell_contexts(
+            grid_cell_contexts,
+            map_features,
+        )
+
+        self.assertEqual(landmark_summary["landmark_features"], 10)
+        self.assertEqual(landmark_summary["landmark_cells"], 2)
+        self.assertEqual(landmark_summary["tourism_attraction_features"], 1)
+        self.assertEqual(landmark_summary["tourism_attraction_cells"], 2)
+        self.assertEqual(landmark_summary["tourism_museum_features"], 1)
+        self.assertEqual(landmark_summary["tourism_museum_cells"], 1)
+        self.assertEqual(landmark_summary["tourism_gallery_features"], 1)
+        self.assertEqual(landmark_summary["tourism_gallery_cells"], 1)
+        self.assertEqual(landmark_summary["tourism_viewpoint_features"], 1)
+        self.assertEqual(landmark_summary["tourism_viewpoint_cells"], 1)
+        self.assertEqual(landmark_summary["historic_castle_features"], 1)
+        self.assertEqual(landmark_summary["historic_castle_cells"], 1)
+        self.assertEqual(landmark_summary["historic_monument_features"], 1)
+        self.assertEqual(landmark_summary["historic_monument_cells"], 1)
+        self.assertEqual(landmark_summary["historic_memorial_features"], 1)
+        self.assertEqual(landmark_summary["historic_memorial_cells"], 1)
+        self.assertEqual(landmark_summary["historic_ruins_features"], 1)
+        self.assertEqual(landmark_summary["historic_ruins_cells"], 1)
+        self.assertEqual(
+            landmark_summary["historic_archaeological_site_features"],
+            1,
+        )
+        self.assertEqual(landmark_summary["historic_archaeological_site_cells"], 0)
+        self.assertEqual(landmark_summary["unknown_landmark_features"], 1)
+        self.assertEqual(landmark_summary["unknown_landmark_cells"], 1)
 
     def test_summarize_expressway_feature_matches_returns_zero_without_expressway(
         self,
@@ -3795,6 +4280,16 @@ class DetermineInitialScoreForGridCellTests(TestCase):
                 "west": 19.1,
             },
         }
+        valid_landmark_feature = {
+            "kind": "landmark",
+            "source_tourism": "attraction",
+            "bounds": {
+                "north": 9.9,
+                "south": 9.8,
+                "east": 19.2,
+                "west": 19.1,
+            },
+        }
         test_cases = (
             (
                 summarize_station_feature_matches_for_grid_cell_contexts,
@@ -3845,6 +4340,31 @@ class DetermineInitialScoreForGridCellTests(TestCase):
                 summarize_expressway_feature_matches_for_grid_cell_contexts,
                 [valid_context],
                 [{**valid_expressway_feature, "bounds": None}],
+            ),
+            (
+                summarize_landmark_feature_matches_for_grid_cell_contexts,
+                None,
+                [],
+            ),
+            (
+                summarize_landmark_feature_matches_for_grid_cell_contexts,
+                [None],
+                [],
+            ),
+            (
+                summarize_landmark_feature_matches_for_grid_cell_contexts,
+                [valid_context],
+                None,
+            ),
+            (
+                summarize_landmark_feature_matches_for_grid_cell_contexts,
+                [valid_context],
+                [None],
+            ),
+            (
+                summarize_landmark_feature_matches_for_grid_cell_contexts,
+                [valid_context],
+                [{**valid_landmark_feature, "bounds": None}],
             ),
         )
 

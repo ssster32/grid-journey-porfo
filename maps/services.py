@@ -69,6 +69,26 @@ STATION_DENSE_CLUSTER_DISTANCE_METERS = 150
 STATION_BROAD_CLUSTER_DISTANCE_METERS = 300
 STATION_MAJOR_CLUSTER_MIN_FEATURES = 4
 STATION_DENSITY_MAJOR_CLUSTER_MIN_FEATURES = 3
+LANDMARK_TOURISM_TYPES = {"attraction", "museum", "gallery", "viewpoint"}
+LANDMARK_HISTORIC_TYPES = {
+    "castle",
+    "monument",
+    "memorial",
+    "ruins",
+    "archaeological_site",
+}
+LANDMARK_SUMMARY_KEYS = (
+    "tourism_attraction",
+    "tourism_museum",
+    "tourism_gallery",
+    "tourism_viewpoint",
+    "historic_castle",
+    "historic_monument",
+    "historic_memorial",
+    "historic_ruins",
+    "historic_archaeological_site",
+    "unknown",
+)
 EXPRESSWAY_SUMMARY_KEYS = (
     "motorway",
     "motorway_link",
@@ -151,6 +171,8 @@ def classify_osm_element(tags):
     leisure = tags.get("leisure")
     railway = tags.get("railway")
     highway = tags.get("highway")
+    tourism = tags.get("tourism")
+    historic = tags.get("historic")
 
     if natural == "coastline":
         return "coastline"
@@ -173,6 +195,8 @@ def classify_osm_element(tags):
         return "railway"
     if highway in EXPRESSWAY_HIGHWAY_TYPES:
         return "expressway"
+    if tourism in LANDMARK_TOURISM_TYPES or historic in LANDMARK_HISTORIC_TYPES:
+        return "landmark"
     if "highway" in tags:
         return "road"
     if "building" in tags:
@@ -274,6 +298,10 @@ def build_map_feature_from_osm_element(element):
         map_feature["source_amenity"] = tags.get("amenity")
     if "highway" in tags:
         map_feature["source_highway"] = tags.get("highway")
+    if "tourism" in tags:
+        map_feature["source_tourism"] = tags.get("tourism")
+    if "historic" in tags:
+        map_feature["source_historic"] = tags.get("historic")
     if "tunnel" in tags:
         map_feature["source_tunnel"] = tags.get("tunnel")
     if "layer" in tags:
@@ -339,6 +367,15 @@ def build_overpass_query(bounds):
         '["highway"="motorway_link"]',
         '["highway"="trunk"]',
         '["highway"="trunk_link"]',
+        '["tourism"="attraction"]',
+        '["tourism"="museum"]',
+        '["tourism"="gallery"]',
+        '["tourism"="viewpoint"]',
+        '["historic"="castle"]',
+        '["historic"="monument"]',
+        '["historic"="memorial"]',
+        '["historic"="ruins"]',
+        '["historic"="archaeological_site"]',
     )
     query_lines = [
         "[out:json][timeout:25];",
@@ -482,6 +519,12 @@ def build_feature_summaries_for_map_area_from_overpass(
             map_features,
         )
     )
+    feature_summaries.landmark_summary = (
+        summarize_landmark_feature_matches_for_grid_cell_contexts(
+            grid_cell_contexts,
+            map_features,
+        )
+    )
     feature_summaries.expressway_summary = (
         summarize_expressway_feature_matches_for_grid_cell_contexts(
             grid_cell_contexts,
@@ -579,6 +622,19 @@ def _empty_station_feature_match_summary():
     summary["station_cluster_count_max"] = 0
     summary["dense_station_cluster_count_max"] = 0
     summary["major_station_cluster_count_max"] = 0
+    return summary
+
+
+def _empty_landmark_feature_match_summary():
+    summary = {
+        "landmark_features": 0,
+        "landmark_cells": 0,
+    }
+    for landmark_type in LANDMARK_SUMMARY_KEYS[:-1]:
+        summary[f"{landmark_type}_features"] = 0
+        summary[f"{landmark_type}_cells"] = 0
+    summary["unknown_landmark_features"] = 0
+    summary["unknown_landmark_cells"] = 0
     return summary
 
 
@@ -692,6 +748,21 @@ def classify_station_feature_type(feature):
     return "unknown"
 
 
+def classify_landmark_feature_type(feature):
+    """Classify one tourism/historic map feature for log-only summaries."""
+    if not isinstance(feature, dict):
+        raise ValueError("feature は辞書で指定してください。")
+
+    source_tourism = feature.get("source_tourism")
+    source_historic = feature.get("source_historic")
+    if source_tourism in LANDMARK_TOURISM_TYPES:
+        return f"tourism_{source_tourism}"
+    if source_historic in LANDMARK_HISTORIC_TYPES:
+        return f"historic_{source_historic}"
+
+    return "unknown"
+
+
 def classify_expressway_feature_type(feature):
     """Classify one expressway map feature for log-only summaries."""
     if not isinstance(feature, dict):
@@ -708,6 +779,12 @@ def _station_summary_field(station_type):
     if station_type == "unknown":
         return "unknown_station"
     return station_type
+
+
+def _landmark_summary_field(landmark_type):
+    if landmark_type == "unknown":
+        return "unknown_landmark"
+    return landmark_type
 
 
 def _bounds_center(bounds):
@@ -947,6 +1024,49 @@ def summarize_station_feature_matches_for_grid_cell_contexts(
         )
 
     return station_summary
+
+
+def summarize_landmark_feature_matches_for_grid_cell_contexts(
+    grid_cell_contexts,
+    map_features,
+):
+    """Summarize tourism/historic feature matches for log output only."""
+    if not isinstance(grid_cell_contexts, list):
+        raise ValueError("grid_cell_contexts はリストで指定してください。")
+    if not isinstance(map_features, list):
+        raise ValueError("map_features はリストで指定してください。")
+
+    landmark_summary = _empty_landmark_feature_match_summary()
+    cell_keys_by_type = {"landmark": set()}
+    for landmark_type in LANDMARK_SUMMARY_KEYS:
+        cell_keys_by_type[_landmark_summary_field(landmark_type)] = set()
+    grid_cell_entries = _build_grid_cell_entries_for_summary(grid_cell_contexts)
+
+    for feature in map_features:
+        if not isinstance(feature, dict):
+            raise ValueError("map_features の各要素は辞書で指定してください。")
+        if feature.get("kind") != "landmark":
+            continue
+
+        landmark_type = classify_landmark_feature_type(feature)
+        landmark_field = _landmark_summary_field(landmark_type)
+        landmark_summary["landmark_features"] += 1
+        landmark_summary[f"{landmark_field}_features"] += 1
+        feature_bounds = _normalize_bounds(feature.get("bounds"))
+
+        for cell_key, grid_cell_bounds in grid_cell_entries:
+            if feature_intersects_grid_cell(feature_bounds, grid_cell_bounds):
+                cell_keys_by_type["landmark"].add(cell_key)
+                cell_keys_by_type[landmark_field].add(cell_key)
+
+    landmark_summary["landmark_cells"] = len(cell_keys_by_type["landmark"])
+    for landmark_type in LANDMARK_SUMMARY_KEYS:
+        landmark_field = _landmark_summary_field(landmark_type)
+        landmark_summary[f"{landmark_field}_cells"] = len(
+            cell_keys_by_type[landmark_field]
+        )
+
+    return landmark_summary
 
 
 def summarize_expressway_feature_matches_for_grid_cell_contexts(
@@ -1566,6 +1686,16 @@ def build_feature_summary_for_grid_cell(
         "trunk_count": 0,
         "trunk_link_count": 0,
         "unknown_expressway_count": 0,
+        "tourism_attraction_count": 0,
+        "tourism_museum_count": 0,
+        "tourism_gallery_count": 0,
+        "tourism_viewpoint_count": 0,
+        "historic_castle_count": 0,
+        "historic_monument_count": 0,
+        "historic_memorial_count": 0,
+        "historic_ruins_count": 0,
+        "historic_archaeological_site_count": 0,
+        "unknown_landmark_count": 0,
         "has_park": False,
         "has_river": False,
         "is_coastal": False,
@@ -1588,6 +1718,7 @@ def build_feature_summary_for_grid_cell(
             "railway",
             "station",
             "expressway",
+            "landmark",
         }:
             continue
 
@@ -1678,6 +1809,12 @@ def build_feature_summary_for_grid_cell(
                 feature_summary["unknown_expressway_count"] += 1
             else:
                 feature_summary[f"{expressway_type}_count"] += 1
+        elif feature_kind == "landmark":
+            landmark_type = classify_landmark_feature_type(feature)
+            if landmark_type == "unknown":
+                feature_summary["unknown_landmark_count"] += 1
+            else:
+                feature_summary[f"{landmark_type}_count"] += 1
 
     feature_summary["station_cluster_count"] = _max_station_cluster_size(
         station_centers,

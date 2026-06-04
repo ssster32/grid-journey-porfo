@@ -448,6 +448,56 @@ def log_overpass_station_summary(
     )
 
 
+def log_overpass_landmark_summary(
+    area,
+    user_id,
+    landmark_summary=None,
+):
+    if landmark_summary is None:
+        landmark_summary = {}
+
+    logger.info(
+        "Overpass auto landmark summary: "
+        "area_id=%s user_id=%s "
+        "landmark_features=%s landmark_cells=%s "
+        "tourism_attraction_features=%s tourism_attraction_cells=%s "
+        "tourism_museum_features=%s tourism_museum_cells=%s "
+        "tourism_gallery_features=%s tourism_gallery_cells=%s "
+        "tourism_viewpoint_features=%s tourism_viewpoint_cells=%s "
+        "historic_castle_features=%s historic_castle_cells=%s "
+        "historic_monument_features=%s historic_monument_cells=%s "
+        "historic_memorial_features=%s historic_memorial_cells=%s "
+        "historic_ruins_features=%s historic_ruins_cells=%s "
+        "historic_archaeological_site_features=%s "
+        "historic_archaeological_site_cells=%s "
+        "unknown_landmark_features=%s unknown_landmark_cells=%s",
+        area.id,
+        user_id,
+        landmark_summary.get("landmark_features", 0),
+        landmark_summary.get("landmark_cells", 0),
+        landmark_summary.get("tourism_attraction_features", 0),
+        landmark_summary.get("tourism_attraction_cells", 0),
+        landmark_summary.get("tourism_museum_features", 0),
+        landmark_summary.get("tourism_museum_cells", 0),
+        landmark_summary.get("tourism_gallery_features", 0),
+        landmark_summary.get("tourism_gallery_cells", 0),
+        landmark_summary.get("tourism_viewpoint_features", 0),
+        landmark_summary.get("tourism_viewpoint_cells", 0),
+        landmark_summary.get("historic_castle_features", 0),
+        landmark_summary.get("historic_castle_cells", 0),
+        landmark_summary.get("historic_monument_features", 0),
+        landmark_summary.get("historic_monument_cells", 0),
+        landmark_summary.get("historic_memorial_features", 0),
+        landmark_summary.get("historic_memorial_cells", 0),
+        landmark_summary.get("historic_ruins_features", 0),
+        landmark_summary.get("historic_ruins_cells", 0),
+        landmark_summary.get("historic_archaeological_site_features", 0),
+        landmark_summary.get("historic_archaeological_site_cells", 0),
+        landmark_summary.get("unknown_landmark_features", 0),
+        landmark_summary.get("unknown_landmark_cells", 0),
+    )
+
+
 def log_overpass_expressway_summary(
     area,
     user_id,
@@ -832,6 +882,15 @@ class MapAreaListCreateView(APIView):
                             getattr(
                                 feature_summaries_by_position,
                                 "station_summary",
+                                None,
+                            ),
+                        )
+                        log_overpass_landmark_summary(
+                            area,
+                            request.user.id,
+                            getattr(
+                                feature_summaries_by_position,
+                                "landmark_summary",
                                 None,
                             ),
                         )
