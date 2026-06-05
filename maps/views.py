@@ -4,6 +4,7 @@ from django.contrib.staticfiles import finders
 from django.db import transaction
 from django.db.models import Q
 from django.http import Http404, HttpResponse
+from django.views.generic import TemplateView
 from rest_framework import status
 from rest_framework.authentication import TokenAuthentication
 from rest_framework.authentication import BasicAuthentication, SessionAuthentication
@@ -917,6 +918,10 @@ class MapDemoView(APIView):
 
         with open(demo_path, encoding="utf-8") as demo_file:
             return HttpResponse(demo_file.read(), content_type="text/html")
+
+
+class MapAreaPageListView(TemplateView):
+    template_name = "maps/grid_list.html"
 
 
 class MapAreaListCreateView(APIView):

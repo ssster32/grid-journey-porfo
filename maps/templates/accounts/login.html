@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+
+{% block title %}ログイン{% endblock %}
+
+{% block content %}
+  <h1>ログイン</h1>
+  <p>メモグリッドを作成・採点するためにログインします。</p>
+
+  {% if form.errors %}
+    <section aria-label="ログインエラー">
+      <p>ユーザー名またはパスワードが正しくありません。</p>
+      {{ form.non_field_errors }}
+    </section>
+  {% endif %}
+
+  <form method="post">
+    {% csrf_token %}
+    <input type="hidden" name="next" value="{{ next }}">
+
+    <label for="{{ form.username.id_for_label }}">
+      username
+      {{ form.username }}
+    </label>
+
+    <label for="{{ form.password.id_for_label }}">
+      password
+      {{ form.password }}
+    </label>
+
+    <button type="submit">ログイン</button>
+  </form>
+
+  <p>
+    <a href="{% url 'map-area-page-list' %}">メモグリッドへ戻る</a>
+  </p>
+{% endblock %}

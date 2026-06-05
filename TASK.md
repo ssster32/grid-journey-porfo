@@ -1,200 +1,161 @@
-# TASK: large bounds expressway を除外した有効expresswayログを追加する
+# TASK: 本サイト用ログイン画面の土台を作成する
 
 ## 目的
 
-expressway の実データ確認で、少数の巨大boundsが広範囲のGridCellにかかっている可能性が高いことが分かった。
+本サイト用画面として、ログイン画面の土台を追加してください。
 
-前回ログ:
+前回の作業で、本サイト用の以下が追加済みです。
 
-```text
-expressway_cells=188
-expressway_avg_overlap=0.7493
-expressway_large_bounds_features=2
-expressway_large_bounds_cells=141
-motorway_cells=156
-motorway_avg_overlap=0.8234
-```
+- `/maps/`
+- `MapAreaPageListView`
+- `maps/page_urls.py`
+- `maps/templates/base.html`
+- `maps/templates/maps/grid_list.html`
 
-この状態で expressway を採点に入れると、エリア全体を底上げしてしまう可能性がある。
-
-今回のTASKでは、**large bounds expressway を除外した場合に、採点候補として使えそうな有効expresswayがどれくらい残るか**をログで確認できるようにする。
-
-今回も **採点ロジックは変更しない**。
+今回は、demo ページのように Basic 認証情報を各画面に置くのではなく、本サイト用のログイン画面を追加するための最小実装を行います。
 
 ## 実装方針
 
-### 1. effective expressway summary を追加する
+今回は「ログイン画面の土台」を作るだけです。
 
-`services.py` に、large bounds expressway を除外した有効expressway用summary関数を追加する。
+Django 標準の認証 view を使える場合は、それを優先してください。
 
-想定名:
+想定URL:
+
+```text
+/login/
+```
+
+想定テンプレート:
+
+```text
+maps/templates/accounts/login.html
+```
+
+ただし、既存プロジェクトの構成上、`accounts/` アプリや既存テンプレート配置がある場合は、そちらに合わせてください。
+
+## やってほしいこと
+
+### 1. ログイン画面テンプレートを作成する
+
+以下のようなテンプレートを作成してください。
+
+```text
+maps/templates/accounts/login.html
+```
+
+内容:
+
+- `base.html` を継承する
+- 見出しは `ログイン`
+- username 入力欄
+- password 入力欄
+- ログインボタン
+- ログイン失敗時のエラー表示
+- `/maps/` へ戻るリンク、またはトップへ戻るリンク
+
+デザインは最低限でよいです。
+CSS の本格調整は今回しないでください。
+
+### 2. ログインURLを追加する
+
+`/login/` でログイン画面を表示できるようにしてください。
+
+Django 標準の `LoginView` を使える場合は、以下のような方針で実装してください。
 
 ```python
-summarize_effective_expressway_feature_matches_for_grid_cell_contexts(
-    grid_cell_contexts,
-    map_features,
+from django.contrib.auth.views import LoginView
+
+path(
+    "login/",
+    LoginView.as_view(template_name="accounts/login.html"),
+    name="login",
 )
 ```
 
-対象:
+ただし、既存の `config/urls.py` や URL 構成に合わせて、より自然な場所に追加してください。
 
-```python
-feature["kind"] == "expressway"
+### 3. ログイン後の遷移先を設定する
+
+ログイン成功後は、ひとまず `/maps/` に移動する方針にしてください。
+
+方法は既存構成に合わせてください。
+
+候補:
+
+- `settings.py` に `LOGIN_REDIRECT_URL = "/maps/"` を追加
+- `LoginView.as_view(..., next_page="/maps/")` を使う
+- 既に設定がある場合はそれを尊重する
+
+既存設定がある場合は、無理に上書きしないでください。
+
+### 4. base.html のヘッダーにログインリンクを追加する
+
+`base.html` に最低限のログイン導線を追加してください。
+
+例:
+
+- 未ログインなら `ログイン`
+- ログイン済みなら `ログイン中: username`
+
+ログアウト機能は今回は実装しなくてよいです。
+
+ログイン状態の判定は、Django テンプレート上で可能なら以下のようにしてください。
+
+```django
+{% if user.is_authenticated %}
+  ログイン中: {{ user.username }}
+{% else %}
+  <a href="{% url 'login' %}">ログイン</a>
+{% endif %}
 ```
 
-ただし、以下のlarge bounds判定に該当するfeatureは、有効expresswayから除外する。
+ただし、既存の `base.html` の構成に合わせて調整してください。
 
-```python
-size_ratios["area_ratio"] > MAX_EXPRESSWAY_BOUNDS_AREA_RATIO_FOR_LOG
-or size_ratios["height_ratio"] > MAX_EXPRESSWAY_BOUNDS_LENGTH_RATIO_FOR_LOG
-or size_ratios["width_ratio"] > MAX_EXPRESSWAY_BOUNDS_LENGTH_RATIO_FOR_LOG
-```
+### 5. 今回は /maps/ をログイン必須にしない
 
-既存の `MAX_EXPRESSWAY_BOUNDS_AREA_RATIO_FOR_LOG` / `MAX_EXPRESSWAY_BOUNDS_LENGTH_RATIO_FOR_LOG` を使う。
+今回はログイン画面の土台追加が目的です。
 
-### 2. 集計項目
+`/maps/` の `MapAreaPageListView` に `LoginRequiredMixin` を付けるかどうかは、次回以降のタスクで検討します。
 
-以下を集計する。
+今回は `/maps/` をログイン必須にしなくてよいです。
 
-```text
-effective_expressway_features
-effective_expressway_cells
-effective_expressway_avg_overlap
-effective_expressway_max_overlap
+## 今回は実装しないこと
 
-effective_motorway_features
-effective_motorway_cells
-effective_motorway_avg_overlap
-effective_motorway_max_overlap
+以下は今回やらないでください。
 
-effective_motorway_link_features
-effective_motorway_link_cells
-effective_motorway_link_avg_overlap
-effective_motorway_link_max_overlap
-
-effective_trunk_features
-effective_trunk_cells
-effective_trunk_avg_overlap
-effective_trunk_max_overlap
-
-effective_trunk_link_features
-effective_trunk_link_cells
-effective_trunk_link_avg_overlap
-effective_trunk_link_max_overlap
-
-filtered_expressway_large_bounds_features
-filtered_expressway_large_bounds_cells
-```
-
-可能なら `effective_unknown_expressway_*` も追加する。
-
-### 3. overlap集計方針
-
-- `*_features`: large boundsを除外したfeature件数
-- `*_cells`: large boundsを除外したfeatureと1件以上交差したGridCell数
-- `*_avg_overlap`: 交差セルごとの最大overlapの平均
-- `*_max_overlap`: 最大overlap
-- `filtered_expressway_large_bounds_features`: 除外対象になったlarge bounds feature数
-- `filtered_expressway_large_bounds_cells`: 除外対象featureと交差したGridCell数
-
-同じセルに複数featureが交差する場合は、セルごとの最大overlapを使う。
-
-### 4. FeatureSummariesByPosition に接続する
-
-`build_feature_summaries_for_map_area_from_overpass()` で接続する。
-
-```python
-feature_summaries.effective_expressway_summary = (
-    summarize_effective_expressway_feature_matches_for_grid_cell_contexts(
-        grid_cell_contexts,
-        map_features,
-    )
-)
-```
-
-既存の以下は維持する。
-
-```python
-feature_summaries.expressway_summary
-feature_summaries.expressway_bounds_summary
-```
-
-### 5. views.py にログを追加する
-
-`views.py` にログ関数を追加する。
-
-想定名:
-
-```python
-log_overpass_effective_expressway_summary(
-    area,
-    user_id,
-    effective_expressway_summary=None,
-)
-```
-
-ログ名:
-
-```text
-Overpass auto effective expressway summary
-```
-
-出力項目例:
-
-```text
-effective_expressway_features=...
-effective_expressway_cells=...
-effective_expressway_avg_overlap=...
-effective_expressway_max_overlap=...
-effective_motorway_features=...
-effective_motorway_cells=...
-effective_motorway_avg_overlap=...
-effective_motorway_max_overlap=...
-effective_trunk_features=...
-effective_trunk_cells=...
-effective_trunk_avg_overlap=...
-effective_trunk_max_overlap=...
-filtered_expressway_large_bounds_features=...
-filtered_expressway_large_bounds_cells=...
-```
-
-`MapAreaListCreateView.post()` の `initial_score_mode=auto` 成功時に既存ログと同じ流れで出力する。
-
-## テスト観点
-
-`test_osm_services.py` と必要に応じて `tests.py` を更新する。
-
-確認すること:
-
-- effective expressway summary 関数が追加されている
-- expressway がない場合、各値が0になる
-- large boundsでない motorway / trunk などが effective_* に集計される
-- large bounds expressway は effective_* から除外される
-- large bounds expressway は filtered_expressway_large_bounds_* に集計される
-- `effective_*_cells` が交差セル数になる
-- `effective_*_avg_overlap` / `effective_*_max_overlap` が計算される
-- 今回の変更で `initial_score` は変わらない
-- `Overpass auto effective expressway summary` がログに出る
-- 既存の `Overpass auto expressway summary` / `Overpass auto expressway bounds summary` は維持される
+- メモグリッド一覧のAPI連携
+- `/maps/` のログイン必須化
+- ログアウト機能
+- ユーザー登録機能
+- パスワード再設定
+- Token 認証の画面対応
+- demo.js の変更
+- demo.css の移植
+- Leaflet 表示
+- 採点処理
+- 共有相手管理
+- model 変更
+- migration 作成
+- 既存 API の挙動変更
+- demo ページ削除
+- `memo.md` の更新
 
 ## 注意
 
-- 今回は採点ロジックを変更しない
-- expressway を initial_score に反映しない
-- large bounds expressway を取得対象から削除しない
-- あくまで「有効候補から除外した場合のログ」を追加する
-- road を採点寄与に戻さない
-- station / surface railway / water / river / park / forest の既存採点は変更しない
-- DB、model、migration は変更しない
-- memo.md は触らない
-- 確認コマンドやテストコマンドは実行しない
+- 確認コマンドやテストコマンドは実行しないでください。
+- コマンド実行結果の報告は不要です。
+- 既存 API の URL や挙動を変えないでください。
+- demo ページを壊さないでください。
+- 既に未コミット差分がある場合は、今回の作業対象以外を変更しないでください。
 
-## 作業完了時に説明してほしいこと
+## 作業後に報告してほしいこと
 
-- 変更したファイル
-- 追加したeffective summary関数
-- large bounds除外条件
-- 追加したログ項目
-- initial_score に影響しないこと
-- 追加・更新したテスト観点
-- 実データ確認時に見るべきログ項目
+作業後、以下を説明してください。
+
+- 追加・変更したファイル
+- 追加した URL
+- 使用した view
+- ログイン成功後の遷移先
+- 今回は未実装のこと
+- 次にやるとよい作業

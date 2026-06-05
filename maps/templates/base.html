@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}メモグリッド{% endblock %}</title>
+    {% block extra_css %}{% endblock %}
+  </head>
+  <body>
+    <header>
+      <a href="{% url 'map-area-page-list' %}">メモグリッド</a>
+      <nav aria-label="サイト内ナビゲーション">
+        <a href="{% url 'map-area-page-list' %}">メモグリッド</a>
+        {% if user.is_authenticated %}
+          <span>ログイン中: {{ user.username }}</span>
+        {% else %}
+          <a href="{% url 'login' %}">ログイン</a>
+        {% endif %}
+      </nav>
+    </header>
+
+    <main>
+      {% block content %}{% endblock %}
+    </main>
+
+    {% block extra_js %}{% endblock %}
+  </body>
+</html>
