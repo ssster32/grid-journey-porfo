@@ -1000,12 +1000,10 @@ GET /api/maps/areas/{area_id}/grids/
 
 #### 表示方針メモ
 
-- demo ページの Score Map では、`calculated_score` を各マスのメイン表示に使います。
-- `GridCell ID` と `row_index` / `col_index` は、現在は確認用に小さく表示します。
-- demo ページでは、MapArea の `north`, `south`, `east`, `west` を使って Score Map の概算縦横比を決めます。
-- demo ページでは、任意の画像 URL を Score Map の背景として指定できます。
-- 背景画像指定は表示確認用であり、画像アップロードや外部地図 API 連携は行いません。
-- 現時点では正確な地図投影は行わず、`row_index` / `col_index` による簡易グリッド配置を維持します。
+- demo ページの Map Preview では、`calculated_score` を GridCell の色分けに使います。
+- GridCell のクリック選択と Shift + ドラッグ範囲選択は、Map Preview 上で行います。
+- demo ページでは、MapArea の `north`, `south`, `east`, `west` を使って Leaflet 地図上に範囲と GridCell 境界を表示します。
+- 背景地図は Leaflet と OpenStreetMap タイルを使います。
 - この表示改善では API レスポンス形式は変更しません。
 
 ### GridCell 自動生成 API

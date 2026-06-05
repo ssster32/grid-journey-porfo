@@ -4,11 +4,6 @@ const state = {
   selectedGridId: null,
   selectedGrid: null,
   selectedGridIds: new Set(),
-  scoreMapViewMode: "fit",
-  isDraggingSelection: false,
-  dragStartPoint: null,
-  dragCurrentPoint: null,
-  suppressNextCellClick: false,
   areasById: new Map(),
   gridsById: new Map(),
   leafletMap: null,
@@ -39,7 +34,7 @@ const elements = {
   areaRegionFeatureLevel: document.querySelector("#area-region-feature-level"),
   areaSource: document.querySelector("#area-source"),
   areasList: document.querySelector("#areas-list"),
-  selectedAreaLabel: document.querySelector("#selected-area-label"),
+  selectedAreaName: document.querySelector("#selected-area-name"),
   selectedShareAreaLabel: document.querySelector("#selected-share-area-label"),
   reloadGridsButton: document.querySelector("#reload-grids-button"),
   message: document.querySelector("#message"),
@@ -49,12 +44,6 @@ const elements = {
   shareUsername: document.querySelector("#share-username"),
   shareMessage: document.querySelector("#share-message"),
   sharesList: document.querySelector("#shares-list"),
-  scoreMapViewModeInputs: document.querySelectorAll('input[name="score-map-view-mode"]'),
-  scoreMapRatio: document.querySelector("#score-map-ratio"),
-  scoreMap: document.querySelector("#score-map"),
-  scoreMapWrap: document.querySelector(".score-map-wrap"),
-  scoreMapStage: document.querySelector(".score-map-stage"),
-  scoreSelectionRect: document.querySelector("#score-selection-rect"),
   mapPreview: document.querySelector("#map-preview"),
   mapPreviewStatus: document.querySelector("#map-preview-status"),
   selectedGridLabel: document.querySelector("#selected-grid-label"),
@@ -74,9 +63,6 @@ const elements = {
   autoScoreBreakdownBody: document.querySelector("#auto-score-breakdown-body"),
 };
 
-const FALLBACK_AREA_ASPECT_RATIO = 1.4;
-const MIN_AREA_ASPECT_RATIO = 0.6;
-const MAX_AREA_ASPECT_RATIO = 2.2;
 const DRAG_SELECT_THRESHOLD = 5;
 const MAP_PREVIEW_TARGET_FILL_RATIO = 0.95;
 const MAP_PREVIEW_MIN_FIT_PADDING = 4;
@@ -182,16 +168,6 @@ function scoreLevel(score) {
   return "low";
 }
 
-function scoreClass(score) {
-  const classes = {
-    low: "score-low",
-    middle: "score-middle",
-    high: "score-high",
-    veryHigh: "score-very-high",
-  };
-  return classes[scoreLevel(score)];
-}
-
 function mapPreviewScoreLabelClass(score) {
   const classes = {
     low: "map-preview-score-low",
@@ -204,25 +180,6 @@ function mapPreviewScoreLabelClass(score) {
 
 function mapPreviewScoreStyle(score) {
   return MAP_PREVIEW_SCORE_STYLES[scoreLevel(score)];
-}
-
-function clamp(value, min, max) {
-  return Math.min(Math.max(value, min), max);
-}
-
-function mapAreaAspectRatio(area) {
-  if (!area) {
-    return FALLBACK_AREA_ASPECT_RATIO;
-  }
-
-  const width = Number(area.east) - Number(area.west);
-  const height = Number(area.north) - Number(area.south);
-
-  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
-    return FALLBACK_AREA_ASPECT_RATIO;
-  }
-
-  return clamp(width / height, MIN_AREA_ASPECT_RATIO, MAX_AREA_ASPECT_RATIO);
 }
 
 function selectedArea() {
@@ -626,7 +583,6 @@ function selectMapGridCellsInBounds(selectionBounds) {
   }
 
   renderSelectedGrids();
-  highlightSelectedScoreCells();
   highlightSelectedMapGridBoundaries();
 
   return selectedCount;
@@ -687,53 +643,6 @@ function finishLeafletDragSelection(event) {
   window.setTimeout(() => {
     state.suppressNextMapGridClick = false;
   }, 0);
-}
-
-function applyScoreMapAspectRatio() {
-  const ratio = mapAreaAspectRatio(selectedArea());
-  elements.scoreMapStage.style.setProperty(
-    "--score-map-aspect-ratio",
-    ratio.toFixed(3)
-  );
-  elements.scoreMapRatio.textContent = `area ratio ${ratio.toFixed(2)}`;
-}
-
-function readScoreMapViewMode() {
-  const checkedInput = document.querySelector(
-    'input[name="score-map-view-mode"]:checked'
-  );
-  return checkedInput ? checkedInput.value : "fit";
-}
-
-function applyScoreMapViewMode() {
-  const mode = state.scoreMapViewMode;
-  elements.scoreMapWrap.classList.toggle("is-fit", mode === "fit");
-  elements.scoreMapWrap.classList.toggle("is-detail", mode === "detail");
-  elements.scoreMapStage.classList.toggle("is-fit", mode === "fit");
-  elements.scoreMapStage.classList.toggle("is-detail", mode === "detail");
-}
-
-function applyScoreMapDensity(rowCount, colCount) {
-  const maxSide = Math.max(rowCount, colCount);
-  const cellCount = rowCount * colCount;
-  const densityClasses = [
-    "is-density-normal",
-    "is-density-dense",
-    "is-density-crowded",
-  ];
-
-  elements.scoreMapStage.classList.remove(...densityClasses);
-
-  if (maxSide >= 12 || cellCount >= 96) {
-    elements.scoreMapStage.classList.add("is-density-crowded");
-    return;
-  }
-  if (maxSide >= 7 || cellCount >= 36) {
-    elements.scoreMapStage.classList.add("is-density-dense");
-    return;
-  }
-
-  elements.scoreMapStage.classList.add("is-density-normal");
 }
 
 async function readJsonResponse(response) {
@@ -992,7 +901,6 @@ function clearSelectedGrids() {
   state.selectedGrid = null;
   state.selectedGridIds.clear();
   renderSelectedGrids();
-  highlightSelectedScoreCells();
   highlightSelectedMapGridBoundaries();
 }
 
@@ -1004,7 +912,6 @@ function removeSelectedGrid(gridId) {
     state.selectedGrid = null;
   }
   renderSelectedGrids();
-  highlightSelectedScoreCells();
   highlightSelectedMapGridBoundaries();
 }
 
@@ -1066,15 +973,6 @@ function renderSelectedGrids() {
   setSelectedGridMessage("");
 }
 
-function highlightSelectedScoreCells() {
-  document.querySelectorAll(".score-cell").forEach((cell) => {
-    cell.classList.toggle(
-      "is-selected",
-      state.selectedGridIds.has(Number(cell.dataset.gridId))
-    );
-  });
-}
-
 function highlightSelectedMapGridBoundaries() {
   state.mapGridRectanglesById.forEach((rectangle, gridId) => {
     const grid = state.gridsById.get(gridId);
@@ -1123,183 +1021,7 @@ function toggleGridSelection(gridId) {
   state.selectedGridId = normalizedGridId;
   state.selectedGrid = grid;
   renderSelectedGrids();
-  highlightSelectedScoreCells();
   highlightSelectedMapGridBoundaries();
-}
-
-function stagePointFromEvent(event) {
-  const stageRect = elements.scoreMapStage.getBoundingClientRect();
-  return {
-    x: event.clientX - stageRect.left,
-    y: event.clientY - stageRect.top,
-  };
-}
-
-function selectionRectFromPoints(startPoint, endPoint) {
-  const left = Math.min(startPoint.x, endPoint.x);
-  const top = Math.min(startPoint.y, endPoint.y);
-  const width = Math.abs(endPoint.x - startPoint.x);
-  const height = Math.abs(endPoint.y - startPoint.y);
-
-  return {
-    left,
-    top,
-    right: left + width,
-    bottom: top + height,
-    width,
-    height,
-  };
-}
-
-function dragDistance() {
-  if (!state.dragStartPoint || !state.dragCurrentPoint) {
-    return 0;
-  }
-
-  const xDistance = state.dragCurrentPoint.x - state.dragStartPoint.x;
-  const yDistance = state.dragCurrentPoint.y - state.dragStartPoint.y;
-  return Math.hypot(xDistance, yDistance);
-}
-
-function renderSelectionRect() {
-  if (!state.dragStartPoint || !state.dragCurrentPoint) {
-    return;
-  }
-
-  const rect = selectionRectFromPoints(state.dragStartPoint, state.dragCurrentPoint);
-  elements.scoreSelectionRect.hidden = false;
-  elements.scoreSelectionRect.style.left = `${rect.left}px`;
-  elements.scoreSelectionRect.style.top = `${rect.top}px`;
-  elements.scoreSelectionRect.style.width = `${rect.width}px`;
-  elements.scoreSelectionRect.style.height = `${rect.height}px`;
-}
-
-function hideSelectionRect() {
-  elements.scoreSelectionRect.hidden = true;
-  elements.scoreSelectionRect.style.removeProperty("left");
-  elements.scoreSelectionRect.style.removeProperty("top");
-  elements.scoreSelectionRect.style.removeProperty("width");
-  elements.scoreSelectionRect.style.removeProperty("height");
-}
-
-function cellRectIntersectsSelection(cellRect, selectionRect) {
-  return !(
-    cellRect.right < selectionRect.left ||
-    cellRect.left > selectionRect.right ||
-    cellRect.bottom < selectionRect.top ||
-    cellRect.top > selectionRect.bottom
-  );
-}
-
-function stageRelativeRect(element) {
-  const stageRect = elements.scoreMapStage.getBoundingClientRect();
-  const elementRect = element.getBoundingClientRect();
-
-  return {
-    left: elementRect.left - stageRect.left,
-    top: elementRect.top - stageRect.top,
-    right: elementRect.right - stageRect.left,
-    bottom: elementRect.bottom - stageRect.top,
-  };
-}
-
-function selectGridsInRect(selectionRect) {
-  const selectedCells = Array.from(
-    elements.scoreMap.querySelectorAll(".score-cell[data-grid-id]")
-  ).filter((cell) => {
-    return cellRectIntersectsSelection(stageRelativeRect(cell), selectionRect);
-  });
-
-  if (!selectedCells.length) {
-    return;
-  }
-
-  selectedCells.forEach((cell) => {
-    state.selectedGridIds.add(Number(cell.dataset.gridId));
-  });
-
-  const latestCell = selectedCells[selectedCells.length - 1];
-  const latestGridId = Number(latestCell.dataset.gridId);
-  state.selectedGridId = latestGridId;
-  state.selectedGrid = state.gridsById.get(latestGridId) || null;
-  renderSelectedGrids();
-  highlightSelectedScoreCells();
-  highlightSelectedMapGridBoundaries();
-}
-
-function canStartDragSelection(event) {
-  if (event.button !== 0 || !state.selectedAreaId) {
-    return false;
-  }
-  if (!elements.scoreMap.querySelector(".score-cell[data-grid-id]")) {
-    return false;
-  }
-  return !event.target.closest("input, button, textarea, select, label");
-}
-
-function startDragSelection(event) {
-  if (!canStartDragSelection(event)) {
-    return;
-  }
-
-  state.isDraggingSelection = true;
-  state.dragStartPoint = stagePointFromEvent(event);
-  state.dragCurrentPoint = state.dragStartPoint;
-  state.suppressNextCellClick = false;
-  elements.scoreMapStage.classList.add("is-dragging-selection");
-  if (elements.scoreMapStage.setPointerCapture) {
-    elements.scoreMapStage.setPointerCapture(event.pointerId);
-  }
-  hideSelectionRect();
-}
-
-function updateDragSelection(event) {
-  if (!state.isDraggingSelection) {
-    return;
-  }
-
-  state.dragCurrentPoint = stagePointFromEvent(event);
-  if (dragDistance() >= DRAG_SELECT_THRESHOLD) {
-    event.preventDefault();
-    renderSelectionRect();
-  }
-}
-
-function finishDragSelection(event) {
-  if (!state.isDraggingSelection) {
-    return;
-  }
-
-  state.dragCurrentPoint = stagePointFromEvent(event);
-  const shouldSelectRange = dragDistance() >= DRAG_SELECT_THRESHOLD;
-  if (
-    elements.scoreMapStage.releasePointerCapture &&
-    elements.scoreMapStage.hasPointerCapture(event.pointerId)
-  ) {
-    elements.scoreMapStage.releasePointerCapture(event.pointerId);
-  }
-  elements.scoreMapStage.classList.remove("is-dragging-selection");
-
-  if (shouldSelectRange) {
-    state.suppressNextCellClick = true;
-    selectGridsInRect(selectionRectFromPoints(state.dragStartPoint, state.dragCurrentPoint));
-    window.setTimeout(() => {
-      state.suppressNextCellClick = false;
-    }, 0);
-  }
-
-  state.isDraggingSelection = false;
-  state.dragStartPoint = null;
-  state.dragCurrentPoint = null;
-  hideSelectionRect();
-}
-
-function cancelDragSelection() {
-  state.isDraggingSelection = false;
-  state.dragStartPoint = null;
-  state.dragCurrentPoint = null;
-  elements.scoreMapStage.classList.remove("is-dragging-selection");
-  hideSelectionRect();
 }
 
 function readAreaForm() {
@@ -1326,81 +1048,20 @@ function readAreaForm() {
   };
 }
 
-function renderEmptyGrids(message) {
-  cancelDragSelection();
+function renderEmptyGrids() {
   state.gridsById = new Map();
   clearMapGridBoundaries();
   clearSelectedGrids();
-  applyScoreMapAspectRatio();
-  elements.scoreMap.textContent = message;
-  elements.scoreMap.style.setProperty("--score-map-cols", 1);
-  elements.scoreMap.style.setProperty("--score-map-rows", 1);
-  elements.scoreMapStage.style.setProperty("--score-map-rows", 1);
-  elements.scoreMapStage.style.setProperty("--score-map-cols", 1);
-  applyScoreMapDensity(1, 1);
-}
-
-function renderScoreMap(grids) {
-  applyScoreMapAspectRatio();
-
-  const positionedGrids = grids.filter((grid) => {
-    return Number.isInteger(Number(grid.row_index)) && Number.isInteger(Number(grid.col_index));
-  });
-
-  if (!positionedGrids.length) {
-    elements.scoreMap.textContent = "row_index / col_index を持つ GridCell がありません。";
-    elements.scoreMap.style.setProperty("--score-map-cols", 1);
-    elements.scoreMap.style.setProperty("--score-map-rows", 1);
-    elements.scoreMapStage.style.setProperty("--score-map-rows", 1);
-    elements.scoreMapStage.style.setProperty("--score-map-cols", 1);
-    applyScoreMapDensity(1, 1);
-    return;
-  }
-
-  const maxRow = Math.max(...positionedGrids.map((grid) => Number(grid.row_index)));
-  const maxCol = Math.max(...positionedGrids.map((grid) => Number(grid.col_index)));
-  const rowCount = maxRow + 1;
-  const colCount = maxCol + 1;
-  elements.scoreMap.style.setProperty("--score-map-rows", rowCount);
-  elements.scoreMap.style.setProperty("--score-map-cols", colCount);
-  elements.scoreMapStage.style.setProperty("--score-map-rows", rowCount);
-  elements.scoreMapStage.style.setProperty("--score-map-cols", colCount);
-  applyScoreMapDensity(rowCount, colCount);
-  elements.scoreMap.innerHTML = positionedGrids
-    .map((grid) => {
-      const row = Number(grid.row_index) + 1;
-      const col = Number(grid.col_index) + 1;
-      const score = formatNumber(grid.calculated_score) || "0";
-      const className = scoreClass(grid.calculated_score);
-
-      return `
-        <div
-          class="score-cell ${className}"
-          style="grid-row: ${row}; grid-column: ${col};"
-          role="button"
-          tabindex="0"
-          data-grid-id="${grid.id}"
-          title="GridCell #${grid.id}: calculated_score ${escapeHtml(score)}"
-        >
-          <strong class="score-value">${escapeHtml(score)}</strong>
-          <span class="score-meta">#${grid.id}</span>
-          <span class="score-meta">row ${escapeHtml(grid.row_index)} / col ${escapeHtml(grid.col_index)}</span>
-        </div>
-      `;
-    })
-    .join("");
 }
 
 function renderGrids(grids) {
-  cancelDragSelection();
   state.gridsById = new Map(grids.map((grid) => [Number(grid.id), grid]));
 
   if (!grids.length) {
-    renderEmptyGrids("GridCell がありません。");
+    renderEmptyGrids();
     return;
   }
 
-  renderScoreMap(grids);
   updateMapGridBoundaries(grids);
   pruneMissingSelectedGrids();
   if (state.selectedGridId && state.gridsById.has(state.selectedGridId)) {
@@ -1411,7 +1072,6 @@ function renderGrids(grids) {
     state.selectedGridId = latestSelectedGrid ? latestSelectedGrid.id : null;
   }
   renderSelectedGrids();
-  highlightSelectedScoreCells();
   highlightSelectedMapGridBoundaries();
 }
 
@@ -1471,8 +1131,7 @@ function clearSelectedAreaStateAfterDelete() {
   state.selectedGridIds.clear();
   state.gridsById = new Map();
 
-  elements.selectedAreaLabel.textContent =
-    "メモグリッドを選択すると、自動生成済みの GridCell を表示します。";
+  elements.selectedAreaName.textContent = "メモグリッドを選択してください";
   elements.selectedShareAreaLabel.textContent = "先にメモグリッドを選択してください。";
   elements.reloadGridsButton.disabled = true;
   elements.loadSharesButton.disabled = true;
@@ -1480,7 +1139,7 @@ function clearSelectedAreaStateAfterDelete() {
   elements.sharesList.textContent = "共有相手はまだ読み込んでいません。";
 
   setShareMessage("");
-  renderEmptyGrids("メモグリッドを選択してください。");
+  renderEmptyGrids();
   clearMapAreaPreview();
 }
 
@@ -1516,7 +1175,7 @@ async function selectArea(areaId, areaName) {
   state.selectedAreaId = Number(areaId);
   state.selectedAreaName = areaName;
   clearSelectedGrids();
-  elements.selectedAreaLabel.textContent = `選択中: #${areaId} ${areaName}`;
+  elements.selectedAreaName.textContent = areaName;
   elements.selectedShareAreaLabel.textContent = `選択中: #${areaId} ${areaName}`;
   elements.reloadGridsButton.disabled = false;
   elements.loadSharesButton.disabled = false;
@@ -1618,7 +1277,7 @@ async function deleteShare(shareId) {
 
 async function loadGrids() {
   if (!state.selectedAreaId) {
-    renderEmptyGrids("メモグリッドを選択してください。");
+    renderEmptyGrids();
     return;
   }
 
@@ -1790,13 +1449,6 @@ elements.clearSelectedGridsButton.addEventListener("click", clearSelectedGrids);
 elements.ratingModeInputs.forEach((input) => {
   input.addEventListener("change", updateRatingMode);
 });
-elements.scoreMapViewModeInputs.forEach((input) => {
-  input.addEventListener("change", () => {
-    state.scoreMapViewMode = readScoreMapViewMode();
-    cancelDragSelection();
-    applyScoreMapViewMode();
-  });
-});
 elements.areasList.addEventListener("click", (event) => {
   const deleteButton = event.target.closest("[data-delete-area-id]");
   if (deleteButton) {
@@ -1815,40 +1467,6 @@ elements.areasList.addEventListener("click", (event) => {
   }
 
   selectArea(button.dataset.areaId, button.dataset.areaName);
-});
-
-elements.scoreMap.addEventListener("click", (event) => {
-  if (state.suppressNextCellClick) {
-    state.suppressNextCellClick = false;
-    event.preventDefault();
-    return;
-  }
-
-  const cell = event.target.closest("[data-grid-id]");
-  if (!cell) {
-    return;
-  }
-
-  toggleGridSelection(cell.dataset.gridId);
-});
-
-elements.scoreMapStage.addEventListener("pointerdown", startDragSelection);
-elements.scoreMapStage.addEventListener("pointermove", updateDragSelection);
-elements.scoreMapStage.addEventListener("pointerup", finishDragSelection);
-elements.scoreMapStage.addEventListener("pointercancel", cancelDragSelection);
-
-elements.scoreMap.addEventListener("keydown", (event) => {
-  if (event.key !== "Enter" && event.key !== " ") {
-    return;
-  }
-
-  const cell = event.target.closest("[data-grid-id]");
-  if (!cell) {
-    return;
-  }
-
-  event.preventDefault();
-  toggleGridSelection(cell.dataset.gridId);
 });
 
 elements.selectedGridsList.addEventListener("click", (event) => {
@@ -1871,11 +1489,9 @@ elements.sharesList.addEventListener("click", (event) => {
 
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
-    cancelDragSelection();
     cancelLeafletDragSelection();
   }
 });
 
-applyScoreMapViewMode();
 updateMapPreview();
 updateRatingMode();

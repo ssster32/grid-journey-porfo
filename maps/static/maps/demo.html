@@ -110,14 +110,11 @@
           </section>
         </aside>
 
-        <section class="content-panel" aria-labelledby="grids-heading">
+        <section class="content-panel" aria-labelledby="selected-area-name">
           <div class="content-header">
-            <div>
-              <h2 id="grids-heading">GridCell</h2>
-              <p id="selected-area-label">メモグリッドを選択すると、自動生成済みの GridCell を表示します。</p>
-            </div>
+            <h2 id="selected-area-name">メモグリッドを選択してください</h2>
             <div class="action-row">
-              <button id="reload-grids-button" type="button" disabled>GridCell を再取得</button>
+              <button id="reload-grids-button" type="button" disabled>セルの再取得</button>
             </div>
           </div>
 
@@ -147,55 +144,6 @@
             </div>
           </details>
 
-          <section class="score-map-section" aria-labelledby="score-map-heading">
-            <div class="score-map-header">
-              <div>
-                <h3 id="score-map-heading">Score Map</h3>
-                <p>将来の地図背景に重ねる想定の、確認用スコア面です。</p>
-              </div>
-              <div class="score-map-tools">
-                <div class="score-map-view-mode" aria-label="Score Map 表示モード">
-                  <span>表示モード</span>
-                  <label>
-                    <input
-                      id="score-map-view-mode-fit"
-                      type="radio"
-                      name="score-map-view-mode"
-                      value="fit"
-                      checked
-                    >
-                    全体表示
-                  </label>
-                  <label>
-                    <input
-                      id="score-map-view-mode-detail"
-                      type="radio"
-                      name="score-map-view-mode"
-                      value="detail"
-                    >
-                    詳細表示
-                  </label>
-                </div>
-                <p id="score-map-ratio" class="score-map-ratio">area ratio fallback</p>
-                <div class="score-legend" aria-label="score legend">
-                  <span><i class="legend-box score-low"></i>0-2.99</span>
-                  <span><i class="legend-box score-middle"></i>3-5.99</span>
-                  <span><i class="legend-box score-high"></i>6-7.99</span>
-                  <span><i class="legend-box score-very-high"></i>8+</span>
-                </div>
-              </div>
-            </div>
-            <div class="score-map-wrap">
-              <div class="score-map-stage">
-                <div class="score-map-background" aria-hidden="true"></div>
-                <div id="score-map" class="score-map score-map-grid-layer" aria-live="polite">
-                  GridCell はまだ表示されていません。
-                </div>
-                <div id="score-selection-rect" class="score-selection-rect" aria-hidden="true" hidden></div>
-              </div>
-            </div>
-          </section>
-
           <section class="map-preview-section" aria-labelledby="map-preview-heading">
             <div class="map-preview-header">
               <div>
@@ -207,8 +155,7 @@
             <div id="map-preview" class="map-preview" aria-label="MapArea bounds preview"></div>
             <p class="map-preview-note">
               OpenStreetMap タイルを使う開発確認用の表示です。GridCell 境界と地図上でのスコア分布を確認できます。
-              色分けは Score Map と同じ基準です。GridCell は Score Map と Map Preview のどちらからでも選択できます。
-              Map Preview では Shift + ドラッグで範囲選択できます。
+              GridCell は Map Preview から選択できます。Shift + ドラッグで範囲選択できます。
               採点操作は「選択中のマス」パネルで行います。
             </p>
             <div class="map-preview-footer">
