@@ -54,6 +54,17 @@ class SerializerTestDataMixin:
             east=139.8,
             west=139.79,
             initial_score=3,
+            auto_score_breakdown={
+                "base_score": 0.6,
+                "diversity_bonus": 0.48,
+                "context_bonus": 1.5,
+                "penalty": 0.0,
+                "raw_score": 2.58,
+                "clamped_score": 2.58,
+                "flags": {"has_landmark_context": True},
+                "bonuses": {"landmark_context_bonus": 0.35},
+                "counts": {"context_candidate_count": 1},
+            },
             average_user_score=4,
             rating_count=1,
             calculated_score=3.5,
@@ -128,6 +139,10 @@ class GridCellScoreSerializerTests(SerializerTestDataMixin, TestCase):
         self.assertEqual(data["east"], 139.8)
         self.assertEqual(data["west"], 139.79)
         self.assertEqual(data["initial_score"], 3)
+        self.assertEqual(data["auto_score_breakdown"]["base_score"], 0.6)
+        self.assertTrue(
+            data["auto_score_breakdown"]["flags"]["has_landmark_context"]
+        )
         self.assertEqual(data["average_user_score"], 4)
         self.assertEqual(data["rating_count"], 1)
         self.assertEqual(data["calculated_score"], 3.5)
@@ -825,6 +840,7 @@ class GenerateGridCellsForAreaTests(TestCase):
 
         for grid_cell in grid_cells:
             self.assertEqual(grid_cell.initial_score, 0)
+            self.assertIsNone(grid_cell.auto_score_breakdown)
             self.assertEqual(grid_cell.average_user_score, 0)
             self.assertEqual(grid_cell.rating_count, 0)
             self.assertEqual(grid_cell.calculated_score, 0)
@@ -838,10 +854,50 @@ class GenerateGridCellsForAreaTests(TestCase):
 
         for grid_cell in grid_cells:
             self.assertEqual(grid_cell.initial_score, 2.0)
+            self.assertIsNone(grid_cell.auto_score_breakdown)
             self.assertEqual(grid_cell.average_user_score, 0)
             self.assertEqual(grid_cell.rating_count, 0)
             self.assertEqual(grid_cell.calculated_score, 2.0)
             self.assertIsNone(grid_cell.score_updated_at)
+
+    def test_generated_grid_stores_auto_score_breakdown_for_feature_summary(self):
+        grid_cells = generate_grid_cells_for_area(
+            self.area,
+            feature_summaries_by_position={
+                (0, 0): {
+                    "building_count": 20,
+                    "has_park": True,
+                    "water_coverage_ratio": 0.2,
+                    "tourism_attraction_count": 1,
+                },
+            },
+        )
+        auto_grid = next(
+            grid_cell
+            for grid_cell in grid_cells
+            if grid_cell.row_index == 0 and grid_cell.col_index == 0
+        )
+        manual_grid = next(
+            grid_cell
+            for grid_cell in grid_cells
+            if grid_cell.row_index == 0 and grid_cell.col_index == 1
+        )
+
+        self.assertIsNotNone(auto_grid.auto_score_breakdown)
+        self.assertEqual(
+            auto_grid.initial_score,
+            auto_grid.auto_score_breakdown["clamped_score"],
+        )
+        self.assertIn("base_score", auto_grid.auto_score_breakdown)
+        self.assertIn("diversity_bonus", auto_grid.auto_score_breakdown)
+        self.assertIn("context_bonus", auto_grid.auto_score_breakdown)
+        self.assertIn("penalty", auto_grid.auto_score_breakdown)
+        self.assertIn("raw_score", auto_grid.auto_score_breakdown)
+        self.assertIn("flags", auto_grid.auto_score_breakdown)
+        self.assertTrue(
+            auto_grid.auto_score_breakdown["flags"]["has_landmark_context"]
+        )
+        self.assertIsNone(manual_grid.auto_score_breakdown)
 
     def test_explicit_rows_and_cols_generate_exact_grid_count(self):
         area, bounds = self.create_center_grid_area()
@@ -1174,6 +1230,9 @@ class MapDemoViewTests(TestCase):
         self.assertContains(response, "selected-grid-message")
         self.assertContains(response, "selected-grid-loading-spinner")
         self.assertContains(response, "loading-spinner")
+        self.assertContains(response, "auto-score-breakdown")
+        self.assertContains(response, "自動採点理由")
+        self.assertContains(response, "自動採点内訳なし")
         self.assertNotContains(response, "selected-grid-rating-form")
         self.assertNotContains(response, "selected-grid-score")
         self.assertNotContains(response, "selected-grid-rate-button")
@@ -1231,6 +1290,15 @@ class MapDemoViewTests(TestCase):
         self.assertIn("\"manual\"", demo_js)
         self.assertIn("region_feature_level", demo_js)
         self.assertIn("region_feature_level: regionFeatureLevel", demo_js)
+        self.assertIn("autoScoreBreakdown", demo_js)
+        self.assertIn("renderAutoScoreBreakdown", demo_js)
+        self.assertIn("auto_score_breakdown", demo_js)
+        self.assertIn("主な理由", demo_js)
+        self.assertIn("観光名所", demo_js)
+        self.assertIn("公園 + 水辺", demo_js)
+        self.assertIn(".auto-score-breakdown", demo_css)
+        self.assertIn(".auto-score-components", demo_css)
+        self.assertIn(".auto-score-reasons", demo_css)
         self.assertIn(".map-preview-score-label", demo_css)
         self.assertIn(".map-preview-score-label.map-preview-score-low", demo_css)
         self.assertIn(".map-preview-score-label.map-preview-score-middle", demo_css)
@@ -1597,7 +1665,10 @@ class MapAreaCreateViewTests(TestCase):
         self.assertIn("raw_score_max=", log_output)
         self.assertIn("clamped_score_avg=", log_output)
         self.assertIn("clamped_score_max=", log_output)
-        self.assertIn("max_score_cells=0", log_output)
+        self.assertIn(
+            f"max_score_cells={sum(score >= 3.0 for score in expected_scores)}",
+            log_output,
+        )
         self.assertIn("building_base_cells=1", log_output)
         self.assertIn("road_base_cells=0", log_output)
         self.assertIn("road_scored_cells=0", log_output)
@@ -1631,12 +1702,50 @@ class MapAreaCreateViewTests(TestCase):
         self.assertIn("major_station_cluster_context_cells=0", log_output)
         self.assertIn("station_density_bonus_avg=", log_output)
         self.assertIn("station_density_bonus_max=", log_output)
+        self.assertIn("landmark_context_cells=0", log_output)
+        self.assertIn("landmark_context_bonus_avg=", log_output)
+        self.assertIn("landmark_context_bonus_max=", log_output)
+        self.assertIn("castle_proximity_context_cells=0", log_output)
+        self.assertIn("castle_near_context_cells=0", log_output)
+        self.assertIn("castle_mid_context_cells=0", log_output)
+        self.assertIn("castle_far_context_cells=0", log_output)
+        self.assertIn("castle_proximity_bonus_avg=", log_output)
+        self.assertIn("castle_proximity_bonus_max=", log_output)
+        self.assertIn("castle_proximity_skipped_castle_cells=0", log_output)
+        self.assertIn("station_proximity_context_cells=0", log_output)
+        self.assertIn("station_proximity_near_context_cells=0", log_output)
+        self.assertIn("station_proximity_mid_context_cells=0", log_output)
+        self.assertIn("station_proximity_bonus_avg=", log_output)
+        self.assertIn("station_proximity_bonus_max=", log_output)
+        self.assertIn("park_waterfront_combo_context_cells=", log_output)
+        self.assertIn("park_waterfront_combo_bonus_avg=", log_output)
+        self.assertIn("park_waterfront_combo_bonus_max=", log_output)
+        self.assertIn("high_context_3_context_cells=", log_output)
+        self.assertIn("high_context_4_context_cells=", log_output)
+        self.assertIn("high_context_5_context_cells=", log_output)
+        self.assertIn("high_context_bonus_avg=", log_output)
+        self.assertIn("high_context_bonus_max=", log_output)
         self.assertIn("motorway_context_cells=1", log_output)
         self.assertIn("motorway_context_bonus_avg=", log_output)
         self.assertIn("motorway_context_bonus_max=", log_output)
         self.assertIn("trunk_context_cells=0", log_output)
         self.assertIn("trunk_context_bonus_avg=", log_output)
         self.assertIn("trunk_context_bonus_max=", log_output)
+        self.assertIn("Overpass auto context candidate summary", log_output)
+        self.assertIn("park_waterfront_combo_cells=", log_output)
+        self.assertIn("high_context_3_cells=", log_output)
+        self.assertIn("high_context_5_cells=", log_output)
+        self.assertIn("context_candidate_count_avg=", log_output)
+        self.assertIn("context_candidate_count_max=", log_output)
+        self.assertIn("station_proximity_features=0", log_output)
+        self.assertIn("station_proximity_near_cells=0", log_output)
+        self.assertIn("station_proximity_mid_cells=0", log_output)
+        self.assertIn("station_proximity_cells=0", log_output)
+        self.assertIn("station_proximity_station_cells=0", log_output)
+        self.assertIn("station_proximity_non_station_cells=0", log_output)
+        self.assertIn("station_proximity_min_distance_m=0.00", log_output)
+        self.assertIn("station_proximity_avg_distance_m=0.00", log_output)
+        self.assertIn("station_proximity_max_distance_m=0.00", log_output)
         self.assertIn("Overpass auto scored river summary", log_output)
         self.assertIn("scored_river_cells=1", log_output)
         self.assertIn("river_coverage_cells=1", log_output)
@@ -1717,6 +1826,15 @@ class MapAreaCreateViewTests(TestCase):
         self.assertIn("historic_archaeological_site_cells=0", log_output)
         self.assertIn("unknown_landmark_features=0", log_output)
         self.assertIn("unknown_landmark_cells=0", log_output)
+        self.assertIn("Overpass auto castle proximity summary", log_output)
+        self.assertIn("castle_features=0", log_output)
+        self.assertIn("castle_near_cells=0", log_output)
+        self.assertIn("castle_mid_cells=0", log_output)
+        self.assertIn("castle_far_cells=0", log_output)
+        self.assertIn("castle_proximity_cells=0", log_output)
+        self.assertIn("castle_min_distance_m=0.00", log_output)
+        self.assertIn("castle_avg_distance_m=0.00", log_output)
+        self.assertIn("castle_max_distance_m=0.00", log_output)
         self.assertIn("Overpass auto expressway summary", log_output)
         self.assertIn("expressway_features=0", log_output)
         self.assertIn("motorway_features=0", log_output)
@@ -3981,7 +4099,12 @@ class GridCellListViewTests(SerializerTestDataMixin, TestCase):
         self.assertEqual(response.data["grids"][0]["id"], self.grid.id)
         self.assertEqual(response.data["grids"][1]["id"], second_grid.id)
         self.assertEqual(response.data["grids"][0]["calculated_score"], 3.5)
+        self.assertEqual(
+            response.data["grids"][0]["auto_score_breakdown"]["base_score"],
+            0.6,
+        )
         self.assertEqual(response.data["grids"][1]["calculated_score"], 6)
+        self.assertIsNone(response.data["grids"][1]["auto_score_breakdown"])
 
     def test_grid_cells_are_ordered_by_row_index_and_col_index(self):
         grid_col_1 = GridCell.objects.create(

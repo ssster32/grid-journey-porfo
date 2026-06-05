@@ -65,10 +65,77 @@ SCORED_STATION_SUMMARY_TYPES = {
     "subway_station",
     "public_transport_station",
 }
+STATION_PROXIMITY_SUMMARY_TYPES = {
+    "railway_station",
+    "railway_halt",
+    "public_transport_station",
+}
 STATION_DENSE_CLUSTER_DISTANCE_METERS = 150
 STATION_BROAD_CLUSTER_DISTANCE_METERS = 300
+STATION_PROXIMITY_NEAR_DISTANCE_METERS = 150
+STATION_PROXIMITY_MID_DISTANCE_METERS = 300
+STATION_PROXIMITY_NEAR_CONTEXT_BONUS = 0.20
+STATION_PROXIMITY_MID_CONTEXT_BONUS = 0.10
 STATION_MAJOR_CLUSTER_MIN_FEATURES = 4
 STATION_DENSITY_MAJOR_CLUSTER_MIN_FEATURES = 3
+PARK_WATERFRONT_COMBO_CONTEXT_BONUS = 0.15
+HIGH_CONTEXT_3_CONTEXT_BONUS = 0.10
+HIGH_CONTEXT_4_CONTEXT_BONUS = 0.20
+HIGH_CONTEXT_5_CONTEXT_BONUS = 0.25
+AUTO_SCORE_BREAKDOWN_SCORE_KEYS = (
+    "base_score",
+    "diversity_bonus",
+    "context_bonus",
+    "penalty",
+    "raw_score",
+    "clamped_score",
+)
+AUTO_SCORE_BREAKDOWN_BONUS_KEYS = (
+    "surface_railway_context_bonus",
+    "surface_station_context_bonus",
+    "subway_station_context_bonus",
+    "public_transport_station_context_bonus",
+    "station_density_bonus",
+    "station_proximity_bonus",
+    "motorway_context_bonus",
+    "trunk_context_bonus",
+    "landmark_context_bonus",
+    "castle_proximity_bonus",
+    "park_waterfront_combo_bonus",
+    "high_context_bonus",
+)
+AUTO_SCORE_BREAKDOWN_FLAG_KEYS = (
+    "has_park_context",
+    "has_river_context",
+    "has_forest_context",
+    "has_coastal_context",
+    "has_waterfront_context",
+    "has_surface_railway_context",
+    "has_surface_station_context",
+    "has_subway_station_context",
+    "has_public_transport_station_context",
+    "has_dense_station_cluster_context",
+    "has_major_station_cluster_context",
+    "has_station_proximity_context",
+    "has_motorway_context",
+    "has_trunk_context",
+    "has_landmark_context",
+    "has_castle_proximity_context",
+    "has_park_waterfront_combo_context",
+    "has_high_context_3_context",
+    "has_high_context_4_context",
+    "has_high_context_5_context",
+    "has_water_penalty",
+    "has_forest_penalty",
+    "has_empty_cell_penalty",
+)
+AUTO_SCORE_BREAKDOWN_COUNT_KEYS = (
+    "feature_category_count",
+    "context_candidate_count",
+    "scored_station_count",
+    "station_cluster_count",
+    "dense_station_cluster_count",
+)
 LANDMARK_TOURISM_TYPES = {"attraction", "museum", "gallery", "viewpoint"}
 LANDMARK_HISTORIC_TYPES = {
     "castle",
@@ -89,6 +156,24 @@ LANDMARK_SUMMARY_KEYS = (
     "historic_archaeological_site",
     "unknown",
 )
+LANDMARK_CONTEXT_BONUS_CAP = 1.0
+LANDMARK_CONTEXT_BONUSES = {
+    "tourism_attraction": 0.35,
+    "tourism_museum": 0.20,
+    "tourism_gallery": 0.10,
+    "tourism_viewpoint": 0.40,
+    "historic_castle": 0.80,
+    "historic_monument": 0.20,
+    "historic_memorial": 0.15,
+    "historic_ruins": 0.40,
+    "historic_archaeological_site": 0.45,
+}
+CASTLE_NEAR_DISTANCE_METERS = 250
+CASTLE_MID_DISTANCE_METERS = 500
+CASTLE_FAR_DISTANCE_METERS = 800
+CASTLE_NEAR_CONTEXT_BONUS = 0.65
+CASTLE_MID_CONTEXT_BONUS = 0.35
+CASTLE_FAR_CONTEXT_BONUS = 0.15
 EXPRESSWAY_SUMMARY_KEYS = (
     "motorway",
     "motorway_link",
@@ -519,8 +604,20 @@ def build_feature_summaries_for_map_area_from_overpass(
             map_features,
         )
     )
+    feature_summaries.station_proximity_summary = (
+        summarize_station_proximity_for_grid_cell_contexts(
+            grid_cell_contexts,
+            map_features,
+        )
+    )
     feature_summaries.landmark_summary = (
         summarize_landmark_feature_matches_for_grid_cell_contexts(
+            grid_cell_contexts,
+            map_features,
+        )
+    )
+    feature_summaries.castle_proximity_summary = (
+        summarize_castle_proximity_for_grid_cell_contexts(
             grid_cell_contexts,
             map_features,
         )
@@ -625,6 +722,20 @@ def _empty_station_feature_match_summary():
     return summary
 
 
+def _empty_station_proximity_summary():
+    return {
+        "station_proximity_features": 0,
+        "station_proximity_near_cells": 0,
+        "station_proximity_mid_cells": 0,
+        "station_proximity_cells": 0,
+        "station_proximity_station_cells": 0,
+        "station_proximity_non_station_cells": 0,
+        "station_proximity_min_distance_m": 0.0,
+        "station_proximity_avg_distance_m": 0.0,
+        "station_proximity_max_distance_m": 0.0,
+    }
+
+
 def _empty_landmark_feature_match_summary():
     summary = {
         "landmark_features": 0,
@@ -636,6 +747,19 @@ def _empty_landmark_feature_match_summary():
     summary["unknown_landmark_features"] = 0
     summary["unknown_landmark_cells"] = 0
     return summary
+
+
+def _empty_castle_proximity_summary():
+    return {
+        "castle_features": 0,
+        "castle_near_cells": 0,
+        "castle_mid_cells": 0,
+        "castle_far_cells": 0,
+        "castle_proximity_cells": 0,
+        "castle_min_distance_m": 0.0,
+        "castle_avg_distance_m": 0.0,
+        "castle_max_distance_m": 0.0,
+    }
 
 
 def _empty_expressway_feature_match_summary():
@@ -845,6 +969,75 @@ def _max_station_cluster_size(station_centers, distance_threshold_meters):
     return max_cluster_size
 
 
+def _castle_centers_from_map_features(map_features):
+    castle_centers = []
+    for feature in map_features:
+        if not isinstance(feature, dict):
+            raise ValueError("map_features の各要素は辞書で指定してください。")
+        if feature.get("kind") != "landmark":
+            continue
+        if classify_landmark_feature_type(feature) != "historic_castle":
+            continue
+
+        castle_centers.append(_bounds_center(feature.get("bounds")))
+
+    return castle_centers
+
+
+def _scored_station_centers_from_map_features(map_features):
+    station_entries = []
+    for feature in map_features:
+        if not isinstance(feature, dict):
+            raise ValueError("map_features の各要素は辞書で指定してください。")
+        if feature.get("kind") != "station":
+            continue
+
+        station_type = classify_station_feature_type(feature)
+        if station_type not in STATION_PROXIMITY_SUMMARY_TYPES:
+            continue
+
+        feature_bounds = _normalize_bounds(feature.get("bounds"))
+        station_entries.append((feature_bounds, _bounds_center(feature_bounds)))
+
+    return station_entries
+
+
+def _station_proximity_band_for_grid_cell(grid_cell_bounds, station_centers):
+    if not station_centers:
+        return None, None
+
+    grid_cell_center = _bounds_center(grid_cell_bounds)
+    min_distance = min(
+        _distance_between_points_meters(station_center, grid_cell_center)
+        for station_center in station_centers
+    )
+    if min_distance <= STATION_PROXIMITY_NEAR_DISTANCE_METERS:
+        return "near", min_distance
+    if min_distance <= STATION_PROXIMITY_MID_DISTANCE_METERS:
+        return "mid", min_distance
+
+    return None, None
+
+
+def _castle_proximity_band_for_grid_cell(grid_cell_bounds, castle_centers):
+    if not castle_centers:
+        return None, None
+
+    grid_cell_center = _bounds_center(grid_cell_bounds)
+    min_distance = min(
+        _distance_between_points_meters(castle_center, grid_cell_center)
+        for castle_center in castle_centers
+    )
+    if min_distance <= CASTLE_NEAR_DISTANCE_METERS:
+        return "near", min_distance
+    if min_distance <= CASTLE_MID_DISTANCE_METERS:
+        return "mid", min_distance
+    if min_distance <= CASTLE_FAR_DISTANCE_METERS:
+        return "far", min_distance
+
+    return None, None
+
+
 def _expressway_summary_field(expressway_type):
     if expressway_type == "unknown":
         return "unknown_expressway"
@@ -1026,6 +1219,69 @@ def summarize_station_feature_matches_for_grid_cell_contexts(
     return station_summary
 
 
+def summarize_station_proximity_for_grid_cell_contexts(
+    grid_cell_contexts,
+    map_features,
+):
+    """Summarize GridCell distance bands around scored station features."""
+    if not isinstance(grid_cell_contexts, list):
+        raise ValueError("grid_cell_contexts はリストで指定してください。")
+    if not isinstance(map_features, list):
+        raise ValueError("map_features はリストで指定してください。")
+
+    station_proximity_summary = _empty_station_proximity_summary()
+    grid_cell_entries = _build_grid_cell_entries_for_summary(grid_cell_contexts)
+    station_entries = _scored_station_centers_from_map_features(map_features)
+    station_centers = [center for _bounds, center in station_entries]
+    station_proximity_summary["station_proximity_features"] = len(station_entries)
+
+    proximity_distances = []
+    station_body_cells = set()
+    proximity_cell_keys = set()
+    for cell_key, grid_cell_bounds in grid_cell_entries:
+        is_station_body_cell = any(
+            feature_intersects_grid_cell(station_bounds, grid_cell_bounds)
+            for station_bounds, _station_center in station_entries
+        )
+        if is_station_body_cell:
+            station_body_cells.add(cell_key)
+
+        proximity_band, min_distance = _station_proximity_band_for_grid_cell(
+            grid_cell_bounds,
+            station_centers,
+        )
+        if proximity_band == "near":
+            station_proximity_summary["station_proximity_near_cells"] += 1
+            proximity_cell_keys.add(cell_key)
+            proximity_distances.append(min_distance)
+        elif proximity_band == "mid":
+            station_proximity_summary["station_proximity_mid_cells"] += 1
+            proximity_cell_keys.add(cell_key)
+            proximity_distances.append(min_distance)
+
+    station_proximity_summary["station_proximity_cells"] = len(
+        proximity_cell_keys
+    )
+    station_proximity_summary["station_proximity_station_cells"] = len(
+        proximity_cell_keys & station_body_cells
+    )
+    station_proximity_summary["station_proximity_non_station_cells"] = (
+        len(proximity_cell_keys - station_body_cells)
+    )
+    if proximity_distances:
+        station_proximity_summary["station_proximity_min_distance_m"] = min(
+            proximity_distances
+        )
+        station_proximity_summary["station_proximity_avg_distance_m"] = (
+            sum(proximity_distances) / len(proximity_distances)
+        )
+        station_proximity_summary["station_proximity_max_distance_m"] = max(
+            proximity_distances
+        )
+
+    return station_proximity_summary
+
+
 def summarize_landmark_feature_matches_for_grid_cell_contexts(
     grid_cell_contexts,
     map_features,
@@ -1067,6 +1323,48 @@ def summarize_landmark_feature_matches_for_grid_cell_contexts(
         )
 
     return landmark_summary
+
+
+def summarize_castle_proximity_for_grid_cell_contexts(
+    grid_cell_contexts,
+    map_features,
+):
+    """Summarize non-overlapping GridCell distance bands around castles."""
+    if not isinstance(grid_cell_contexts, list):
+        raise ValueError("grid_cell_contexts はリストで指定してください。")
+    if not isinstance(map_features, list):
+        raise ValueError("map_features はリストで指定してください。")
+
+    castle_summary = _empty_castle_proximity_summary()
+    grid_cell_entries = _build_grid_cell_entries_for_summary(grid_cell_contexts)
+    castle_centers = _castle_centers_from_map_features(map_features)
+    castle_summary["castle_features"] = len(castle_centers)
+
+    proximity_distances = []
+    for _cell_key, grid_cell_bounds in grid_cell_entries:
+        proximity_band, min_distance = _castle_proximity_band_for_grid_cell(
+            grid_cell_bounds,
+            castle_centers,
+        )
+        if proximity_band == "near":
+            castle_summary["castle_near_cells"] += 1
+            proximity_distances.append(min_distance)
+        elif proximity_band == "mid":
+            castle_summary["castle_mid_cells"] += 1
+            proximity_distances.append(min_distance)
+        elif proximity_band == "far":
+            castle_summary["castle_far_cells"] += 1
+            proximity_distances.append(min_distance)
+
+    castle_summary["castle_proximity_cells"] = len(proximity_distances)
+    if proximity_distances:
+        castle_summary["castle_min_distance_m"] = min(proximity_distances)
+        castle_summary["castle_avg_distance_m"] = (
+            sum(proximity_distances) / len(proximity_distances)
+        )
+        castle_summary["castle_max_distance_m"] = max(proximity_distances)
+
+    return castle_summary
 
 
 def summarize_expressway_feature_matches_for_grid_cell_contexts(
@@ -1681,6 +1979,8 @@ def build_feature_summary_for_grid_cell(
         "unknown_station_count": 0,
         "station_cluster_count": 0,
         "dense_station_cluster_count": 0,
+        "station_proximity_near_count": 0,
+        "station_proximity_mid_count": 0,
         "motorway_count": 0,
         "motorway_link_count": 0,
         "trunk_count": 0,
@@ -1696,11 +1996,21 @@ def build_feature_summary_for_grid_cell(
         "historic_ruins_count": 0,
         "historic_archaeological_site_count": 0,
         "unknown_landmark_count": 0,
+        "castle_near_proximity_count": 0,
+        "castle_mid_proximity_count": 0,
+        "castle_far_proximity_count": 0,
         "has_park": False,
         "has_river": False,
         "is_coastal": False,
     }
     station_centers = []
+    station_proximity_entries = _scored_station_centers_from_map_features(
+        map_features
+    )
+    station_proximity_centers = [
+        station_center for _station_bounds, station_center in station_proximity_entries
+    ]
+    castle_centers = _castle_centers_from_map_features(map_features)
 
     for feature in map_features:
         if not isinstance(feature, dict):
@@ -1824,6 +2134,19 @@ def build_feature_summary_for_grid_cell(
         station_centers,
         STATION_DENSE_CLUSTER_DISTANCE_METERS,
     )
+    station_proximity_band, _station_proximity_distance = (
+        _station_proximity_band_for_grid_cell(
+            grid_cell_bounds,
+            station_proximity_centers,
+        )
+    )
+    if station_proximity_band is not None:
+        feature_summary[f"station_proximity_{station_proximity_band}_count"] = 1
+    castle_proximity_band, _castle_proximity_distance = (
+        _castle_proximity_band_for_grid_cell(grid_cell_bounds, castle_centers)
+    )
+    if castle_proximity_band is not None:
+        feature_summary[f"castle_{castle_proximity_band}_proximity_count"] = 1
     feature_summary["has_river"] = (
         feature_summary["river_coverage_ratio"] >= MIN_RIVER_COVERAGE_RATIO_FOR_HAS_RIVER
     )
@@ -1944,6 +2267,14 @@ def calculate_initial_score_breakdown_from_feature_summary(feature_summary):
         feature_summary,
         "dense_station_cluster_count",
     )
+    station_proximity_near_count = _feature_number(
+        feature_summary,
+        "station_proximity_near_count",
+    )
+    station_proximity_mid_count = _feature_number(
+        feature_summary,
+        "station_proximity_mid_count",
+    )
     motorway_count = _feature_number(feature_summary, "motorway_count")
     motorway_link_count = _feature_number(feature_summary, "motorway_link_count")
     trunk_count = _feature_number(feature_summary, "trunk_count")
@@ -1951,6 +2282,58 @@ def calculate_initial_score_breakdown_from_feature_summary(feature_summary):
     unknown_expressway_count = _feature_number(
         feature_summary,
         "unknown_expressway_count",
+    )
+    tourism_attraction_count = _feature_number(
+        feature_summary,
+        "tourism_attraction_count",
+    )
+    tourism_museum_count = _feature_number(
+        feature_summary,
+        "tourism_museum_count",
+    )
+    tourism_gallery_count = _feature_number(
+        feature_summary,
+        "tourism_gallery_count",
+    )
+    tourism_viewpoint_count = _feature_number(
+        feature_summary,
+        "tourism_viewpoint_count",
+    )
+    historic_castle_count = _feature_number(
+        feature_summary,
+        "historic_castle_count",
+    )
+    historic_monument_count = _feature_number(
+        feature_summary,
+        "historic_monument_count",
+    )
+    historic_memorial_count = _feature_number(
+        feature_summary,
+        "historic_memorial_count",
+    )
+    historic_ruins_count = _feature_number(
+        feature_summary,
+        "historic_ruins_count",
+    )
+    historic_archaeological_site_count = _feature_number(
+        feature_summary,
+        "historic_archaeological_site_count",
+    )
+    unknown_landmark_count = _feature_number(
+        feature_summary,
+        "unknown_landmark_count",
+    )
+    castle_near_proximity_count = _feature_number(
+        feature_summary,
+        "castle_near_proximity_count",
+    )
+    castle_mid_proximity_count = _feature_number(
+        feature_summary,
+        "castle_mid_proximity_count",
+    )
+    castle_far_proximity_count = _feature_number(
+        feature_summary,
+        "castle_far_proximity_count",
     )
     water_coverage_ratio = _feature_ratio(feature_summary, "water_coverage_ratio")
     forest_coverage_ratio = _feature_ratio(feature_summary, "forest_coverage_ratio")
@@ -2020,8 +2403,67 @@ def calculate_initial_score_breakdown_from_feature_summary(feature_summary):
     has_major_station_cluster_context = (
         station_cluster_count >= STATION_DENSITY_MAJOR_CLUSTER_MIN_FEATURES
     )
+    has_station_proximity_near = station_proximity_near_count > 0
+    has_station_proximity_mid = station_proximity_mid_count > 0
+    is_station_proximity_station_cell = scored_station_count > 0
+    if is_station_proximity_station_cell:
+        station_proximity_bonus = 0.0
+    elif has_station_proximity_near:
+        station_proximity_bonus = STATION_PROXIMITY_NEAR_CONTEXT_BONUS
+    elif has_station_proximity_mid:
+        station_proximity_bonus = STATION_PROXIMITY_MID_CONTEXT_BONUS
+    else:
+        station_proximity_bonus = 0.0
+    has_station_proximity_context = station_proximity_bonus > 0
     has_motorway_context = motorway_count > 0 or motorway_link_count > 0
     has_trunk_context = trunk_count > 0 or trunk_link_count > 0
+    landmark_counts = {
+        "tourism_attraction": tourism_attraction_count,
+        "tourism_museum": tourism_museum_count,
+        "tourism_gallery": tourism_gallery_count,
+        "tourism_viewpoint": tourism_viewpoint_count,
+        "historic_castle": historic_castle_count,
+        "historic_monument": historic_monument_count,
+        "historic_memorial": historic_memorial_count,
+        "historic_ruins": historic_ruins_count,
+        "historic_archaeological_site": historic_archaeological_site_count,
+    }
+    landmark_context_bonuses = {
+        f"{landmark_type}_context_bonus": (
+            LANDMARK_CONTEXT_BONUSES[landmark_type]
+            if count > 0
+            else 0.0
+        )
+        for landmark_type, count in landmark_counts.items()
+    }
+    landmark_context_bonus = min(
+        sum(landmark_context_bonuses.values()),
+        LANDMARK_CONTEXT_BONUS_CAP,
+    )
+    has_landmark_context = landmark_context_bonus > 0
+    has_castle_near_proximity = castle_near_proximity_count > 0
+    has_castle_mid_proximity = castle_mid_proximity_count > 0
+    has_castle_far_proximity = castle_far_proximity_count > 0
+    has_castle_proximity = (
+        has_castle_near_proximity
+        or has_castle_mid_proximity
+        or has_castle_far_proximity
+    )
+    has_historic_castle = historic_castle_count > 0
+    is_castle_proximity_skipped_castle_cell = (
+        has_historic_castle and has_castle_proximity
+    )
+    if has_historic_castle:
+        castle_proximity_bonus = 0.0
+    elif has_castle_near_proximity:
+        castle_proximity_bonus = CASTLE_NEAR_CONTEXT_BONUS
+    elif has_castle_mid_proximity:
+        castle_proximity_bonus = CASTLE_MID_CONTEXT_BONUS
+    elif has_castle_far_proximity:
+        castle_proximity_bonus = CASTLE_FAR_CONTEXT_BONUS
+    else:
+        castle_proximity_bonus = 0.0
+    has_castle_proximity_context = castle_proximity_bonus > 0
     is_likely_unreachable_water_cell = (
         water_coverage_ratio >= 0.95
         and not has_building
@@ -2034,6 +2476,43 @@ def calculate_initial_score_breakdown_from_feature_summary(feature_summary):
         and not is_likely_unreachable_water_cell
         and (has_building or has_road or has_park or has_river)
     )
+    has_park_waterfront_combo_context = has_park and has_waterfront_context
+    park_waterfront_combo_bonus = (
+        PARK_WATERFRONT_COMBO_CONTEXT_BONUS
+        if has_park_waterfront_combo_context
+        else 0.0
+    )
+
+    has_station_context = (
+        has_surface_station_context
+        or has_subway_station_context
+        or has_public_transport_station_context
+    )
+    context_candidate_count = sum(
+        (
+            has_park_context,
+            has_waterfront_context,
+            has_river_context,
+            has_surface_railway_context,
+            has_station_context,
+            has_dense_station_cluster_context or has_major_station_cluster_context,
+            has_motorway_context,
+            has_trunk_context,
+            has_landmark_context,
+            has_castle_proximity_context,
+        )
+    )
+    has_high_context_3_context = context_candidate_count >= 3
+    has_high_context_4_context = context_candidate_count >= 4
+    has_high_context_5_context = context_candidate_count >= 5
+    if has_high_context_5_context:
+        high_context_bonus = HIGH_CONTEXT_5_CONTEXT_BONUS
+    elif has_high_context_4_context:
+        high_context_bonus = HIGH_CONTEXT_4_CONTEXT_BONUS
+    elif has_high_context_3_context:
+        high_context_bonus = HIGH_CONTEXT_3_CONTEXT_BONUS
+    else:
+        high_context_bonus = 0.0
 
     context_bonus = 0.0
     if has_park_context:
@@ -2081,6 +2560,11 @@ def calculate_initial_score_breakdown_from_feature_summary(feature_summary):
     context_bonus += motorway_context_bonus
     trunk_context_bonus = TRUNK_CONTEXT_BONUS if has_trunk_context else 0.0
     context_bonus += trunk_context_bonus
+    context_bonus += landmark_context_bonus
+    context_bonus += castle_proximity_bonus
+    context_bonus += station_proximity_bonus
+    context_bonus += park_waterfront_combo_bonus
+    context_bonus += high_context_bonus
 
     has_water_penalty = is_likely_unreachable_water_cell
     has_forest_penalty = (
@@ -2123,6 +2607,19 @@ def calculate_initial_score_breakdown_from_feature_summary(feature_summary):
         "trunk_count": trunk_count,
         "trunk_link_count": trunk_link_count,
         "unknown_expressway_count": unknown_expressway_count,
+        "tourism_attraction_count": tourism_attraction_count,
+        "tourism_museum_count": tourism_museum_count,
+        "tourism_gallery_count": tourism_gallery_count,
+        "tourism_viewpoint_count": tourism_viewpoint_count,
+        "historic_castle_count": historic_castle_count,
+        "historic_monument_count": historic_monument_count,
+        "historic_memorial_count": historic_memorial_count,
+        "historic_ruins_count": historic_ruins_count,
+        "historic_archaeological_site_count": historic_archaeological_site_count,
+        "unknown_landmark_count": unknown_landmark_count,
+        "castle_near_proximity_count": castle_near_proximity_count,
+        "castle_mid_proximity_count": castle_mid_proximity_count,
+        "castle_far_proximity_count": castle_far_proximity_count,
         "has_building": has_building,
         "has_road": has_road,
         "has_park": has_park,
@@ -2149,15 +2646,50 @@ def calculate_initial_score_breakdown_from_feature_summary(feature_summary):
         "scored_station_count": scored_station_count,
         "station_cluster_count": station_cluster_count,
         "dense_station_cluster_count": dense_station_cluster_count,
+        "station_proximity_near_count": station_proximity_near_count,
+        "station_proximity_mid_count": station_proximity_mid_count,
         "station_density_bonus": station_density_bonus,
         "has_dense_station_cluster_context": has_dense_station_cluster_context,
         "has_major_station_cluster_context": has_major_station_cluster_context,
+        "has_station_proximity_context": has_station_proximity_context,
+        "has_station_proximity_near_context": (
+            has_station_proximity_context and has_station_proximity_near
+        ),
+        "has_station_proximity_mid_context": (
+            has_station_proximity_context and has_station_proximity_mid
+        ),
+        "station_proximity_bonus": station_proximity_bonus,
+        "is_station_proximity_station_cell": is_station_proximity_station_cell,
         "has_motorway_context": has_motorway_context,
         "motorway_context_bonus": motorway_context_bonus,
         "has_trunk_context": has_trunk_context,
         "trunk_context_bonus": trunk_context_bonus,
+        "has_landmark_context": has_landmark_context,
+        "landmark_context_bonus": landmark_context_bonus,
+        **landmark_context_bonuses,
+        "has_castle_proximity_context": has_castle_proximity_context,
+        "has_castle_near_proximity_context": (
+            has_castle_proximity_context and has_castle_near_proximity
+        ),
+        "has_castle_mid_proximity_context": (
+            has_castle_proximity_context and has_castle_mid_proximity
+        ),
+        "has_castle_far_proximity_context": (
+            has_castle_proximity_context and has_castle_far_proximity
+        ),
+        "castle_proximity_bonus": castle_proximity_bonus,
+        "is_castle_proximity_skipped_castle_cell": (
+            is_castle_proximity_skipped_castle_cell
+        ),
         "is_likely_unreachable_water_cell": is_likely_unreachable_water_cell,
         "has_waterfront_context": has_waterfront_context,
+        "has_park_waterfront_combo_context": has_park_waterfront_combo_context,
+        "park_waterfront_combo_bonus": park_waterfront_combo_bonus,
+        "context_candidate_count": context_candidate_count,
+        "has_high_context_3_context": has_high_context_3_context,
+        "has_high_context_4_context": has_high_context_4_context,
+        "has_high_context_5_context": has_high_context_5_context,
+        "high_context_bonus": high_context_bonus,
         "has_water_penalty": has_water_penalty,
         "has_unreachable_water_penalty": is_likely_unreachable_water_cell,
         "has_forest_penalty": has_forest_penalty,
@@ -2171,6 +2703,29 @@ def calculate_initial_score_from_feature_summary(feature_summary):
         feature_summary
     )
     return breakdown["clamped_score"]
+
+
+def build_auto_score_breakdown_from_feature_summary(feature_summary):
+    """Build a compact JSON-safe score breakdown for GridCell API display."""
+    breakdown = calculate_initial_score_breakdown_from_feature_summary(
+        feature_summary
+    )
+
+    return {
+        **{key: breakdown[key] for key in AUTO_SCORE_BREAKDOWN_SCORE_KEYS},
+        "bonuses": {
+            key: breakdown[key]
+            for key in AUTO_SCORE_BREAKDOWN_BONUS_KEYS
+        },
+        "flags": {
+            key: bool(breakdown[key])
+            for key in AUTO_SCORE_BREAKDOWN_FLAG_KEYS
+        },
+        "counts": {
+            key: breakdown[key]
+            for key in AUTO_SCORE_BREAKDOWN_COUNT_KEYS
+        },
+    }
 
 
 def determine_initial_score_for_grid_cell(
@@ -2409,11 +2964,17 @@ def generate_grid_cells_for_area(
         feature_summary = feature_summaries_by_position.get((row_index, col_index))
         if feature_summary is not None:
             grid_context["feature_summary"] = feature_summary
+            auto_score_breakdown = build_auto_score_breakdown_from_feature_summary(
+                feature_summary
+            )
+            initial_score = auto_score_breakdown["clamped_score"]
+        else:
+            auto_score_breakdown = None
+            initial_score = determine_initial_score_for_grid_cell(
+                region_feature_level=map_area.region_feature_level,
+                grid_context=grid_context,
+            )
 
-        initial_score = determine_initial_score_for_grid_cell(
-            region_feature_level=map_area.region_feature_level,
-            grid_context=grid_context,
-        )
         grid_cells.append(
             GridCell(
                 area=map_area,
@@ -2424,6 +2985,7 @@ def generate_grid_cells_for_area(
                 east=grid_context["east"],
                 west=grid_context["west"],
                 initial_score=initial_score,
+                auto_score_breakdown=auto_score_breakdown,
                 average_user_score=0,
                 rating_count=0,
                 calculated_score=initial_score,

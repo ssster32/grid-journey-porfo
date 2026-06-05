@@ -70,6 +70,8 @@ const elements = {
   selectedGridMessage: document.querySelector("#selected-grid-message"),
   selectedGridMessageText: document.querySelector("#selected-grid-message-text"),
   selectedGridLoadingSpinner: document.querySelector("#selected-grid-loading-spinner"),
+  autoScoreBreakdown: document.querySelector("#auto-score-breakdown"),
+  autoScoreBreakdownBody: document.querySelector("#auto-score-breakdown-body"),
 };
 
 const FALLBACK_AREA_ASPECT_RATIO = 1.4;
@@ -153,6 +155,14 @@ function formatNumber(value) {
     return "";
   }
   return Number.isInteger(numberValue) ? String(numberValue) : numberValue.toFixed(1);
+}
+
+function formatBreakdownNumber(value) {
+  const numberValue = Number(value);
+  if (!Number.isFinite(numberValue)) {
+    return "0.00";
+  }
+  return numberValue.toFixed(2);
 }
 
 function scoreLevel(score) {
@@ -854,6 +864,111 @@ function renderShares(shares) {
     .join("");
 }
 
+function autoScoreReasonLabels(breakdown) {
+  const flags = breakdown.flags || {};
+  const bonuses = breakdown.bonuses || {};
+  const reasonRules = [
+    ["has_landmark_context", "観光名所"],
+    ["has_castle_proximity_context", "城周辺"],
+    ["has_park_waterfront_combo_context", "公園 + 水辺"],
+    ["has_high_context_5_context", "high-context"],
+    ["has_high_context_4_context", "high-context"],
+    ["has_high_context_3_context", "high-context"],
+    ["has_station_proximity_context", "駅近接"],
+    ["has_dense_station_cluster_context", "駅密集"],
+    ["has_major_station_cluster_context", "駅クラスター"],
+    ["has_surface_station_context", "地上駅"],
+    ["has_subway_station_context", "地下鉄駅"],
+    ["has_public_transport_station_context", "公共交通駅"],
+    ["has_surface_railway_context", "地上線路"],
+    ["has_motorway_context", "高速道路"],
+    ["has_trunk_context", "幹線道路"],
+    ["has_waterfront_context", "水辺"],
+    ["has_park_context", "公園"],
+    ["has_river_context", "川"],
+    ["has_forest_context", "森林"],
+    ["has_coastal_context", "海岸"],
+  ];
+  const penaltyRules = [
+    ["has_water_penalty", "水域中心のため減点"],
+    ["has_forest_penalty", "森林中心のため減点"],
+    ["has_empty_cell_penalty", "建物・道路なしのため減点"],
+  ];
+  const labels = [];
+
+  reasonRules.forEach(([key, label]) => {
+    if (flags[key] && !labels.includes(label)) {
+      labels.push(label);
+    }
+  });
+  penaltyRules.forEach(([key, label]) => {
+    if (flags[key] && !labels.includes(label)) {
+      labels.push(label);
+    }
+  });
+  if (Number(bonuses.landmark_context_bonus) > 0 && !labels.includes("観光名所")) {
+    labels.push("観光名所");
+  }
+
+  return labels;
+}
+
+function renderAutoScoreBreakdown(grid) {
+  if (!elements.autoScoreBreakdown || !elements.autoScoreBreakdownBody) {
+    return;
+  }
+
+  const breakdown = grid ? grid.auto_score_breakdown : null;
+  if (!breakdown) {
+    elements.autoScoreBreakdownBody.innerHTML = `
+      <p class="auto-score-breakdown-empty">自動採点内訳なし</p>
+    `;
+    return;
+  }
+
+  const reasonLabels = autoScoreReasonLabels(breakdown);
+  const reasonHtml = reasonLabels.length
+    ? `
+      <ul class="auto-score-reasons">
+        ${reasonLabels.map((label) => `<li>${escapeHtml(label)}</li>`).join("")}
+      </ul>
+    `
+    : `<p class="auto-score-breakdown-empty">主な理由はありません。</p>`;
+
+  elements.autoScoreBreakdownBody.innerHTML = `
+    <dl class="auto-score-components">
+      <div class="auto-score-component-row">
+        <dt>自動初期スコア</dt>
+        <dd>${escapeHtml(formatBreakdownNumber(breakdown.clamped_score))}</dd>
+      </div>
+      <div class="auto-score-component-row">
+        <dt>base</dt>
+        <dd>${escapeHtml(formatBreakdownNumber(breakdown.base_score))}</dd>
+      </div>
+      <div class="auto-score-component-row">
+        <dt>diversity</dt>
+        <dd>${escapeHtml(formatBreakdownNumber(breakdown.diversity_bonus))}</dd>
+      </div>
+      <div class="auto-score-component-row">
+        <dt>context</dt>
+        <dd>${escapeHtml(formatBreakdownNumber(breakdown.context_bonus))}</dd>
+      </div>
+      <div class="auto-score-component-row">
+        <dt>penalty</dt>
+        <dd>${escapeHtml(formatBreakdownNumber(breakdown.penalty))}</dd>
+      </div>
+      <div class="auto-score-component-row">
+        <dt>raw</dt>
+        <dd>${escapeHtml(formatBreakdownNumber(breakdown.raw_score))}</dd>
+      </div>
+    </dl>
+    <div class="auto-score-reason-block">
+      <strong>主な理由</strong>
+      ${reasonHtml}
+    </div>
+  `;
+}
+
 function selectedGrids() {
   return Array.from(state.selectedGridIds)
     .map((gridId) => state.gridsById.get(gridId))
@@ -900,6 +1015,7 @@ function renderSelectedGrids() {
     elements.selectedGridLabel.textContent = "GridCell を選択してください。";
     elements.selectedGridCount.textContent = "選択数: 0";
     elements.selectedGridsList.textContent = "GridCell を選択してください。";
+    renderAutoScoreBreakdown(null);
     elements.clearSelectedGridsButton.disabled = true;
     elements.individualRatingSubmit.disabled = true;
     elements.sameScoreRatingSubmit.disabled = true;
@@ -916,6 +1032,7 @@ function renderSelectedGrids() {
   ].join(" / ");
   elements.selectedGridLabel.textContent = latestSummary;
   elements.selectedGridCount.textContent = `選択数: ${grids.length}`;
+  renderAutoScoreBreakdown(latestGrid);
   elements.clearSelectedGridsButton.disabled = false;
   elements.individualRatingSubmit.disabled = false;
   elements.sameScoreRatingSubmit.disabled = false;

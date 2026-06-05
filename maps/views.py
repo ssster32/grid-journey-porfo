@@ -149,6 +149,29 @@ def log_overpass_score_breakdown_summary(
         "major_station_cluster_context_cells=%s "
         "station_density_bonus_avg=%.2f "
         "station_density_bonus_max=%.2f "
+        "landmark_context_cells=%s "
+        "landmark_context_bonus_avg=%.2f "
+        "landmark_context_bonus_max=%.2f "
+        "castle_proximity_context_cells=%s "
+        "castle_near_context_cells=%s "
+        "castle_mid_context_cells=%s "
+        "castle_far_context_cells=%s "
+        "castle_proximity_bonus_avg=%.2f "
+        "castle_proximity_bonus_max=%.2f "
+        "castle_proximity_skipped_castle_cells=%s "
+        "station_proximity_context_cells=%s "
+        "station_proximity_near_context_cells=%s "
+        "station_proximity_mid_context_cells=%s "
+        "station_proximity_bonus_avg=%.2f "
+        "station_proximity_bonus_max=%.2f "
+        "park_waterfront_combo_context_cells=%s "
+        "park_waterfront_combo_bonus_avg=%.2f "
+        "park_waterfront_combo_bonus_max=%.2f "
+        "high_context_3_context_cells=%s "
+        "high_context_4_context_cells=%s "
+        "high_context_5_context_cells=%s "
+        "high_context_bonus_avg=%.2f "
+        "high_context_bonus_max=%.2f "
         "motorway_context_cells=%s "
         "motorway_context_bonus_avg=%.2f "
         "motorway_context_bonus_max=%.2f "
@@ -216,12 +239,139 @@ def log_overpass_score_breakdown_summary(
         ),
         component_average("station_density_bonus"),
         component_max("station_density_bonus"),
+        sum(breakdown["has_landmark_context"] for breakdown in breakdowns),
+        component_average("landmark_context_bonus"),
+        component_max("landmark_context_bonus"),
+        sum(breakdown["has_castle_proximity_context"] for breakdown in breakdowns),
+        sum(
+            breakdown["has_castle_near_proximity_context"]
+            for breakdown in breakdowns
+        ),
+        sum(
+            breakdown["has_castle_mid_proximity_context"]
+            for breakdown in breakdowns
+        ),
+        sum(
+            breakdown["has_castle_far_proximity_context"]
+            for breakdown in breakdowns
+        ),
+        component_average("castle_proximity_bonus"),
+        component_max("castle_proximity_bonus"),
+        sum(
+            breakdown["is_castle_proximity_skipped_castle_cell"]
+            for breakdown in breakdowns
+        ),
+        sum(breakdown["has_station_proximity_context"] for breakdown in breakdowns),
+        sum(
+            breakdown["has_station_proximity_near_context"]
+            for breakdown in breakdowns
+        ),
+        sum(
+            breakdown["has_station_proximity_mid_context"]
+            for breakdown in breakdowns
+        ),
+        component_average("station_proximity_bonus"),
+        component_max("station_proximity_bonus"),
+        sum(
+            breakdown["has_park_waterfront_combo_context"]
+            for breakdown in breakdowns
+        ),
+        component_average("park_waterfront_combo_bonus"),
+        component_max("park_waterfront_combo_bonus"),
+        sum(breakdown["has_high_context_3_context"] for breakdown in breakdowns),
+        sum(breakdown["has_high_context_4_context"] for breakdown in breakdowns),
+        sum(breakdown["has_high_context_5_context"] for breakdown in breakdowns),
+        component_average("high_context_bonus"),
+        component_max("high_context_bonus"),
         sum(breakdown["has_motorway_context"] for breakdown in breakdowns),
         component_average("motorway_context_bonus"),
         component_max("motorway_context_bonus"),
         sum(breakdown["has_trunk_context"] for breakdown in breakdowns),
         component_average("trunk_context_bonus"),
         component_max("trunk_context_bonus"),
+    )
+
+
+def log_overpass_context_candidate_summary(
+    area,
+    user_id,
+    feature_summaries_by_position,
+    station_proximity_summary=None,
+):
+    if station_proximity_summary is None:
+        station_proximity_summary = {}
+
+    breakdowns = [
+        calculate_initial_score_breakdown_from_feature_summary(summary)
+        for summary in feature_summaries_by_position.values()
+    ]
+
+    context_counts = []
+    park_waterfront_combo_cells = 0
+    for breakdown in breakdowns:
+        if breakdown["has_park"] and breakdown["has_waterfront_context"]:
+            park_waterfront_combo_cells += 1
+
+        station_context = (
+            breakdown["has_surface_station_context"]
+            or breakdown["has_subway_station_context"]
+            or breakdown["has_public_transport_station_context"]
+        )
+        context_count = sum(
+            (
+                breakdown["has_park_context"],
+                breakdown["has_waterfront_context"],
+                breakdown["has_river_context"],
+                breakdown["has_surface_railway_context"],
+                station_context,
+                breakdown["station_density_bonus"] > 0,
+                breakdown["has_motorway_context"],
+                breakdown["has_trunk_context"],
+                breakdown["has_landmark_context"],
+                breakdown["has_castle_proximity_context"],
+            )
+        )
+        context_counts.append(context_count)
+
+    context_candidate_count_avg = (
+        sum(context_counts) / len(context_counts) if context_counts else 0.0
+    )
+    context_candidate_count_max = max(context_counts) if context_counts else 0
+
+    logger.info(
+        "Overpass auto context candidate summary: "
+        "area_id=%s user_id=%s summary_count=%s "
+        "park_waterfront_combo_cells=%s "
+        "high_context_3_cells=%s "
+        "high_context_5_cells=%s "
+        "context_candidate_count_avg=%.2f "
+        "context_candidate_count_max=%s "
+        "station_proximity_features=%s "
+        "station_proximity_near_cells=%s "
+        "station_proximity_mid_cells=%s "
+        "station_proximity_cells=%s "
+        "station_proximity_station_cells=%s "
+        "station_proximity_non_station_cells=%s "
+        "station_proximity_min_distance_m=%.2f "
+        "station_proximity_avg_distance_m=%.2f "
+        "station_proximity_max_distance_m=%.2f",
+        area.id,
+        user_id,
+        len(breakdowns),
+        park_waterfront_combo_cells,
+        sum(context_count >= 3 for context_count in context_counts),
+        sum(context_count >= 5 for context_count in context_counts),
+        context_candidate_count_avg,
+        context_candidate_count_max,
+        station_proximity_summary.get("station_proximity_features", 0),
+        station_proximity_summary.get("station_proximity_near_cells", 0),
+        station_proximity_summary.get("station_proximity_mid_cells", 0),
+        station_proximity_summary.get("station_proximity_cells", 0),
+        station_proximity_summary.get("station_proximity_station_cells", 0),
+        station_proximity_summary.get("station_proximity_non_station_cells", 0),
+        station_proximity_summary.get("station_proximity_min_distance_m", 0.0),
+        station_proximity_summary.get("station_proximity_avg_distance_m", 0.0),
+        station_proximity_summary.get("station_proximity_max_distance_m", 0.0),
     )
 
 
@@ -495,6 +645,36 @@ def log_overpass_landmark_summary(
         landmark_summary.get("historic_archaeological_site_cells", 0),
         landmark_summary.get("unknown_landmark_features", 0),
         landmark_summary.get("unknown_landmark_cells", 0),
+    )
+
+
+def log_overpass_castle_proximity_summary(
+    area,
+    user_id,
+    castle_proximity_summary=None,
+):
+    if castle_proximity_summary is None:
+        castle_proximity_summary = {}
+
+    logger.info(
+        "Overpass auto castle proximity summary: "
+        "area_id=%s user_id=%s "
+        "castle_features=%s "
+        "castle_near_cells=%s castle_mid_cells=%s castle_far_cells=%s "
+        "castle_proximity_cells=%s "
+        "castle_min_distance_m=%.2f "
+        "castle_avg_distance_m=%.2f "
+        "castle_max_distance_m=%.2f",
+        area.id,
+        user_id,
+        castle_proximity_summary.get("castle_features", 0),
+        castle_proximity_summary.get("castle_near_cells", 0),
+        castle_proximity_summary.get("castle_mid_cells", 0),
+        castle_proximity_summary.get("castle_far_cells", 0),
+        castle_proximity_summary.get("castle_proximity_cells", 0),
+        castle_proximity_summary.get("castle_min_distance_m", 0.0),
+        castle_proximity_summary.get("castle_avg_distance_m", 0.0),
+        castle_proximity_summary.get("castle_max_distance_m", 0.0),
     )
 
 
@@ -838,6 +1018,16 @@ class MapAreaListCreateView(APIView):
                             request.user.id,
                             feature_summaries_by_position,
                         )
+                        log_overpass_context_candidate_summary(
+                            area,
+                            request.user.id,
+                            feature_summaries_by_position,
+                            getattr(
+                                feature_summaries_by_position,
+                                "station_proximity_summary",
+                                None,
+                            ),
+                        )
                         log_overpass_river_summary(
                             area,
                             request.user.id,
@@ -891,6 +1081,15 @@ class MapAreaListCreateView(APIView):
                             getattr(
                                 feature_summaries_by_position,
                                 "landmark_summary",
+                                None,
+                            ),
+                        )
+                        log_overpass_castle_proximity_summary(
+                            area,
+                            request.user.id,
+                            getattr(
+                                feature_summaries_by_position,
+                                "castle_proximity_summary",
                                 None,
                             ),
                         )

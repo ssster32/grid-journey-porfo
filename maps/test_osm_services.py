@@ -12,8 +12,14 @@ from .services import (
     METERS_PER_DEGREE,
     MIN_FOREST_COVERAGE_RATIO_FOR_SCORE,
     MIN_RIVER_COVERAGE_RATIO_FOR_HAS_RIVER,
+    PARK_WATERFRONT_COMBO_CONTEXT_BONUS,
     ROAD_BASE_SCORE_MAX_BONUS,
     PUBLIC_TRANSPORT_STATION_CONTEXT_BONUS,
+    HIGH_CONTEXT_3_CONTEXT_BONUS,
+    HIGH_CONTEXT_4_CONTEXT_BONUS,
+    HIGH_CONTEXT_5_CONTEXT_BONUS,
+    STATION_PROXIMITY_MID_CONTEXT_BONUS,
+    STATION_PROXIMITY_NEAR_CONTEXT_BONUS,
     SURFACE_RAILWAY_CONTEXT_BONUS,
     SURFACE_STATION_CONTEXT_BONUS,
     SUBWAY_STATION_CONTEXT_BONUS,
@@ -21,6 +27,7 @@ from .services import (
     TRUNK_CONTEXT_BONUS,
     WATERFRONT_CONTEXT_BONUS,
     build_bounds_from_osm_element,
+    build_auto_score_breakdown_from_feature_summary,
     build_feature_summaries_for_map_area_from_overpass,
     build_feature_summaries_for_grid_cell_contexts,
     build_feature_summaries_for_grid_cells,
@@ -45,11 +52,13 @@ from .services import (
     is_large_waterway_river_bounds_for_map_area,
     parse_overpass_elements_to_map_features,
     summarize_effective_expressway_feature_matches_for_grid_cell_contexts,
+    summarize_castle_proximity_for_grid_cell_contexts,
     summarize_expressway_bounds_for_grid_cell_contexts,
     summarize_expressway_feature_matches_for_grid_cell_contexts,
     summarize_landmark_feature_matches_for_grid_cell_contexts,
     summarize_river_feature_matches_for_grid_cell_contexts,
     summarize_railway_feature_matches_for_grid_cell_contexts,
+    summarize_station_proximity_for_grid_cell_contexts,
     summarize_station_feature_matches_for_grid_cell_contexts,
     summarize_waterway_feature_matches_for_grid_cell_contexts,
     summarize_waterway_river_bounds_for_map_area,
@@ -462,10 +471,15 @@ class DetermineInitialScoreForGridCellTests(TestCase):
         self.assertEqual(summaries[(0, 1)]["railway_station_count"], 1)
         self.assertEqual(summaries.station_summary["station_features"], 1)
         self.assertEqual(summaries.station_summary["railway_station_cells"], 2)
+        self.assertEqual(
+            summaries.station_proximity_summary["station_proximity_features"],
+            1,
+        )
         self.assertEqual(summaries[(0, 0)]["historic_castle_count"], 1)
         self.assertEqual(summaries[(0, 1)]["historic_castle_count"], 1)
         self.assertEqual(summaries.landmark_summary["landmark_features"], 1)
         self.assertEqual(summaries.landmark_summary["historic_castle_cells"], 2)
+        self.assertEqual(summaries.castle_proximity_summary["castle_features"], 1)
         self.assertEqual(summaries[(0, 0)]["motorway_count"], 1)
         self.assertEqual(summaries[(0, 1)]["motorway_count"], 1)
         self.assertEqual(summaries.expressway_summary["expressway_features"], 1)
@@ -2043,7 +2057,7 @@ class DetermineInitialScoreForGridCellTests(TestCase):
         self.assertEqual(summary["historic_archaeological_site_count"], 1)
         self.assertEqual(summary["unknown_landmark_count"], 1)
 
-    def test_build_feature_summary_landmarks_do_not_affect_initial_score(self):
+    def test_build_feature_summary_landmarks_add_initial_score_context_bonus(self):
         empty_summary = build_feature_summary_for_grid_cell(self.grid_bounds(), [])
         landmark_summary = build_feature_summary_for_grid_cell(
             self.grid_bounds(),
@@ -2060,11 +2074,87 @@ class DetermineInitialScoreForGridCellTests(TestCase):
                 },
             ],
         )
+        empty_breakdown = calculate_initial_score_breakdown_from_feature_summary(
+            empty_summary
+        )
+        landmark_breakdown = calculate_initial_score_breakdown_from_feature_summary(
+            landmark_summary
+        )
 
+        self.assertTrue(landmark_breakdown["has_landmark_context"])
+        self.assertEqual(landmark_breakdown["landmark_context_bonus"], 0.35)
+        self.assertEqual(
+            landmark_breakdown["tourism_attraction_context_bonus"],
+            0.35,
+        )
+        self.assertAlmostEqual(
+            landmark_breakdown["context_bonus"],
+            empty_breakdown["context_bonus"] + 0.35,
+        )
+        for key in ("base_score", "diversity_bonus", "penalty"):
+            with self.subTest(key=key):
+                self.assertEqual(landmark_breakdown[key], empty_breakdown[key])
         self.assertEqual(
             calculate_initial_score_from_feature_summary(landmark_summary),
-            calculate_initial_score_from_feature_summary(empty_summary),
+            landmark_breakdown["clamped_score"],
         )
+
+    def test_build_feature_summary_sets_castle_proximity_for_neighbor_cell(self):
+        grid_cell_bounds = {
+            "north": 10.0001,
+            "south": 9.9999,
+            "east": 20.0001,
+            "west": 19.9999,
+        }
+        castle_center_lat = 10.0 + (300 / METERS_PER_DEGREE)
+        summary = build_feature_summary_for_grid_cell(
+            grid_cell_bounds,
+            [
+                {
+                    "kind": "landmark",
+                    "source_historic": "castle",
+                    "bounds": {
+                        "north": castle_center_lat + 0.00001,
+                        "south": castle_center_lat - 0.00001,
+                        "east": 20.00001,
+                        "west": 19.99999,
+                    },
+                },
+            ],
+        )
+
+        self.assertEqual(summary["historic_castle_count"], 0)
+        self.assertEqual(summary["castle_near_proximity_count"], 0)
+        self.assertEqual(summary["castle_mid_proximity_count"], 1)
+        self.assertEqual(summary["castle_far_proximity_count"], 0)
+
+    def test_build_feature_summary_sets_station_proximity_for_neighbor_cell(self):
+        grid_cell_bounds = {
+            "north": 10.0001,
+            "south": 9.9999,
+            "east": 20.0001,
+            "west": 19.9999,
+        }
+        station_center_lat = 10.0 + (200 / METERS_PER_DEGREE)
+        summary = build_feature_summary_for_grid_cell(
+            grid_cell_bounds,
+            [
+                {
+                    "kind": "station",
+                    "source_railway": "station",
+                    "bounds": {
+                        "north": station_center_lat + 0.00001,
+                        "south": station_center_lat - 0.00001,
+                        "east": 20.00001,
+                        "west": 19.99999,
+                    },
+                },
+            ],
+        )
+
+        self.assertEqual(summary["railway_station_count"], 0)
+        self.assertEqual(summary["station_proximity_near_count"], 0)
+        self.assertEqual(summary["station_proximity_mid_count"], 1)
 
     def test_build_feature_summary_counts_expressways_by_type(self):
         summary = build_feature_summary_for_grid_cell(
@@ -2692,6 +2782,8 @@ class DetermineInitialScoreForGridCellTests(TestCase):
                 "unknown_station_count": 0,
                 "station_cluster_count": 0,
                 "dense_station_cluster_count": 0,
+                "station_proximity_near_count": 0,
+                "station_proximity_mid_count": 0,
                 "motorway_count": 0,
                 "motorway_link_count": 0,
                 "trunk_count": 0,
@@ -2707,6 +2799,9 @@ class DetermineInitialScoreForGridCellTests(TestCase):
                 "historic_ruins_count": 0,
                 "historic_archaeological_site_count": 0,
                 "unknown_landmark_count": 0,
+                "castle_near_proximity_count": 0,
+                "castle_mid_proximity_count": 0,
+                "castle_far_proximity_count": 0,
                 "has_park": False,
                 "has_river": False,
                 "is_coastal": False,
@@ -2832,6 +2927,8 @@ class DetermineInitialScoreForGridCellTests(TestCase):
                 "unknown_station_count": 0,
                 "station_cluster_count": 0,
                 "dense_station_cluster_count": 0,
+                "station_proximity_near_count": 0,
+                "station_proximity_mid_count": 0,
                 "motorway_count": 0,
                 "motorway_link_count": 0,
                 "trunk_count": 0,
@@ -2847,6 +2944,9 @@ class DetermineInitialScoreForGridCellTests(TestCase):
                 "historic_ruins_count": 0,
                 "historic_archaeological_site_count": 0,
                 "unknown_landmark_count": 0,
+                "castle_near_proximity_count": 0,
+                "castle_mid_proximity_count": 0,
+                "castle_far_proximity_count": 0,
                 "has_park": False,
                 "has_river": False,
                 "is_coastal": False,
@@ -3051,6 +3151,8 @@ class DetermineInitialScoreForGridCellTests(TestCase):
                 "unknown_station_count": 0,
                 "station_cluster_count": 0,
                 "dense_station_cluster_count": 0,
+                "station_proximity_near_count": 0,
+                "station_proximity_mid_count": 0,
                 "motorway_count": 0,
                 "motorway_link_count": 0,
                 "trunk_count": 0,
@@ -3066,6 +3168,9 @@ class DetermineInitialScoreForGridCellTests(TestCase):
                 "historic_ruins_count": 0,
                 "historic_archaeological_site_count": 0,
                 "unknown_landmark_count": 0,
+                "castle_near_proximity_count": 0,
+                "castle_mid_proximity_count": 0,
+                "castle_far_proximity_count": 0,
                 "has_park": False,
                 "has_river": False,
                 "is_coastal": False,
@@ -3559,6 +3664,148 @@ class DetermineInitialScoreForGridCellTests(TestCase):
         self.assertEqual(station_summary["dense_station_cluster_count_max"], 0)
         self.assertEqual(station_summary["major_station_cluster_count_max"], 0)
 
+    def test_summarize_station_proximity_returns_zero_without_scored_station(self):
+        station_proximity_summary = summarize_station_proximity_for_grid_cell_contexts(
+            [
+                {
+                    "row_index": 0,
+                    "col_index": 0,
+                    "north": 10.0,
+                    "south": 9.99,
+                    "east": 20.0,
+                    "west": 19.99,
+                },
+            ],
+            [
+                {
+                    "kind": "station",
+                    "source_amenity": "bus_station",
+                    "bounds": {
+                        "north": 10.0,
+                        "south": 9.99,
+                        "east": 20.0,
+                        "west": 19.99,
+                    },
+                },
+                {
+                    "kind": "station",
+                    "source_station": "subway",
+                    "bounds": {
+                        "north": 10.0,
+                        "south": 9.99,
+                        "east": 20.0,
+                        "west": 19.99,
+                    },
+                },
+                {
+                    "kind": "station",
+                    "bounds": {
+                        "north": 10.0,
+                        "south": 9.99,
+                        "east": 20.0,
+                        "west": 19.99,
+                    },
+                },
+            ],
+        )
+
+        self.assertEqual(
+            station_proximity_summary,
+            {
+                "station_proximity_features": 0,
+                "station_proximity_near_cells": 0,
+                "station_proximity_mid_cells": 0,
+                "station_proximity_cells": 0,
+                "station_proximity_station_cells": 0,
+                "station_proximity_non_station_cells": 0,
+                "station_proximity_min_distance_m": 0.0,
+                "station_proximity_avg_distance_m": 0.0,
+                "station_proximity_max_distance_m": 0.0,
+            },
+        )
+
+    def test_summarize_station_proximity_counts_distance_bands_and_station_cells(
+        self,
+    ):
+        station_center_lat = 10.0
+        station_center_lng = 20.0
+        distance_offsets = (
+            0,
+            200 / METERS_PER_DEGREE,
+            350 / METERS_PER_DEGREE,
+        )
+
+        def grid_cell_context(index, lat_offset):
+            center_lat = station_center_lat + lat_offset
+            return {
+                "row_index": 0,
+                "col_index": index,
+                "north": center_lat + 0.00001,
+                "south": center_lat - 0.00001,
+                "east": station_center_lng + 0.00001,
+                "west": station_center_lng - 0.00001,
+            }
+
+        station_proximity_summary = summarize_station_proximity_for_grid_cell_contexts(
+            [
+                grid_cell_context(index, lat_offset)
+                for index, lat_offset in enumerate(distance_offsets)
+            ],
+            [
+                {
+                    "kind": "station",
+                    "source_railway": "station",
+                    "bounds": {
+                        "north": station_center_lat + 0.00001,
+                        "south": station_center_lat - 0.00001,
+                        "east": station_center_lng + 0.00001,
+                        "west": station_center_lng - 0.00001,
+                    },
+                },
+                {
+                    "kind": "station",
+                    "source_amenity": "bus_station",
+                    "bounds": {
+                        "north": station_center_lat + 0.00001,
+                        "south": station_center_lat - 0.00001,
+                        "east": station_center_lng + 0.00001,
+                        "west": station_center_lng - 0.00001,
+                    },
+                },
+            ],
+        )
+
+        self.assertEqual(station_proximity_summary["station_proximity_features"], 1)
+        self.assertEqual(
+            station_proximity_summary["station_proximity_near_cells"],
+            1,
+        )
+        self.assertEqual(
+            station_proximity_summary["station_proximity_mid_cells"],
+            1,
+        )
+        self.assertEqual(station_proximity_summary["station_proximity_cells"], 2)
+        self.assertEqual(
+            station_proximity_summary["station_proximity_station_cells"],
+            1,
+        )
+        self.assertEqual(
+            station_proximity_summary["station_proximity_non_station_cells"],
+            1,
+        )
+        self.assertAlmostEqual(
+            station_proximity_summary["station_proximity_min_distance_m"],
+            0.0,
+        )
+        self.assertAlmostEqual(
+            station_proximity_summary["station_proximity_avg_distance_m"],
+            100.0,
+        )
+        self.assertAlmostEqual(
+            station_proximity_summary["station_proximity_max_distance_m"],
+            200.0,
+        )
+
     def test_summarize_landmark_feature_matches_returns_zero_without_landmark(self):
         landmark_summary = summarize_landmark_feature_matches_for_grid_cell_contexts(
             [
@@ -3764,6 +4011,105 @@ class DetermineInitialScoreForGridCellTests(TestCase):
         self.assertEqual(landmark_summary["historic_archaeological_site_cells"], 0)
         self.assertEqual(landmark_summary["unknown_landmark_features"], 1)
         self.assertEqual(landmark_summary["unknown_landmark_cells"], 1)
+
+    def test_summarize_castle_proximity_returns_zero_without_castle(self):
+        castle_summary = summarize_castle_proximity_for_grid_cell_contexts(
+            [
+                {
+                    "row_index": 0,
+                    "col_index": 0,
+                    "north": 10.0,
+                    "south": 9.99,
+                    "east": 20.0,
+                    "west": 19.99,
+                },
+            ],
+            [
+                {
+                    "kind": "landmark",
+                    "source_historic": "monument",
+                    "bounds": {
+                        "north": 10.0,
+                        "south": 9.99,
+                        "east": 20.0,
+                        "west": 19.99,
+                    },
+                },
+            ],
+        )
+
+        self.assertEqual(
+            castle_summary,
+            {
+                "castle_features": 0,
+                "castle_near_cells": 0,
+                "castle_mid_cells": 0,
+                "castle_far_cells": 0,
+                "castle_proximity_cells": 0,
+                "castle_min_distance_m": 0.0,
+                "castle_avg_distance_m": 0.0,
+                "castle_max_distance_m": 0.0,
+            },
+        )
+
+    def test_summarize_castle_proximity_counts_non_overlapping_distance_bands(self):
+        castle_center_lat = 10.0
+        castle_center_lng = 20.0
+        distance_offsets = (
+            0,
+            300 / METERS_PER_DEGREE,
+            600 / METERS_PER_DEGREE,
+            900 / METERS_PER_DEGREE,
+        )
+
+        def grid_cell_context(index, lat_offset):
+            center_lat = castle_center_lat + lat_offset
+            return {
+                "row_index": 0,
+                "col_index": index,
+                "north": center_lat + 0.00001,
+                "south": center_lat - 0.00001,
+                "east": castle_center_lng + 0.00001,
+                "west": castle_center_lng - 0.00001,
+            }
+
+        castle_summary = summarize_castle_proximity_for_grid_cell_contexts(
+            [
+                grid_cell_context(index, lat_offset)
+                for index, lat_offset in enumerate(distance_offsets)
+            ],
+            [
+                {
+                    "kind": "landmark",
+                    "source_historic": "castle",
+                    "bounds": {
+                        "north": castle_center_lat + 0.00001,
+                        "south": castle_center_lat - 0.00001,
+                        "east": castle_center_lng + 0.00001,
+                        "west": castle_center_lng - 0.00001,
+                    },
+                },
+                {
+                    "kind": "landmark",
+                    "source_tourism": "viewpoint",
+                    "bounds": {
+                        "north": castle_center_lat + 0.00001,
+                        "south": castle_center_lat - 0.00001,
+                        "east": castle_center_lng + 0.00001,
+                        "west": castle_center_lng - 0.00001,
+                    },
+                },
+            ],
+        )
+
+        self.assertEqual(castle_summary["castle_features"], 1)
+        self.assertEqual(castle_summary["castle_near_cells"], 1)
+        self.assertEqual(castle_summary["castle_mid_cells"], 1)
+        self.assertEqual(castle_summary["castle_far_cells"], 1)
+        self.assertEqual(castle_summary["castle_proximity_cells"], 3)
+        self.assertAlmostEqual(castle_summary["castle_min_distance_m"], 0.0)
+        self.assertAlmostEqual(castle_summary["castle_avg_distance_m"], 300.0)
+        self.assertAlmostEqual(castle_summary["castle_max_distance_m"], 600.0)
 
     def test_summarize_expressway_feature_matches_returns_zero_without_expressway(
         self,
@@ -4290,6 +4636,11 @@ class DetermineInitialScoreForGridCellTests(TestCase):
                 "west": 19.1,
             },
         }
+        valid_castle_feature = {
+            **valid_landmark_feature,
+            "source_tourism": None,
+            "source_historic": "castle",
+        }
         test_cases = (
             (
                 summarize_station_feature_matches_for_grid_cell_contexts,
@@ -4313,6 +4664,31 @@ class DetermineInitialScoreForGridCellTests(TestCase):
             ),
             (
                 summarize_station_feature_matches_for_grid_cell_contexts,
+                [valid_context],
+                [{**valid_station_feature, "bounds": None}],
+            ),
+            (
+                summarize_station_proximity_for_grid_cell_contexts,
+                None,
+                [],
+            ),
+            (
+                summarize_station_proximity_for_grid_cell_contexts,
+                [None],
+                [],
+            ),
+            (
+                summarize_station_proximity_for_grid_cell_contexts,
+                [valid_context],
+                None,
+            ),
+            (
+                summarize_station_proximity_for_grid_cell_contexts,
+                [valid_context],
+                [None],
+            ),
+            (
+                summarize_station_proximity_for_grid_cell_contexts,
                 [valid_context],
                 [{**valid_station_feature, "bounds": None}],
             ),
@@ -4365,6 +4741,31 @@ class DetermineInitialScoreForGridCellTests(TestCase):
                 summarize_landmark_feature_matches_for_grid_cell_contexts,
                 [valid_context],
                 [{**valid_landmark_feature, "bounds": None}],
+            ),
+            (
+                summarize_castle_proximity_for_grid_cell_contexts,
+                None,
+                [],
+            ),
+            (
+                summarize_castle_proximity_for_grid_cell_contexts,
+                [None],
+                [],
+            ),
+            (
+                summarize_castle_proximity_for_grid_cell_contexts,
+                [valid_context],
+                None,
+            ),
+            (
+                summarize_castle_proximity_for_grid_cell_contexts,
+                [valid_context],
+                [None],
+            ),
+            (
+                summarize_castle_proximity_for_grid_cell_contexts,
+                [valid_context],
+                [{**valid_castle_feature, "bounds": None}],
             ),
         )
 
@@ -4997,7 +5398,7 @@ class DetermineInitialScoreForGridCellTests(TestCase):
 
         self.assertEqual(score, expected_score)
         self.assertGreater(score, 2.0)
-        self.assertLess(score, 2.5)
+        self.assertLess(score, 2.7)
 
     def test_grid_context_without_feature_summary_returns_region_feature_fallback(self):
         score = determine_initial_score_for_grid_cell(
@@ -5039,7 +5440,7 @@ class DetermineInitialScoreForGridCellTests(TestCase):
         )
 
         self.assertGreaterEqual(score, 2.0)
-        self.assertLess(score, 2.5)
+        self.assertLess(score, 2.7)
         self.assertLessEqual(score, 3.0)
 
     def test_feature_summary_river_coverage_ratio_can_enable_river_score(self):
@@ -5196,6 +5597,21 @@ class DetermineInitialScoreForGridCellTests(TestCase):
             "trunk_count",
             "trunk_link_count",
             "unknown_expressway_count",
+            "tourism_attraction_count",
+            "tourism_museum_count",
+            "tourism_gallery_count",
+            "tourism_viewpoint_count",
+            "historic_castle_count",
+            "historic_monument_count",
+            "historic_memorial_count",
+            "historic_ruins_count",
+            "historic_archaeological_site_count",
+            "unknown_landmark_count",
+            "castle_near_proximity_count",
+            "castle_mid_proximity_count",
+            "castle_far_proximity_count",
+            "station_proximity_near_count",
+            "station_proximity_mid_count",
             "has_building",
             "has_road",
             "has_park",
@@ -5221,12 +5637,41 @@ class DetermineInitialScoreForGridCellTests(TestCase):
             "station_density_bonus",
             "has_dense_station_cluster_context",
             "has_major_station_cluster_context",
+            "has_station_proximity_context",
+            "has_station_proximity_near_context",
+            "has_station_proximity_mid_context",
+            "station_proximity_bonus",
+            "is_station_proximity_station_cell",
             "has_motorway_context",
             "motorway_context_bonus",
             "has_trunk_context",
             "trunk_context_bonus",
+            "has_landmark_context",
+            "landmark_context_bonus",
+            "tourism_attraction_context_bonus",
+            "tourism_museum_context_bonus",
+            "tourism_gallery_context_bonus",
+            "tourism_viewpoint_context_bonus",
+            "historic_castle_context_bonus",
+            "historic_monument_context_bonus",
+            "historic_memorial_context_bonus",
+            "historic_ruins_context_bonus",
+            "historic_archaeological_site_context_bonus",
+            "has_castle_proximity_context",
+            "has_castle_near_proximity_context",
+            "has_castle_mid_proximity_context",
+            "has_castle_far_proximity_context",
+            "castle_proximity_bonus",
+            "is_castle_proximity_skipped_castle_cell",
             "is_likely_unreachable_water_cell",
             "has_waterfront_context",
+            "has_park_waterfront_combo_context",
+            "park_waterfront_combo_bonus",
+            "context_candidate_count",
+            "has_high_context_3_context",
+            "has_high_context_4_context",
+            "has_high_context_5_context",
+            "high_context_bonus",
             "has_water_penalty",
             "has_unreachable_water_penalty",
             "has_forest_penalty",
@@ -5249,6 +5694,38 @@ class DetermineInitialScoreForGridCellTests(TestCase):
         )
 
         self.assertEqual(score, breakdown["clamped_score"])
+
+    def test_auto_score_breakdown_keeps_compact_display_fields(self):
+        breakdown = build_auto_score_breakdown_from_feature_summary(
+            {
+                "building_count": 20,
+                "has_park": True,
+                "water_coverage_ratio": 0.2,
+                "tourism_attraction_count": 1,
+            }
+        )
+
+        for key in (
+            "base_score",
+            "diversity_bonus",
+            "context_bonus",
+            "penalty",
+            "raw_score",
+            "clamped_score",
+        ):
+            with self.subTest(key=key):
+                self.assertIn(key, breakdown)
+        self.assertIn("bonuses", breakdown)
+        self.assertIn("flags", breakdown)
+        self.assertIn("counts", breakdown)
+        self.assertTrue(breakdown["flags"]["has_landmark_context"])
+        self.assertTrue(breakdown["flags"]["has_park_waterfront_combo_context"])
+        self.assertGreater(breakdown["bonuses"]["landmark_context_bonus"], 0)
+        self.assertGreater(
+            breakdown["bonuses"]["park_waterfront_combo_bonus"],
+            0,
+        )
+        self.assertGreaterEqual(breakdown["counts"]["context_candidate_count"], 1)
 
     def test_feature_summary_breakdown_tracks_base_bonuses_and_categories(self):
         breakdown = calculate_initial_score_breakdown_from_feature_summary(
@@ -5393,6 +5870,21 @@ class DetermineInitialScoreForGridCellTests(TestCase):
         self.assertEqual(breakdown["trunk_count"], 0.0)
         self.assertEqual(breakdown["trunk_link_count"], 0.0)
         self.assertEqual(breakdown["unknown_expressway_count"], 0.0)
+        self.assertEqual(breakdown["tourism_attraction_count"], 0.0)
+        self.assertEqual(breakdown["tourism_museum_count"], 0.0)
+        self.assertEqual(breakdown["tourism_gallery_count"], 0.0)
+        self.assertEqual(breakdown["tourism_viewpoint_count"], 0.0)
+        self.assertEqual(breakdown["historic_castle_count"], 0.0)
+        self.assertEqual(breakdown["historic_monument_count"], 0.0)
+        self.assertEqual(breakdown["historic_memorial_count"], 0.0)
+        self.assertEqual(breakdown["historic_ruins_count"], 0.0)
+        self.assertEqual(breakdown["historic_archaeological_site_count"], 0.0)
+        self.assertEqual(breakdown["unknown_landmark_count"], 0.0)
+        self.assertEqual(breakdown["castle_near_proximity_count"], 0.0)
+        self.assertEqual(breakdown["castle_mid_proximity_count"], 0.0)
+        self.assertEqual(breakdown["castle_far_proximity_count"], 0.0)
+        self.assertEqual(breakdown["station_proximity_near_count"], 0.0)
+        self.assertEqual(breakdown["station_proximity_mid_count"], 0.0)
         self.assertFalse(breakdown["has_surface_railway_context"])
         self.assertFalse(breakdown["has_surface_station_context"])
         self.assertEqual(breakdown["surface_station_context_bonus"], 0.0)
@@ -5406,10 +5898,42 @@ class DetermineInitialScoreForGridCellTests(TestCase):
         self.assertEqual(breakdown["station_density_bonus"], 0.0)
         self.assertFalse(breakdown["has_dense_station_cluster_context"])
         self.assertFalse(breakdown["has_major_station_cluster_context"])
+        self.assertFalse(breakdown["has_station_proximity_context"])
+        self.assertFalse(breakdown["has_station_proximity_near_context"])
+        self.assertFalse(breakdown["has_station_proximity_mid_context"])
+        self.assertEqual(breakdown["station_proximity_bonus"], 0.0)
+        self.assertFalse(breakdown["is_station_proximity_station_cell"])
         self.assertFalse(breakdown["has_motorway_context"])
         self.assertEqual(breakdown["motorway_context_bonus"], 0.0)
         self.assertFalse(breakdown["has_trunk_context"])
         self.assertEqual(breakdown["trunk_context_bonus"], 0.0)
+        self.assertFalse(breakdown["has_landmark_context"])
+        self.assertEqual(breakdown["landmark_context_bonus"], 0.0)
+        self.assertEqual(breakdown["tourism_attraction_context_bonus"], 0.0)
+        self.assertEqual(breakdown["tourism_museum_context_bonus"], 0.0)
+        self.assertEqual(breakdown["tourism_gallery_context_bonus"], 0.0)
+        self.assertEqual(breakdown["tourism_viewpoint_context_bonus"], 0.0)
+        self.assertEqual(breakdown["historic_castle_context_bonus"], 0.0)
+        self.assertEqual(breakdown["historic_monument_context_bonus"], 0.0)
+        self.assertEqual(breakdown["historic_memorial_context_bonus"], 0.0)
+        self.assertEqual(breakdown["historic_ruins_context_bonus"], 0.0)
+        self.assertEqual(
+            breakdown["historic_archaeological_site_context_bonus"],
+            0.0,
+        )
+        self.assertFalse(breakdown["has_castle_proximity_context"])
+        self.assertFalse(breakdown["has_castle_near_proximity_context"])
+        self.assertFalse(breakdown["has_castle_mid_proximity_context"])
+        self.assertFalse(breakdown["has_castle_far_proximity_context"])
+        self.assertEqual(breakdown["castle_proximity_bonus"], 0.0)
+        self.assertFalse(breakdown["is_castle_proximity_skipped_castle_cell"])
+        self.assertFalse(breakdown["has_park_waterfront_combo_context"])
+        self.assertEqual(breakdown["park_waterfront_combo_bonus"], 0.0)
+        self.assertEqual(breakdown["context_candidate_count"], 0)
+        self.assertFalse(breakdown["has_high_context_3_context"])
+        self.assertFalse(breakdown["has_high_context_4_context"])
+        self.assertFalse(breakdown["has_high_context_5_context"])
+        self.assertEqual(breakdown["high_context_bonus"], 0.0)
 
     def test_feature_summary_breakdown_adds_surface_station_context_bonus(self):
         without_station = calculate_initial_score_breakdown_from_feature_summary({})
@@ -5669,6 +6193,69 @@ class DetermineInitialScoreForGridCellTests(TestCase):
             with self.subTest(key=key):
                 self.assertEqual(with_station[key], without_station[key])
 
+    def test_feature_summary_breakdown_adds_station_proximity_context_bonus(self):
+        without_proximity = calculate_initial_score_breakdown_from_feature_summary({})
+        proximity_cases = (
+            (
+                {"station_proximity_near_count": 1},
+                "has_station_proximity_near_context",
+                STATION_PROXIMITY_NEAR_CONTEXT_BONUS,
+            ),
+            (
+                {"station_proximity_mid_count": 1},
+                "has_station_proximity_mid_context",
+                STATION_PROXIMITY_MID_CONTEXT_BONUS,
+            ),
+        )
+
+        for feature_summary, context_key, expected_bonus in proximity_cases:
+            with self.subTest(feature_summary=feature_summary):
+                with_proximity = calculate_initial_score_breakdown_from_feature_summary(
+                    feature_summary
+                )
+
+                self.assertTrue(with_proximity["has_station_proximity_context"])
+                self.assertTrue(with_proximity[context_key])
+                self.assertFalse(with_proximity["is_station_proximity_station_cell"])
+                self.assertEqual(
+                    with_proximity["station_proximity_bonus"],
+                    expected_bonus,
+                )
+                self.assertAlmostEqual(
+                    with_proximity["context_bonus"],
+                    without_proximity["context_bonus"] + expected_bonus,
+                )
+
+    def test_feature_summary_breakdown_skips_station_proximity_on_station_cell(self):
+        with_station_cell = calculate_initial_score_breakdown_from_feature_summary(
+            {
+                "railway_station_count": 1,
+                "station_proximity_near_count": 1,
+            }
+        )
+
+        self.assertTrue(with_station_cell["has_surface_station_context"])
+        self.assertTrue(with_station_cell["is_station_proximity_station_cell"])
+        self.assertFalse(with_station_cell["has_station_proximity_context"])
+        self.assertFalse(with_station_cell["has_station_proximity_near_context"])
+        self.assertEqual(with_station_cell["station_proximity_bonus"], 0.0)
+        self.assertAlmostEqual(
+            with_station_cell["context_bonus"],
+            SURFACE_STATION_CONTEXT_BONUS,
+        )
+
+    def test_feature_summary_breakdown_station_proximity_does_not_affect_other_factors(
+        self,
+    ):
+        without_proximity = calculate_initial_score_breakdown_from_feature_summary({})
+        with_proximity = calculate_initial_score_breakdown_from_feature_summary(
+            {"station_proximity_near_count": 1}
+        )
+
+        for key in ("base_score", "diversity_bonus", "penalty"):
+            with self.subTest(key=key):
+                self.assertEqual(with_proximity[key], without_proximity[key])
+
     def test_feature_summary_breakdown_ignores_unknown_station(self):
         without_station = calculate_initial_score_breakdown_from_feature_summary({})
         with_unknown_station = calculate_initial_score_breakdown_from_feature_summary(
@@ -5818,6 +6405,177 @@ class DetermineInitialScoreForGridCellTests(TestCase):
             without_expressway["clamped_score"],
         )
 
+    def test_feature_summary_breakdown_adds_landmark_context_bonus_by_type(self):
+        without_landmark = calculate_initial_score_breakdown_from_feature_summary({})
+        landmark_cases = (
+            (
+                "tourism_attraction_count",
+                "tourism_attraction_context_bonus",
+                0.35,
+            ),
+            ("tourism_museum_count", "tourism_museum_context_bonus", 0.20),
+            ("tourism_gallery_count", "tourism_gallery_context_bonus", 0.10),
+            ("tourism_viewpoint_count", "tourism_viewpoint_context_bonus", 0.40),
+            ("historic_castle_count", "historic_castle_context_bonus", 0.80),
+            (
+                "historic_monument_count",
+                "historic_monument_context_bonus",
+                0.20,
+            ),
+            (
+                "historic_memorial_count",
+                "historic_memorial_context_bonus",
+                0.15,
+            ),
+            ("historic_ruins_count", "historic_ruins_context_bonus", 0.40),
+            (
+                "historic_archaeological_site_count",
+                "historic_archaeological_site_context_bonus",
+                0.45,
+            ),
+        )
+
+        for count_key, bonus_key, expected_bonus in landmark_cases:
+            with self.subTest(count_key=count_key):
+                with_landmark = (
+                    calculate_initial_score_breakdown_from_feature_summary(
+                        {count_key: 1}
+                    )
+                )
+
+                self.assertTrue(with_landmark["has_landmark_context"])
+                self.assertEqual(with_landmark[bonus_key], expected_bonus)
+                self.assertEqual(
+                    with_landmark["landmark_context_bonus"],
+                    expected_bonus,
+                )
+                self.assertAlmostEqual(
+                    with_landmark["context_bonus"],
+                    without_landmark["context_bonus"] + expected_bonus,
+                )
+                self.assertGreater(
+                    calculate_initial_score_from_feature_summary(
+                        {"building_count": 1, count_key: 1}
+                    ),
+                    calculate_initial_score_from_feature_summary(
+                        {"building_count": 1}
+                    ),
+                )
+
+    def test_feature_summary_breakdown_caps_landmark_context_bonus(self):
+        with_landmarks = calculate_initial_score_breakdown_from_feature_summary(
+            {
+                "historic_castle_count": 1,
+                "tourism_viewpoint_count": 1,
+                "historic_archaeological_site_count": 1,
+            }
+        )
+
+        self.assertTrue(with_landmarks["has_landmark_context"])
+        self.assertEqual(with_landmarks["historic_castle_context_bonus"], 0.80)
+        self.assertEqual(with_landmarks["tourism_viewpoint_context_bonus"], 0.40)
+        self.assertEqual(
+            with_landmarks["historic_archaeological_site_context_bonus"],
+            0.45,
+        )
+        self.assertEqual(with_landmarks["landmark_context_bonus"], 1.0)
+
+    def test_feature_summary_breakdown_adds_castle_proximity_context_bonus_by_band(
+        self,
+    ):
+        without_castle = calculate_initial_score_breakdown_from_feature_summary({})
+        proximity_cases = (
+            (
+                "castle_near_proximity_count",
+                "has_castle_near_proximity_context",
+                0.65,
+            ),
+            (
+                "castle_mid_proximity_count",
+                "has_castle_mid_proximity_context",
+                0.35,
+            ),
+            (
+                "castle_far_proximity_count",
+                "has_castle_far_proximity_context",
+                0.15,
+            ),
+        )
+
+        for count_key, context_key, expected_bonus in proximity_cases:
+            with self.subTest(count_key=count_key):
+                with_proximity = (
+                    calculate_initial_score_breakdown_from_feature_summary(
+                        {count_key: 1}
+                    )
+                )
+
+                self.assertTrue(with_proximity["has_castle_proximity_context"])
+                self.assertTrue(with_proximity[context_key])
+                self.assertEqual(
+                    with_proximity["castle_proximity_bonus"],
+                    expected_bonus,
+                )
+                self.assertAlmostEqual(
+                    with_proximity["context_bonus"],
+                    without_castle["context_bonus"] + expected_bonus,
+                )
+
+    def test_feature_summary_breakdown_skips_castle_proximity_on_castle_cell(self):
+        with_castle_cell = calculate_initial_score_breakdown_from_feature_summary(
+            {
+                "historic_castle_count": 1,
+                "castle_near_proximity_count": 1,
+            }
+        )
+
+        self.assertTrue(with_castle_cell["has_landmark_context"])
+        self.assertEqual(with_castle_cell["landmark_context_bonus"], 0.80)
+        self.assertFalse(with_castle_cell["has_castle_proximity_context"])
+        self.assertEqual(with_castle_cell["castle_proximity_bonus"], 0.0)
+        self.assertTrue(
+            with_castle_cell["is_castle_proximity_skipped_castle_cell"]
+        )
+        self.assertAlmostEqual(with_castle_cell["context_bonus"], 0.80)
+
+    def test_feature_summary_breakdown_castle_proximity_does_not_affect_other_factors(
+        self,
+    ):
+        without_castle = calculate_initial_score_breakdown_from_feature_summary({})
+        with_castle_proximity = calculate_initial_score_breakdown_from_feature_summary(
+            {"castle_near_proximity_count": 1}
+        )
+
+        for key in ("base_score", "diversity_bonus", "penalty"):
+            with self.subTest(key=key):
+                self.assertEqual(with_castle_proximity[key], without_castle[key])
+
+    def test_feature_summary_breakdown_landmark_does_not_affect_other_factors(self):
+        without_landmark = calculate_initial_score_breakdown_from_feature_summary({})
+        with_landmark = calculate_initial_score_breakdown_from_feature_summary(
+            {"historic_castle_count": 1}
+        )
+
+        for key in ("base_score", "diversity_bonus", "penalty"):
+            with self.subTest(key=key):
+                self.assertEqual(with_landmark[key], without_landmark[key])
+
+    def test_feature_summary_breakdown_ignores_unknown_landmark(self):
+        without_landmark = calculate_initial_score_breakdown_from_feature_summary({})
+        with_unknown_landmark = (
+            calculate_initial_score_breakdown_from_feature_summary(
+                {"unknown_landmark_count": 1}
+            )
+        )
+
+        self.assertEqual(with_unknown_landmark["unknown_landmark_count"], 1.0)
+        self.assertFalse(with_unknown_landmark["has_landmark_context"])
+        self.assertEqual(with_unknown_landmark["landmark_context_bonus"], 0.0)
+        self.assertEqual(
+            with_unknown_landmark["clamped_score"],
+            without_landmark["clamped_score"],
+        )
+
     def test_feature_summary_breakdown_tracks_context_and_penalties(self):
         context_breakdown = calculate_initial_score_breakdown_from_feature_summary(
             {
@@ -5869,7 +6627,7 @@ class DetermineInitialScoreForGridCellTests(TestCase):
                 self.assertTrue(breakdown["has_waterfront_context"])
 
     def test_feature_summary_breakdown_adds_waterfront_context_bonus(self):
-        for reachable_context in ({"has_park": True}, {"has_river": True}):
+        for reachable_context in ({"has_river": True},):
             with self.subTest(reachable_context=reachable_context):
                 without_water = calculate_initial_score_breakdown_from_feature_summary(
                     reachable_context
@@ -5886,6 +6644,32 @@ class DetermineInitialScoreForGridCellTests(TestCase):
                     with_water["context_bonus"],
                     without_water["context_bonus"] + WATERFRONT_CONTEXT_BONUS,
                 )
+
+    def test_feature_summary_breakdown_adds_park_waterfront_combo_context_bonus(self):
+        without_water = calculate_initial_score_breakdown_from_feature_summary(
+            {"has_park": True}
+        )
+        with_park_waterfront = calculate_initial_score_breakdown_from_feature_summary(
+            {
+                "has_park": True,
+                "water_coverage_ratio": 0.2,
+            }
+        )
+
+        self.assertTrue(with_park_waterfront["has_waterfront_context"])
+        self.assertTrue(
+            with_park_waterfront["has_park_waterfront_combo_context"]
+        )
+        self.assertEqual(
+            with_park_waterfront["park_waterfront_combo_bonus"],
+            PARK_WATERFRONT_COMBO_CONTEXT_BONUS,
+        )
+        self.assertAlmostEqual(
+            with_park_waterfront["context_bonus"],
+            without_water["context_bonus"]
+            + WATERFRONT_CONTEXT_BONUS
+            + PARK_WATERFRONT_COMBO_CONTEXT_BONUS,
+        )
 
     def test_feature_summary_breakdown_uses_road_only_for_waterfront_reachability(self):
         road_only = calculate_initial_score_breakdown_from_feature_summary(
@@ -5919,6 +6703,82 @@ class DetermineInitialScoreForGridCellTests(TestCase):
 
         self.assertFalse(breakdown["has_waterfront_context"])
 
+    def test_feature_summary_breakdown_adds_high_context_bonus_by_context_count(self):
+        context_cases = (
+            (
+                {
+                    "surface_railway_count": 1,
+                    "motorway_count": 1,
+                    "trunk_count": 1,
+                },
+                3,
+                HIGH_CONTEXT_3_CONTEXT_BONUS,
+            ),
+            (
+                {
+                    "surface_railway_count": 1,
+                    "motorway_count": 1,
+                    "trunk_count": 1,
+                    "tourism_museum_count": 1,
+                },
+                4,
+                HIGH_CONTEXT_4_CONTEXT_BONUS,
+            ),
+            (
+                {
+                    "surface_railway_count": 1,
+                    "public_transport_station_count": 1,
+                    "motorway_count": 1,
+                    "trunk_count": 1,
+                    "tourism_museum_count": 1,
+                },
+                5,
+                HIGH_CONTEXT_5_CONTEXT_BONUS,
+            ),
+        )
+
+        for feature_summary, expected_count, expected_bonus in context_cases:
+            with self.subTest(expected_count=expected_count):
+                breakdown = calculate_initial_score_breakdown_from_feature_summary(
+                    feature_summary
+                )
+
+                self.assertEqual(
+                    breakdown["context_candidate_count"],
+                    expected_count,
+                )
+                self.assertEqual(breakdown["high_context_bonus"], expected_bonus)
+                self.assertEqual(
+                    breakdown["has_high_context_3_context"],
+                    expected_count >= 3,
+                )
+                self.assertEqual(
+                    breakdown["has_high_context_4_context"],
+                    expected_count >= 4,
+                )
+                self.assertEqual(
+                    breakdown["has_high_context_5_context"],
+                    expected_count >= 5,
+                )
+
+    def test_feature_summary_breakdown_high_context_bonus_does_not_affect_other_factors(
+        self,
+    ):
+        without_high_context = calculate_initial_score_breakdown_from_feature_summary(
+            {}
+        )
+        with_high_context = calculate_initial_score_breakdown_from_feature_summary(
+            {
+                "surface_railway_count": 1,
+                "motorway_count": 1,
+                "trunk_count": 1,
+            }
+        )
+
+        for key in ("base_score", "diversity_bonus", "penalty"):
+            with self.subTest(key=key):
+                self.assertEqual(with_high_context[key], without_high_context[key])
+
     def test_invalid_feature_summary_breakdown_raises_value_error(self):
         invalid_summaries = (
             None,
@@ -5941,11 +6801,26 @@ class DetermineInitialScoreForGridCellTests(TestCase):
             {"unknown_station_count": True},
             {"station_cluster_count": -1},
             {"dense_station_cluster_count": float("inf")},
+            {"station_proximity_near_count": -1},
+            {"station_proximity_mid_count": float("inf")},
             {"motorway_count": -1},
             {"motorway_link_count": float("inf")},
             {"trunk_count": True},
             {"trunk_link_count": -1},
             {"unknown_expressway_count": float("nan")},
+            {"tourism_attraction_count": -1},
+            {"tourism_museum_count": float("inf")},
+            {"tourism_gallery_count": True},
+            {"tourism_viewpoint_count": float("nan")},
+            {"historic_castle_count": -1},
+            {"historic_monument_count": float("inf")},
+            {"historic_memorial_count": True},
+            {"historic_ruins_count": float("nan")},
+            {"historic_archaeological_site_count": -1},
+            {"unknown_landmark_count": True},
+            {"castle_near_proximity_count": -1},
+            {"castle_mid_proximity_count": float("inf")},
+            {"castle_far_proximity_count": True},
         )
         for feature_summary in invalid_summaries:
             with self.subTest(feature_summary=feature_summary):
@@ -5976,11 +6851,26 @@ class DetermineInitialScoreForGridCellTests(TestCase):
             {"unknown_station_count": True},
             {"station_cluster_count": -1},
             {"dense_station_cluster_count": float("inf")},
+            {"station_proximity_near_count": -1},
+            {"station_proximity_mid_count": float("inf")},
             {"motorway_count": -1},
             {"motorway_link_count": float("inf")},
             {"trunk_count": True},
             {"trunk_link_count": -1},
             {"unknown_expressway_count": float("nan")},
+            {"tourism_attraction_count": -1},
+            {"tourism_museum_count": float("inf")},
+            {"tourism_gallery_count": True},
+            {"tourism_viewpoint_count": float("nan")},
+            {"historic_castle_count": -1},
+            {"historic_monument_count": float("inf")},
+            {"historic_memorial_count": True},
+            {"historic_ruins_count": float("nan")},
+            {"historic_archaeological_site_count": -1},
+            {"unknown_landmark_count": True},
+            {"castle_near_proximity_count": -1},
+            {"castle_mid_proximity_count": float("inf")},
+            {"castle_far_proximity_count": True},
         )
         for feature_summary in invalid_summaries:
             with self.subTest(feature_summary=feature_summary):

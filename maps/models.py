@@ -106,6 +106,7 @@ class GridCell(models.Model):
     east = models.FloatField()
     west = models.FloatField()
     initial_score = models.FloatField(default=0)
+    auto_score_breakdown = models.JSONField(blank=True, null=True)
     average_user_score = models.FloatField(default=0)
     rating_count = models.PositiveIntegerField(default=0)
     calculated_score = models.FloatField(default=0)

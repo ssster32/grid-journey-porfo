@@ -234,6 +234,7 @@ class GridCellScoreSerializer(serializers.ModelSerializer):
             "east",
             "west",
             "initial_score",
+            "auto_score_breakdown",
             "average_user_score",
             "rating_count",
             "calculated_score",
