@@ -101,6 +101,7 @@
     <section class="content-section map-preview-section" aria-labelledby="map-preview-heading">
       <h2 id="map-preview-heading">Map Preview</h2>
       <p>メモグリッドの範囲を地図上で確認します。</p>
+      <p class="map-preview-help">Shift + ドラッグで範囲内のマスをまとめて選択できます。範囲選択中は Escape でキャンセルできます。</p>
 
       <p id="map-preview-status" class="map-preview-status" aria-live="polite">
         地図を読み込んでいます。
@@ -184,5 +185,7 @@
     integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
     crossorigin=""
   ></script>
+  <script src="{% static 'maps/js/grid-detail-utils.js' %}"></script>
+  <script src="{% static 'maps/js/grid-detail-api.js' %}"></script>
   <script src="{% static 'maps/js/grid-detail.js' %}"></script>
 {% endblock %}

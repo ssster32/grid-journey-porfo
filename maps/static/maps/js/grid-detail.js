@@ -20,6 +20,28 @@
   const mapPreviewElement = document.querySelector("#map-preview");
   const mapPreviewStatusElement = document.querySelector("#map-preview-status");
   const maxVisibleGridCount = 50;
+  const utils = window.GridDetailUtils;
+  if (!utils) {
+    console.error("GridDetailUtils is not loaded.");
+    return;
+  }
+  const api = window.GridDetailApi;
+  if (!api) {
+    console.error("GridDetailApi is not loaded.");
+    return;
+  }
+  const {
+    textOrFallback,
+    formatNumber,
+    formatCoordinate,
+    formatDateTime,
+    displayIndex,
+    autoScoreLabel,
+    hasAutoScoreBreakdown,
+    formatAutoScoreValue,
+    autoScoreReasonLabels,
+    formatScoreLabel,
+  } = utils;
   const state = {
     gridsById: new Map(),
     selectedGridId: null,
@@ -30,6 +52,13 @@
     gridBoundaryLayer: null,
     scoreLabelLayer: null,
     mapGridRectanglesById: new Map(),
+    selectionDrag: {
+      isDragging: false,
+      startLatLng: null,
+      rectangle: null,
+      wasMapDraggingEnabled: true,
+      suppressNextClick: false,
+    },
   };
 
   function setMessage(text, type = "") {
@@ -91,79 +120,6 @@
     listElement.replaceChildren();
   }
 
-  function textOrFallback(value, fallback = "未設定") {
-    if (value === null || value === undefined || value === "") {
-      return fallback;
-    }
-    return String(value);
-  }
-
-  function formatNumber(value) {
-    if (value === null || value === undefined || value === "") {
-      return "未設定";
-    }
-
-    const numberValue = Number(value);
-    if (!Number.isFinite(numberValue)) {
-      return String(value);
-    }
-
-    return Number.isInteger(numberValue)
-      ? String(numberValue)
-      : numberValue.toFixed(1);
-  }
-
-  function formatCoordinate(value) {
-    if (value === null || value === undefined || value === "") {
-      return "未設定";
-    }
-
-    const numberValue = Number(value);
-    if (!Number.isFinite(numberValue)) {
-      return String(value);
-    }
-
-    return numberValue.toFixed(6);
-  }
-
-  function formatDateTime(value) {
-    if (!value) {
-      return "未更新";
-    }
-
-    const date = new Date(value);
-    if (Number.isNaN(date.getTime())) {
-      return String(value);
-    }
-
-    return date.toLocaleString("ja-JP", {
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-  }
-
-  function displayIndex(value) {
-    const numberValue = Number(value);
-    if (!Number.isFinite(numberValue)) {
-      return "未設定";
-    }
-    return String(numberValue + 1);
-  }
-
-  function getCookie(name) {
-    const cookies = document.cookie ? document.cookie.split(";") : [];
-    for (const cookie of cookies) {
-      const trimmedCookie = cookie.trim();
-      if (trimmedCookie.startsWith(`${name}=`)) {
-        return decodeURIComponent(trimmedCookie.slice(name.length + 1));
-      }
-    }
-    return "";
-  }
-
   function createGridItem(grid) {
     const item = document.createElement("li");
     const gridId = Number(grid.id);
@@ -220,6 +176,102 @@
     return item;
   }
 
+  function createAutoScoreRow(key, value) {
+    const row = document.createElement("div");
+    row.className = "auto-score-breakdown-row";
+
+    const term = document.createElement("dt");
+    term.textContent = autoScoreLabel(key);
+
+    const description = document.createElement("dd");
+    description.textContent = formatAutoScoreValue(value);
+
+    row.append(term, description);
+    return row;
+  }
+
+  function createAutoScoreBreakdownSection(grid) {
+    const section = document.createElement("section");
+    section.className = "auto-score-breakdown-section";
+
+    const heading = document.createElement("h4");
+    heading.textContent = "自動採点理由";
+    section.appendChild(heading);
+
+    const breakdown = grid ? grid.auto_score_breakdown : null;
+    if (!hasAutoScoreBreakdown(breakdown)) {
+      const emptyMessage = document.createElement("p");
+      emptyMessage.className = "auto-score-breakdown-empty";
+      emptyMessage.textContent = "このマスには自動採点理由の情報がありません。";
+      section.appendChild(emptyMessage);
+      return section;
+    }
+
+    const scoreKeys = [
+      "clamped_score",
+      "base_score",
+      "diversity_bonus",
+      "context_bonus",
+      "penalty",
+      "raw_score",
+    ];
+    const scoreList = document.createElement("dl");
+    scoreList.className = "auto-score-breakdown-list";
+    scoreKeys.forEach((key) => {
+      if (Object.prototype.hasOwnProperty.call(breakdown, key)) {
+        scoreList.appendChild(createAutoScoreRow(key, breakdown[key]));
+      }
+    });
+    if (scoreList.children.length > 0) {
+      section.appendChild(scoreList);
+    }
+
+    const reasonLabels = autoScoreReasonLabels(breakdown);
+    const reasonBlock = document.createElement("div");
+    reasonBlock.className = "auto-score-reason-block";
+    const reasonHeading = document.createElement("p");
+    reasonHeading.textContent = "主な理由";
+    reasonBlock.appendChild(reasonHeading);
+
+    if (reasonLabels.length > 0) {
+      const reasonList = document.createElement("ul");
+      reasonList.className = "auto-score-reasons";
+      reasonLabels.forEach((label) => {
+        const item = document.createElement("li");
+        item.textContent = label;
+        reasonList.appendChild(item);
+      });
+      reasonBlock.appendChild(reasonList);
+    } else {
+      const emptyReason = document.createElement("p");
+      emptyReason.className = "auto-score-breakdown-empty";
+      emptyReason.textContent = "主な理由は記録されていません。";
+      reasonBlock.appendChild(emptyReason);
+    }
+    section.appendChild(reasonBlock);
+
+    const details = document.createElement("details");
+    details.className = "auto-score-breakdown-details";
+    const summary = document.createElement("summary");
+    summary.textContent = "詳細項目";
+    const detailList = document.createElement("dl");
+    detailList.className = "auto-score-breakdown-list";
+
+    Object.entries(breakdown).forEach(([key, value]) => {
+      if (scoreKeys.includes(key)) {
+        return;
+      }
+      detailList.appendChild(createAutoScoreRow(key, value));
+    });
+
+    if (detailList.children.length > 0) {
+      details.append(summary, detailList);
+      section.appendChild(details);
+    }
+
+    return section;
+  }
+
   function renderSelectedGridDetail(grid) {
     if (!selectedGridDetailElement) {
       return;
@@ -259,7 +311,12 @@
       createDetailItem("スコア更新日時", formatDateTime(grid.score_updated_at))
     );
 
-    selectedGridDetailElement.append(heading, position, detailList);
+    selectedGridDetailElement.append(
+      heading,
+      position,
+      detailList,
+      createAutoScoreBreakdownSection(grid)
+    );
   }
 
   function selectedGrids() {
@@ -292,19 +349,49 @@
     const list = document.createElement("ul");
     list.className = "selected-grid-cell-summary-list";
     grids.forEach((grid) => {
-      list.appendChild(
-        createDetailItem(
-          `マス #${textOrFallback(grid.id)}`,
-          [
-            `行 ${displayIndex(grid.row_index)}`,
-            `列 ${displayIndex(grid.col_index)}`,
-            `表示スコア ${formatNumber(grid.calculated_score)}`,
-          ].join(" / ")
-        )
-      );
+      const item = document.createElement("li");
+      item.className = "selected-grid-cell-summary-item";
+
+      const summary = document.createElement("span");
+      summary.textContent = `マス #${textOrFallback(grid.id)}: ${[
+        `行 ${displayIndex(grid.row_index)}`,
+        `列 ${displayIndex(grid.col_index)}`,
+        `表示スコア ${formatNumber(grid.calculated_score)}`,
+      ].join(" / ")}`;
+
+      const removeButton = document.createElement("button");
+      removeButton.type = "button";
+      removeButton.className = "secondary-button selected-grid-cell-remove-button";
+      removeButton.dataset.removeSelectedGridId = textOrFallback(grid.id, "");
+      removeButton.textContent = "解除";
+
+      item.append(summary, removeButton);
+      list.appendChild(item);
     });
 
     selectedGridDetailElement.appendChild(list);
+  }
+
+  function removeGridSelection(gridId) {
+    const numericGridId = Number(gridId);
+    if (!state.selectedGridIds.has(numericGridId)) {
+      return;
+    }
+
+    state.selectedGridIds.delete(numericGridId);
+
+    if (state.selectedGridIds.size === 0) {
+      state.selectedGridId = null;
+    } else if (
+      !state.selectedGridId ||
+      !state.selectedGridIds.has(Number(state.selectedGridId))
+    ) {
+      state.selectedGridId = Array.from(state.selectedGridIds)[
+        state.selectedGridIds.size - 1
+      ];
+    }
+
+    renderSelectionState();
   }
 
   function setRatingFormStatus(text, type = "") {
@@ -699,24 +786,6 @@
     );
   }
 
-  async function readResponse(response) {
-    const contentType = response.headers.get("content-type") || "";
-    if (!contentType.includes("application/json")) {
-      return null;
-    }
-    return response.json();
-  }
-
-  function errorText(response, data) {
-    if (!data) {
-      return `HTTP ${response.status}.`;
-    }
-    if (data.detail) {
-      return `HTTP ${response.status}. ${data.detail}`;
-    }
-    return `HTTP ${response.status}. ${JSON.stringify(data)}`;
-  }
-
   function areaId() {
     return rootElement ? rootElement.dataset.areaId : "";
   }
@@ -806,17 +875,184 @@
     ];
   }
 
-  function formatScoreLabel(value) {
-    if (value === null || value === undefined || value === "") {
-      return "-";
+  function selectionDragStyle() {
+    return {
+      color: "#2563eb",
+      weight: 2,
+      dashArray: "4 4",
+      fill: true,
+      fillColor: "#2563eb",
+      fillOpacity: 0.08,
+      interactive: false,
+    };
+  }
+
+  function boundsFromLatLngs(startLatLng, endLatLng) {
+    if (!leafletAvailable() || !startLatLng || !endLatLng) {
+      return null;
+    }
+    return window.L.latLngBounds(startLatLng, endLatLng);
+  }
+
+  function gridLeafletBounds(grid) {
+    if (!leafletAvailable()) {
+      return null;
     }
 
-    const score = Number(value);
-    if (!Number.isFinite(score)) {
-      return "-";
+    const bounds = gridCellBounds(grid);
+    return bounds ? window.L.latLngBounds(bounds) : null;
+  }
+
+  function cleanupDragSelection() {
+    if (state.selectionDrag.rectangle) {
+      state.selectionDrag.rectangle.remove();
     }
 
-    return Number.isInteger(score) ? String(score) : score.toFixed(1);
+    if (
+      state.leafletMap &&
+      state.leafletMap.dragging &&
+      state.selectionDrag.wasMapDraggingEnabled
+    ) {
+      state.leafletMap.dragging.enable();
+    }
+
+    state.selectionDrag.isDragging = false;
+    state.selectionDrag.startLatLng = null;
+    state.selectionDrag.rectangle = null;
+    state.selectionDrag.wasMapDraggingEnabled = true;
+  }
+
+  function startDragSelection(latlng) {
+    if (!state.leafletMap || !leafletAvailable() || !latlng) {
+      return;
+    }
+
+    cleanupDragSelection();
+    state.selectionDrag.isDragging = true;
+    state.selectionDrag.startLatLng = latlng;
+    state.selectionDrag.wasMapDraggingEnabled =
+      Boolean(state.leafletMap.dragging && state.leafletMap.dragging.enabled());
+
+    if (state.leafletMap.dragging) {
+      state.leafletMap.dragging.disable();
+    }
+
+    const bounds = boundsFromLatLngs(latlng, latlng);
+    state.selectionDrag.rectangle = window.L.rectangle(bounds, selectionDragStyle())
+      .addTo(state.leafletMap);
+  }
+
+  function updateDragSelection(latlng) {
+    if (
+      !state.selectionDrag.isDragging ||
+      !state.selectionDrag.rectangle ||
+      !state.selectionDrag.startLatLng
+    ) {
+      return;
+    }
+
+    const bounds = boundsFromLatLngs(state.selectionDrag.startLatLng, latlng);
+    if (!bounds) {
+      return;
+    }
+    state.selectionDrag.rectangle.setBounds(bounds);
+  }
+
+  function gridIdsIntersectingBounds(selectionBounds) {
+    if (!selectionBounds) {
+      return [];
+    }
+
+    const gridIds = [];
+    state.gridsById.forEach((grid, gridId) => {
+      const gridBounds = gridLeafletBounds(grid);
+      if (gridBounds && selectionBounds.intersects(gridBounds)) {
+        gridIds.push(gridId);
+      }
+    });
+
+    return gridIds;
+  }
+
+  function finishDragSelection() {
+    if (!state.selectionDrag.isDragging || !state.selectionDrag.rectangle) {
+      cleanupDragSelection();
+      return;
+    }
+
+    const selectionBounds = state.selectionDrag.rectangle.getBounds();
+    const selectedGridIds = gridIdsIntersectingBounds(selectionBounds);
+
+    cleanupDragSelection();
+
+    if (selectedGridIds.length === 0) {
+      return;
+    }
+
+    selectedGridIds.forEach((gridId) => {
+      state.selectedGridIds.add(gridId);
+    });
+    state.selectedGridId = selectedGridIds[selectedGridIds.length - 1];
+    state.selectionDrag.suppressNextClick = true;
+    window.setTimeout(() => {
+      state.selectionDrag.suppressNextClick = false;
+    }, 200);
+    renderSelectionState();
+  }
+
+  function cancelDragSelection() {
+    if (!state.selectionDrag.isDragging) {
+      return;
+    }
+
+    cleanupDragSelection();
+    state.selectionDrag.suppressNextClick = true;
+    window.setTimeout(() => {
+      state.selectionDrag.suppressNextClick = false;
+    }, 200);
+  }
+
+  function registerDragSelectionHandlers() {
+    if (!state.leafletMap || state.leafletMap._gridDragSelectionRegistered) {
+      return;
+    }
+
+    state.leafletMap._gridDragSelectionRegistered = true;
+    state.leafletMap.on("mousedown", (event) => {
+      if (!event.originalEvent || !event.originalEvent.shiftKey) {
+        return;
+      }
+      if (event.originalEvent.preventDefault) {
+        event.originalEvent.preventDefault();
+      }
+      if (event.originalEvent.stopPropagation) {
+        event.originalEvent.stopPropagation();
+      }
+
+      startDragSelection(event.latlng);
+    });
+
+    state.leafletMap.on("mousemove", (event) => {
+      updateDragSelection(event.latlng);
+    });
+
+    state.leafletMap.on("mouseup", () => {
+      finishDragSelection();
+    });
+
+    document.addEventListener("mouseup", () => {
+      if (state.selectionDrag.isDragging) {
+        finishDragSelection();
+      }
+    });
+
+    document.addEventListener("keydown", (event) => {
+      if (event.key !== "Escape") {
+        return;
+      }
+
+      cancelDragSelection();
+    });
   }
 
   function initMapPreview() {
@@ -848,6 +1084,8 @@
         attribution:
           '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
       }).addTo(state.leafletMap);
+
+      registerDragSelectionHandlers();
     }
 
     if (state.mapAreaRectangle) {
@@ -980,6 +1218,12 @@
 
       rectangle.on("click", (event) => {
         const originalEvent = event.originalEvent;
+        if (
+          state.selectionDrag.suppressNextClick ||
+          (originalEvent && originalEvent.shiftKey)
+        ) {
+          return;
+        }
         if (originalEvent && (originalEvent.ctrlKey || originalEvent.metaKey)) {
           toggleGridSelection(gridId);
           return;
@@ -1053,15 +1297,7 @@
     setShareListMessage("共有相手一覧を読み込んでいます。");
 
     try {
-      const response = await fetch(`/api/maps/areas/${currentAreaId}/shares/`, {
-        credentials: "same-origin",
-      });
-      const data = await readResponse(response);
-
-      if (!response.ok) {
-        throw new Error(errorText(response, data));
-      }
-
+      const data = await api.fetchShares(currentAreaId);
       renderShares(data && data.shares ? data.shares : []);
       if (successMessage) {
         setShareMessage(successMessage, "success");
@@ -1094,21 +1330,7 @@
     setShareMessage("共有相手を追加しています。");
 
     try {
-      const response = await fetch(`/api/maps/areas/${currentAreaId}/shares/`, {
-        method: "POST",
-        credentials: "same-origin",
-        headers: {
-          "Content-Type": "application/json",
-          "X-CSRFToken": getCookie("csrftoken"),
-        },
-        body: JSON.stringify({ username }),
-      });
-      const data = await readResponse(response);
-
-      if (!response.ok) {
-        throw new Error(errorText(response, data));
-      }
-
+      await api.addShare(currentAreaId, { username });
       if (shareUsernameInput) {
         shareUsernameInput.value = "";
       }
@@ -1141,22 +1363,7 @@
     setShareMessage("共有を解除しています。");
 
     try {
-      const response = await fetch(
-        `/api/maps/areas/${currentAreaId}/shares/${shareId}/`,
-        {
-          method: "DELETE",
-          credentials: "same-origin",
-          headers: {
-            "X-CSRFToken": getCookie("csrftoken"),
-          },
-        }
-      );
-      const data = await readResponse(response);
-
-      if (!response.ok) {
-        throw new Error(errorText(response, data));
-      }
-
+      await api.deleteShare(currentAreaId, shareId);
       await loadShares("共有を解除しました。");
     } catch (error) {
       deleteButton.disabled = false;
@@ -1187,19 +1394,7 @@
     setDeleteStatus("メモグリッドを削除しています。");
 
     try {
-      const response = await fetch(`/api/maps/areas/${areaId}/`, {
-        method: "DELETE",
-        credentials: "same-origin",
-        headers: {
-          "X-CSRFToken": getCookie("csrftoken"),
-        },
-      });
-      const data = await readResponse(response);
-
-      if (!response.ok) {
-        throw new Error(errorText(response, data));
-      }
-
+      await api.deleteArea(areaId);
       setDeleteStatus("メモグリッドを削除しました。一覧画面へ移動します。", "success");
       window.location.href = "/maps/";
     } catch (error) {
@@ -1220,15 +1415,7 @@
     clearList();
 
     try {
-      const response = await fetch(`/api/maps/areas/${areaId}/grids/`, {
-        credentials: "same-origin",
-      });
-      const data = await readResponse(response);
-
-      if (!response.ok) {
-        throw new Error(errorText(response, data));
-      }
-
+      const data = await api.fetchGridCells(areaId);
       renderGrids(data && data.grids ? data.grids : [], options);
     } catch (error) {
       setCount("");
@@ -1304,21 +1491,7 @@
     setBulkRatingFormStatus("一括採点を送信しています。");
 
     try {
-      const response = await fetch("/api/maps/grids/bulk-ratings/", {
-        method: "POST",
-        credentials: "same-origin",
-        headers: {
-          "Content-Type": "application/json",
-          "X-CSRFToken": getCookie("csrftoken"),
-        },
-        body: JSON.stringify(payload),
-      });
-      const data = await readResponse(response);
-
-      if (!response.ok) {
-        throw new Error(errorText(response, data));
-      }
-
+      await api.submitBulkRating(payload);
       await loadGridCells({
         selectedGridId: submittedPrimaryGridId,
         selectedGridIds: submittedGridIds,
@@ -1351,21 +1524,7 @@
     setRatingFormStatus("採点を送信しています。");
 
     try {
-      const response = await fetch(`/api/maps/grids/${gridId}/ratings/`, {
-        method: "POST",
-        credentials: "same-origin",
-        headers: {
-          "Content-Type": "application/json",
-          "X-CSRFToken": getCookie("csrftoken"),
-        },
-        body: JSON.stringify(payload),
-      });
-      const data = await readResponse(response);
-
-      if (!response.ok) {
-        throw new Error(errorText(response, data));
-      }
-
+      await api.submitRating(gridId, payload);
       await loadGridCells({
         selectedGridId: gridId,
         selectedGridIds: new Set(state.selectedGridIds),
@@ -1395,6 +1554,17 @@
     if (clearSelectedGridsButton) {
       clearSelectedGridsButton.addEventListener("click", () => {
         clearSelectedGrids();
+      });
+    }
+
+    if (selectedGridDetailElement) {
+      selectedGridDetailElement.addEventListener("click", (event) => {
+        const removeButton = event.target.closest("[data-remove-selected-grid-id]");
+        if (!removeButton) {
+          return;
+        }
+
+        removeGridSelection(removeButton.dataset.removeSelectedGridId);
       });
     }
 
