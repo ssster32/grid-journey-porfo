@@ -1,17 +1,28 @@
 {% extends "base.html" %}
+{% load static %}
 
 {% block title %}メモグリッド一覧{% endblock %}
 
 {% block content %}
-  <h1>メモグリッド</h1>
-  <p>作成したメモグリッドと共有されたメモグリッドをここに表示します。</p>
+  <section aria-labelledby="memo-grid-heading">
+    <div>
+      <h1 id="memo-grid-heading">メモグリッド</h1>
+      <p>作成したメモグリッドと共有されたメモグリッドを表示します。</p>
+    </div>
 
-  <p>
-    <a href="#">新しいメモグリッドを作成する</a>
-  </p>
-
-  <section aria-labelledby="memo-grid-list-heading">
-    <h2 id="memo-grid-list-heading">一覧</h2>
-    <p>まだ一覧取得は実装していません。</p>
+    <div>
+      <span aria-disabled="true">新規作成は未実装です。</span>
+    </div>
   </section>
+
+  <div id="map-area-list-message" aria-live="polite">
+    メモグリッド一覧を読み込んでいます。
+  </div>
+
+  <section id="map-area-list" aria-live="polite" aria-label="メモグリッド一覧">
+  </section>
+{% endblock %}
+
+{% block extra_js %}
+  <script src="{% static 'maps/js/grid-list.js' %}"></script>
 {% endblock %}

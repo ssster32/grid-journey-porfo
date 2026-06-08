@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}メモグリッド詳細{% endblock %}
+
+{% block content %}
+  <div id="grid-detail-root" data-area-id="{{ area.id }}">
+    <p>
+      <a href="{% url 'map-area-page-list' %}">メモグリッド一覧へ戻る</a>
+    </p>
+
+    <h1>メモグリッド詳細</h1>
+
+    <section aria-labelledby="memo-grid-summary-heading">
+      <h2 id="memo-grid-summary-heading">{{ area.name }}</h2>
+      <p>{{ area.description|default:"説明はありません。" }}</p>
+
+      <dl>
+        <dt>種別</dt>
+        <dd>
+          {% if is_owner %}
+            自分の{{ display_type }}
+          {% else %}
+            {{ display_type }}
+          {% endif %}
+        </dd>
+
+        <dt>作成者</dt>
+        <dd>{{ created_by_label }}</dd>
+
+        <dt>1マスの大きさ</dt>
+        <dd>{{ area.grid_size_meters }}m</dd>
+
+        <dt>初期スコア設定</dt>
+        <dd>{{ area.initial_score_mode }}</dd>
+
+        <dt>地域特徴レベル</dt>
+        <dd>{{ area.region_feature_level }}</dd>
+
+        <dt>作成日時</dt>
+        <dd>{{ area.created_at }}</dd>
+      </dl>
+    </section>
+
+    <section aria-labelledby="grid-cell-list-heading">
+      <h2 id="grid-cell-list-heading">マス一覧</h2>
+
+      <div id="grid-cell-list-message" aria-live="polite">
+        マス一覧を読み込んでいます。
+      </div>
+
+      <p id="grid-cell-count"></p>
+
+      <div id="grid-cell-list" aria-live="polite"></div>
+    </section>
+
+    <section aria-labelledby="selected-grid-cell-heading">
+      <h2 id="selected-grid-cell-heading">選択中のマス</h2>
+      <div id="selected-grid-cell-detail" aria-live="polite">
+        マスを選択してください。
+      </div>
+    </section>
+
+    <section aria-labelledby="grid-rating-form-heading">
+      <h2 id="grid-rating-form-heading">このマスを採点</h2>
+      <div id="grid-rating-form-container" aria-live="polite">
+        マスを選択すると、採点フォームを表示します。
+      </div>
+    </section>
+
+    <section aria-labelledby="memo-grid-map-heading">
+      <h2 id="memo-grid-map-heading">地図・マス表示</h2>
+      <p>地図表示とマスの採点は次回以降に実装します。</p>
+    </section>
+  </div>
+{% endblock %}
+
+{% block extra_js %}
+  <script src="{% static 'maps/js/grid-detail.js' %}"></script>
+{% endblock %}

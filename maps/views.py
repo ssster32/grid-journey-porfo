@@ -1,5 +1,6 @@
 import logging
 
+from django.contrib.auth.mixins import LoginRequiredMixin
 from django.contrib.staticfiles import finders
 from django.db import transaction
 from django.db.models import Q
@@ -920,8 +921,34 @@ class MapDemoView(APIView):
             return HttpResponse(demo_file.read(), content_type="text/html")
 
 
-class MapAreaPageListView(TemplateView):
+class MapAreaPageListView(LoginRequiredMixin, TemplateView):
+    login_url = "login"
     template_name = "maps/grid_list.html"
+
+
+class MapAreaPageDetailView(LoginRequiredMixin, TemplateView):
+    login_url = "login"
+    template_name = "maps/grid_detail.html"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        area = get_viewable_map_area_or_404(
+            self.request.user,
+            self.kwargs["area_id"],
+        )
+        is_owner = area.created_by_id == self.request.user.id
+        if is_owner:
+            created_by_label = "自分"
+        elif area.created_by:
+            created_by_label = area.created_by.username
+        else:
+            created_by_label = "不明"
+
+        context["area"] = area
+        context["is_owner"] = is_owner
+        context["display_type"] = "メモグリッド" if is_owner else "共有メモグリッド"
+        context["created_by_label"] = created_by_label
+        return context
 
 
 class MapAreaListCreateView(APIView):

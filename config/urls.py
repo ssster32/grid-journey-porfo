@@ -16,7 +16,7 @@ Including another URLconf
 """
 
 from django.contrib import admin
-from django.contrib.auth.views import LoginView
+from django.contrib.auth.views import LoginView, LogoutView
 from django.urls import include, path
 from rest_framework.authtoken.views import obtain_auth_token
 
@@ -29,6 +29,11 @@ urlpatterns = [
             next_page="/maps/",
         ),
         name="login",
+    ),
+    path(
+        "logout/",
+        LogoutView.as_view(next_page="/login/"),
+        name="logout",
     ),
     path("maps/", include("maps.page_urls")),
     path("api/auth/token/", obtain_auth_token, name="api-token-auth"),
