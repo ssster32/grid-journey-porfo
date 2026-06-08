@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}メモグリッド作成{% endblock %}
+
+{% block content %}
+  <div class="detail-shell">
+    <p>
+      <a class="back-link" href="{% url 'map-area-page-list' %}">メモグリッド一覧へ戻る</a>
+    </p>
+
+    <section class="page-heading" aria-labelledby="memo-grid-create-heading">
+      <div>
+        <h1 id="memo-grid-create-heading">メモグリッド作成</h1>
+        <p>中心座標とマス数を指定して、新しいメモグリッドを作るための準備画面です。</p>
+      </div>
+    </section>
+
+    <section class="content-section" aria-labelledby="memo-grid-create-form-heading">
+      <h2 id="memo-grid-create-form-heading">作成フォーム</h2>
+      <p>入力内容からメモグリッドを作成し、作成後は詳細画面へ移動します。</p>
+
+      <form id="map-area-create-form" class="create-form" aria-describedby="memo-grid-create-status" novalidate>
+        {% csrf_token %}
+        <div class="form-field">
+          <label for="area-name">名前</label>
+          <input id="area-name" name="name" type="text" maxlength="100" autocomplete="off" placeholder="例: 東京駅周辺メモグリッド">
+        </div>
+
+        <div class="form-field">
+          <label for="area-description">説明</label>
+          <textarea id="area-description" name="description" rows="3" placeholder="このメモグリッドの目的やメモを入力します。"></textarea>
+        </div>
+
+        <div class="form-grid">
+          <div class="form-field">
+            <label for="area-center-lat">中心緯度</label>
+            <input id="area-center-lat" name="center_lat" type="number" step="0.000001" placeholder="例: 35.681236">
+          </div>
+
+          <div class="form-field">
+            <label for="area-center-lng">中心経度</label>
+            <input id="area-center-lng" name="center_lng" type="number" step="0.000001" placeholder="例: 139.767125">
+          </div>
+        </div>
+
+        <div class="form-grid">
+          <div class="form-field">
+            <label for="area-rows">縦方向のマス数</label>
+            <input id="area-rows" name="rows" type="number" min="1" step="1" placeholder="例: 6">
+          </div>
+
+          <div class="form-field">
+            <label for="area-cols">横方向のマス数</label>
+            <input id="area-cols" name="cols" type="number" min="1" step="1" placeholder="例: 8">
+          </div>
+
+          <div class="form-field">
+            <label for="area-grid-size-meters">1マスの大きさ（m）</label>
+            <input id="area-grid-size-meters" name="grid_size_meters" type="number" min="1" step="1" placeholder="例: 500">
+          </div>
+        </div>
+
+        <div class="form-grid">
+          <div class="form-field">
+            <label for="area-region-feature-level">初期スコア設定</label>
+            <select id="area-region-feature-level" name="region_feature_level">
+              <option value="auto">自動設定</option>
+              <option value="0">0: 初期値</option>
+              <option value="1">1: ありふれた地域</option>
+              <option value="2">2: 普通の地域</option>
+              <option value="3">3: 特徴的な地域</option>
+            </select>
+            <input id="area-initial-score-mode" type="hidden" name="initial_score_mode" value="manual">
+          </div>
+
+          <div class="form-field">
+            <label for="area-source">取得元・メモ</label>
+            <input id="area-source" name="source" type="text" maxlength="100" placeholder="例: manual">
+          </div>
+        </div>
+
+        <p id="memo-grid-create-status" class="rating-form-status" aria-live="polite">
+          入力後に作成できます。
+        </p>
+
+        <button id="map-area-create-submit" type="submit">メモグリッドを作成</button>
+      </form>
+    </section>
+  </div>
+{% endblock %}
+
+{% block extra_js %}
+  <script src="{% static 'maps/js/grid-create.js' %}"></script>
+{% endblock %}

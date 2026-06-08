@@ -926,6 +926,11 @@ class MapAreaPageListView(LoginRequiredMixin, TemplateView):
     template_name = "maps/grid_list.html"
 
 
+class MapAreaPageCreateView(LoginRequiredMixin, TemplateView):
+    login_url = "login"
+    template_name = "maps/grid_create.html"
+
+
 class MapAreaPageDetailView(LoginRequiredMixin, TemplateView):
     login_url = "login"
     template_name = "maps/grid_detail.html"

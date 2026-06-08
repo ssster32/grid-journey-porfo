@@ -4,22 +4,22 @@
 {% block title %}メモグリッド一覧{% endblock %}
 
 {% block content %}
-  <section aria-labelledby="memo-grid-heading">
+  <section class="page-heading" aria-labelledby="memo-grid-heading">
     <div>
       <h1 id="memo-grid-heading">メモグリッド</h1>
       <p>作成したメモグリッドと共有されたメモグリッドを表示します。</p>
     </div>
 
-    <div>
-      <span aria-disabled="true">新規作成は未実装です。</span>
+    <div class="page-actions">
+      <a class="detail-link" href="{% url 'map-area-page-create' %}">新しいメモグリッドを作成</a>
     </div>
   </section>
 
-  <div id="map-area-list-message" aria-live="polite">
+  <div id="map-area-list-message" class="message" aria-live="polite">
     メモグリッド一覧を読み込んでいます。
   </div>
 
-  <section id="map-area-list" aria-live="polite" aria-label="メモグリッド一覧">
+  <section id="map-area-list" class="map-area-list" aria-live="polite" aria-label="メモグリッド一覧">
   </section>
 {% endblock %}
 

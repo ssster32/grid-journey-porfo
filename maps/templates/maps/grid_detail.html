@@ -3,19 +3,36 @@
 
 {% block title %}メモグリッド詳細{% endblock %}
 
+{% block extra_css %}
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    integrity="sha256-p4NxAoJBhIINfQPDrl5gokLA7eNdq+8n2jQb8Y5sk="
+    crossorigin=""
+  >
+{% endblock %}
+
 {% block content %}
-  <div id="grid-detail-root" data-area-id="{{ area.id }}">
+  <div
+    id="grid-detail-root"
+    class="detail-shell"
+    data-area-id="{{ area.id }}"
+    data-area-north="{{ area.north }}"
+    data-area-south="{{ area.south }}"
+    data-area-east="{{ area.east }}"
+    data-area-west="{{ area.west }}"
+  >
     <p>
-      <a href="{% url 'map-area-page-list' %}">メモグリッド一覧へ戻る</a>
+      <a class="back-link" href="{% url 'map-area-page-list' %}">メモグリッド一覧へ戻る</a>
     </p>
 
     <h1>メモグリッド詳細</h1>
 
-    <section aria-labelledby="memo-grid-summary-heading">
+    <section class="content-section" aria-labelledby="memo-grid-summary-heading">
       <h2 id="memo-grid-summary-heading">{{ area.name }}</h2>
       <p>{{ area.description|default:"説明はありません。" }}</p>
 
-      <dl>
+      <dl class="definition-list">
         <dt>種別</dt>
         <dd>
           {% if is_owner %}
@@ -40,41 +57,132 @@
         <dt>作成日時</dt>
         <dd>{{ area.created_at }}</dd>
       </dl>
+
+      {% if is_owner %}
+        <div class="section-actions">
+          <button
+            type="button"
+            id="delete-current-area"
+            class="danger-button"
+            data-area-id="{{ area.id }}"
+            data-area-name="{{ area.name }}"
+          >
+            このメモグリッドを削除
+          </button>
+        </div>
+
+        <p id="area-delete-status" class="rating-form-status" aria-live="polite"></p>
+      {% endif %}
     </section>
 
-    <section aria-labelledby="grid-cell-list-heading">
+    {% if is_owner %}
+      <section class="content-section share-management-section" aria-labelledby="share-management-heading">
+        <h2 id="share-management-heading">共有相手管理</h2>
+        <p>このメモグリッドを共有する相手を管理できます。</p>
+
+        <div id="share-management-message" class="message" aria-live="polite">
+          共有相手一覧を読み込んでいます。
+        </div>
+
+        <form id="share-add-form" class="share-add-form">
+          <label class="form-field" for="share-username">
+            共有相手 username
+            <input id="share-username" name="username" type="text" autocomplete="off" placeholder="例: otheruser">
+          </label>
+          <button id="share-add-submit" type="submit">共有相手を追加</button>
+        </form>
+
+        <div id="share-list" class="share-list" aria-live="polite">
+          共有相手一覧を読み込んでいます。
+        </div>
+      </section>
+    {% endif %}
+
+    <section class="content-section map-preview-section" aria-labelledby="map-preview-heading">
+      <h2 id="map-preview-heading">Map Preview</h2>
+      <p>メモグリッドの範囲を地図上で確認します。</p>
+
+      <p id="map-preview-status" class="map-preview-status" aria-live="polite">
+        地図を読み込んでいます。
+      </p>
+
+      <div
+        id="map-preview"
+        class="map-preview"
+        aria-label="メモグリッド範囲の地図表示"
+      ></div>
+
+      <div class="map-score-legend" aria-label="スコア色分け凡例">
+        <span class="map-score-legend-item">
+          <span class="map-score-legend-color map-score-legend-low"></span>
+          0〜2.99
+        </span>
+        <span class="map-score-legend-item">
+          <span class="map-score-legend-color map-score-legend-middle"></span>
+          3〜5.99
+        </span>
+        <span class="map-score-legend-item">
+          <span class="map-score-legend-color map-score-legend-high"></span>
+          6〜7.99
+        </span>
+        <span class="map-score-legend-item">
+          <span class="map-score-legend-color map-score-legend-very-high"></span>
+          8以上
+        </span>
+        <span class="map-score-legend-item">
+          <span class="map-score-legend-color map-score-legend-unknown"></span>
+          未分類
+        </span>
+      </div>
+    </section>
+
+    <section class="content-section" aria-labelledby="grid-cell-list-heading">
       <h2 id="grid-cell-list-heading">マス一覧</h2>
 
-      <div id="grid-cell-list-message" aria-live="polite">
+      <div id="grid-cell-list-message" class="message" aria-live="polite">
         マス一覧を読み込んでいます。
       </div>
 
-      <p id="grid-cell-count"></p>
+      <p id="grid-cell-count" class="grid-cell-count"></p>
 
-      <div id="grid-cell-list" aria-live="polite"></div>
+      <div id="grid-cell-list" class="grid-cell-list" aria-live="polite"></div>
     </section>
 
-    <section aria-labelledby="selected-grid-cell-heading">
+    <section class="content-section selected-grid-cell-section" aria-labelledby="selected-grid-cell-heading">
       <h2 id="selected-grid-cell-heading">選択中のマス</h2>
-      <div id="selected-grid-cell-detail" aria-live="polite">
+      <div class="selected-grid-cell-toolbar">
+        <p id="selected-grid-cell-count" class="selected-grid-cell-count">選択中: 0件</p>
+        <button type="button" id="clear-selected-grids" class="secondary-button" hidden>
+          選択を解除
+        </button>
+      </div>
+      <div id="selected-grid-cell-detail" class="selected-grid-cell-detail" aria-live="polite">
         マスを選択してください。
       </div>
     </section>
 
-    <section aria-labelledby="grid-rating-form-heading">
+    <section class="content-section grid-rating-form-section" aria-labelledby="grid-rating-form-heading">
       <h2 id="grid-rating-form-heading">このマスを採点</h2>
-      <div id="grid-rating-form-container" aria-live="polite">
+      <div id="grid-rating-form-container" class="grid-rating-form-container" aria-live="polite">
         マスを選択すると、採点フォームを表示します。
       </div>
     </section>
 
-    <section aria-labelledby="memo-grid-map-heading">
-      <h2 id="memo-grid-map-heading">地図・マス表示</h2>
-      <p>地図表示とマスの採点は次回以降に実装します。</p>
+    <section class="content-section bulk-rating-form-section" aria-labelledby="bulk-rating-form-heading">
+      <h2 id="bulk-rating-form-heading">選択中のマスを一括採点</h2>
+      <div id="bulk-rating-form-container" class="bulk-rating-form-container" aria-live="polite">
+        複数のマスを選択すると、一括採点フォームを表示します。
+      </div>
     </section>
+
   </div>
 {% endblock %}
 
 {% block extra_js %}
+  <script
+    src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+    crossorigin=""
+  ></script>
   <script src="{% static 'maps/js/grid-detail.js' %}"></script>
 {% endblock %}
