@@ -241,12 +241,12 @@
 
   function errorText(response, data) {
     if (!data) {
-      return `HTTP ${response.status}.`;
+      return `通信エラー ${response.status}.`;
     }
     if (data.detail) {
-      return `HTTP ${response.status}. ${data.detail}`;
+      return `通信エラー ${response.status}. ${data.detail}`;
     }
-    return `HTTP ${response.status}. ${JSON.stringify(data)}`;
+    return `通信エラー ${response.status}. ${JSON.stringify(data)}`;
   }
 
   function formatScoreLabel(value) {

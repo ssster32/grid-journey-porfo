@@ -1,5 +1,6 @@
 (function () {
   const messageElement = document.querySelector("#map-area-list-message");
+  const helperElement = document.querySelector("#map-area-list-helper");
   const listElement = document.querySelector("#map-area-list");
 
   function setMessage(text, type = "") {
@@ -26,6 +27,68 @@
       return;
     }
     listElement.replaceChildren();
+  }
+
+  function clearHelper() {
+    if (!helperElement) {
+      return;
+    }
+    helperElement.replaceChildren();
+  }
+
+  function createHelperCard(title, body) {
+    const section = document.createElement("section");
+    section.className = "content-section map-area-list-helper-card";
+
+    const heading = document.createElement("h2");
+    heading.textContent = title;
+
+    const description = document.createElement("p");
+    description.textContent = body;
+
+    const actions = document.createElement("div");
+    actions.className = "section-actions";
+
+    section.append(heading, description, actions);
+
+    return { section, actions };
+  }
+
+  function renderEmptyState() {
+    clearHelper();
+    if (!helperElement) {
+      return;
+    }
+
+    const { section, actions } = createHelperCard(
+      "メモグリッドはまだありません",
+      "最初のメモグリッドを作成すると、ここに一覧として表示されます。"
+    );
+    const createLink = document.createElement("a");
+    createLink.className = "detail-link";
+    createLink.href = "/maps/new/";
+    createLink.textContent = "新しいメモグリッドを作成";
+    actions.appendChild(createLink);
+    helperElement.appendChild(section);
+  }
+
+  function renderLoadErrorState() {
+    clearHelper();
+    if (!helperElement) {
+      return;
+    }
+
+    const { section, actions } = createHelperCard(
+      "一覧を取得できませんでした",
+      "通信状況やログイン状態を確認して、もう一度読み込みを試してください。"
+    );
+    const reloadButton = document.createElement("button");
+    reloadButton.type = "button";
+    reloadButton.className = "secondary-button";
+    reloadButton.dataset.reloadMapAreas = "";
+    reloadButton.textContent = "再読み込み";
+    actions.appendChild(reloadButton);
+    helperElement.appendChild(section);
   }
 
   function textOrFallback(value, fallback = "未設定") {
@@ -59,6 +122,23 @@
       return "自分";
     }
     return textOrFallback(area.created_by_username, "不明");
+  }
+
+  function initialScoreModeLabel(value) {
+    if (value === "auto") {
+      return "自動設定";
+    }
+    if (value === "manual") {
+      return "手動設定";
+    }
+    return textOrFallback(value);
+  }
+
+  function regionFeatureLevelLabel(value) {
+    if (value === null || value === undefined || value === "") {
+      return "未設定";
+    }
+    return `レベル ${value}`;
   }
 
   function createMetaItem(label, value) {
@@ -96,8 +176,8 @@
     metaList.className = "map-area-meta-list";
     metaList.append(
       createMetaItem("作成者", ownerLabel(area)),
-      createMetaItem("初期スコア設定", textOrFallback(area.initial_score_mode)),
-      createMetaItem("地域特徴レベル", textOrFallback(area.region_feature_level)),
+      createMetaItem("初期スコア設定", initialScoreModeLabel(area.initial_score_mode)),
+      createMetaItem("地域特徴レベル", regionFeatureLevelLabel(area.region_feature_level)),
       createMetaItem("1マスの大きさ", `${textOrFallback(area.grid_size_meters)}m`),
       createMetaItem("作成日時", formatDate(area.created_at))
     );
@@ -114,25 +194,39 @@
       actionWrapper.textContent = "詳細画面へのリンクを作成できません。";
     }
 
+    let dangerArea = null;
     if (area.id && area.is_owner) {
+      dangerArea = document.createElement("div");
+      dangerArea.className = "map-area-danger-actions";
+
+      const dangerNote = document.createElement("p");
+      dangerNote.className = "map-area-danger-note";
+      dangerNote.textContent = "削除すると元に戻せません。";
+
       const deleteButton = document.createElement("button");
       deleteButton.type = "button";
       deleteButton.className = "danger-button";
       deleteButton.dataset.deleteAreaId = textOrFallback(area.id, "");
       deleteButton.dataset.areaName = textOrFallback(area.name, "名前未設定");
       deleteButton.textContent = "削除";
-      actionWrapper.appendChild(deleteButton);
+
+      dangerArea.append(dangerNote, deleteButton);
     }
 
     article.append(heading, badge, description, metaList, actionWrapper);
+    if (dangerArea) {
+      article.appendChild(dangerArea);
+    }
     return article;
   }
 
   function renderAreas(areas) {
     clearList();
+    clearHelper();
 
     if (!Array.isArray(areas) || areas.length === 0) {
       setMessage("メモグリッドはまだありません。");
+      renderEmptyState();
       return;
     }
 
@@ -154,17 +248,18 @@
 
   function errorText(response, data) {
     if (!data) {
-      return `HTTP ${response.status}.`;
+      return `通信エラー ${response.status}.`;
     }
     if (data.detail) {
-      return `HTTP ${response.status}. ${data.detail}`;
+      return `通信エラー ${response.status}. ${data.detail}`;
     }
-    return `HTTP ${response.status}. ${JSON.stringify(data)}`;
+    return `通信エラー ${response.status}. ${JSON.stringify(data)}`;
   }
 
   async function loadMapAreas() {
     setMessage("メモグリッド一覧を読み込んでいます。");
     clearList();
+    clearHelper();
 
     try {
       const response = await fetch("/api/maps/areas/", {
@@ -183,6 +278,7 @@
         `メモグリッド一覧を取得できませんでした。${error.message}`,
         "error"
       );
+      renderLoadErrorState();
     }
   }
 
@@ -227,6 +323,17 @@
   }
 
   if (messageElement && listElement) {
+    if (helperElement) {
+      helperElement.addEventListener("click", (event) => {
+        const reloadButton = event.target.closest("[data-reload-map-areas]");
+        if (!reloadButton) {
+          return;
+        }
+
+        loadMapAreas();
+      });
+    }
+
     listElement.addEventListener("click", (event) => {
       const deleteButton = event.target.closest("[data-delete-area-id]");
       if (!deleteButton) {

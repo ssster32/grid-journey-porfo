@@ -29,6 +29,21 @@
       {% block content %}{% endblock %}
     </main>
 
+    <div
+      id="site-loading-overlay"
+      class="site-loading-overlay"
+      role="status"
+      aria-live="polite"
+      aria-hidden="true"
+      hidden
+    >
+      <div class="site-loading-overlay-panel">
+        <span class="site-loading-spinner" aria-hidden="true"></span>
+        <p class="site-loading-message">処理中です…</p>
+        <p class="site-loading-submessage">しばらくお待ちください</p>
+      </div>
+    </div>
+
     {% block extra_js %}{% endblock %}
   </body>
 </html>

@@ -49,59 +49,36 @@
         <dd>{{ area.grid_size_meters }}m</dd>
 
         <dt>初期スコア設定</dt>
-        <dd>{{ area.initial_score_mode }}</dd>
+        <dd>
+          {% if area.initial_score_mode == "auto" %}
+            自動設定
+          {% elif area.initial_score_mode == "manual" %}
+            手動設定
+          {% else %}
+            {{ area.initial_score_mode|default:"未設定" }}
+          {% endif %}
+        </dd>
 
         <dt>地域特徴レベル</dt>
-        <dd>{{ area.region_feature_level }}</dd>
+        <dd>
+          {% if area.region_feature_level is not None %}
+            レベル {{ area.region_feature_level }}
+          {% else %}
+            未設定
+          {% endif %}
+        </dd>
 
         <dt>作成日時</dt>
         <dd>{{ area.created_at }}</dd>
       </dl>
 
-      {% if is_owner %}
-        <div class="section-actions">
-          <button
-            type="button"
-            id="delete-current-area"
-            class="danger-button"
-            data-area-id="{{ area.id }}"
-            data-area-name="{{ area.name }}"
-          >
-            このメモグリッドを削除
-          </button>
-        </div>
-
-        <p id="area-delete-status" class="rating-form-status" aria-live="polite"></p>
-      {% endif %}
     </section>
 
-    {% if is_owner %}
-      <section class="content-section share-management-section" aria-labelledby="share-management-heading">
-        <h2 id="share-management-heading">共有相手管理</h2>
-        <p>このメモグリッドを共有する相手を管理できます。</p>
-
-        <div id="share-management-message" class="message" aria-live="polite">
-          共有相手一覧を読み込んでいます。
-        </div>
-
-        <form id="share-add-form" class="share-add-form">
-          <label class="form-field" for="share-username">
-            共有相手 username
-            <input id="share-username" name="username" type="text" autocomplete="off" placeholder="例: otheruser">
-          </label>
-          <button id="share-add-submit" type="submit">共有相手を追加</button>
-        </form>
-
-        <div id="share-list" class="share-list" aria-live="polite">
-          共有相手一覧を読み込んでいます。
-        </div>
-      </section>
-    {% endif %}
-
     <section class="content-section map-preview-section" aria-labelledby="map-preview-heading">
-      <h2 id="map-preview-heading">Map Preview</h2>
-      <p>メモグリッドの範囲を地図上で確認します。</p>
-      <p class="map-preview-help">Shift + ドラッグで範囲内のマスをまとめて選択できます。範囲選択中は Escape でキャンセルできます。</p>
+      <p class="section-kicker">地図から選択</p>
+      <h2 id="map-preview-heading">地図プレビュー</h2>
+      <p>地図上で範囲とスコアを確認し、マスを選択できます。</p>
+      <p class="map-preview-help">Ctrl / Command クリックで複数選択、Shift + ドラッグで範囲選択できます。Escape でキャンセルできます。</p>
 
       <p id="map-preview-status" class="map-preview-status" aria-live="polite">
         地図を読み込んでいます。
@@ -138,7 +115,14 @@
     </section>
 
     <section class="content-section" aria-labelledby="grid-cell-list-heading">
+      <p class="section-kicker">一覧から選択</p>
       <h2 id="grid-cell-list-heading">マス一覧</h2>
+      <p>行・列・スコアを見ながらマスを選択できます。</p>
+      <div class="section-actions">
+        <button type="button" id="reload-grid-cells" class="secondary-button">
+          マスを再取得
+        </button>
+      </div>
 
       <div id="grid-cell-list-message" class="message" aria-live="polite">
         マス一覧を読み込んでいます。
@@ -150,7 +134,9 @@
     </section>
 
     <section class="content-section selected-grid-cell-section" aria-labelledby="selected-grid-cell-heading">
+      <p class="section-kicker">選択状態</p>
       <h2 id="selected-grid-cell-heading">選択中のマス</h2>
+      <p>選択中のマス情報を表示します。</p>
       <div class="selected-grid-cell-toolbar">
         <p id="selected-grid-cell-count" class="selected-grid-cell-count">選択中: 0件</p>
         <button type="button" id="clear-selected-grids" class="secondary-button" hidden>
@@ -162,19 +148,73 @@
       </div>
     </section>
 
-    <section class="content-section grid-rating-form-section" aria-labelledby="grid-rating-form-heading">
-      <h2 id="grid-rating-form-heading">このマスを採点</h2>
-      <div id="grid-rating-form-container" class="grid-rating-form-container" aria-live="polite">
-        マスを選択すると、採点フォームを表示します。
-      </div>
-    </section>
+    <div class="detail-rating-sections" aria-label="採点フォーム">
+      <section class="content-section grid-rating-form-section" aria-labelledby="grid-rating-form-heading">
+        <p class="section-kicker">1件選択時</p>
+        <h2 id="grid-rating-form-heading">このマスを採点</h2>
+        <p>1件だけ選択して、スコアとコメントを送信します。</p>
+        <div id="grid-rating-form-container" class="grid-rating-form-container" aria-live="polite">
+          マスを選択すると、採点フォームを表示します。
+        </div>
+      </section>
 
-    <section class="content-section bulk-rating-form-section" aria-labelledby="bulk-rating-form-heading">
-      <h2 id="bulk-rating-form-heading">選択中のマスを一括採点</h2>
-      <div id="bulk-rating-form-container" class="bulk-rating-form-container" aria-live="polite">
-        複数のマスを選択すると、一括採点フォームを表示します。
-      </div>
-    </section>
+      <section class="content-section bulk-rating-form-section" aria-labelledby="bulk-rating-form-heading">
+        <p class="section-kicker">2件以上選択時</p>
+        <h2 id="bulk-rating-form-heading">選択中のマスをまとめて採点</h2>
+        <p>複数のマスを同じスコア、または個別入力で採点します。</p>
+        <div id="bulk-rating-form-container" class="bulk-rating-form-container" aria-live="polite">
+          複数のマスを選択すると、一括採点フォームを表示します。
+        </div>
+      </section>
+    </div>
+
+    {% if is_owner %}
+      <section class="content-section management-section" aria-labelledby="management-heading">
+        <p class="section-kicker">管理</p>
+        <h2 id="management-heading">共有と削除</h2>
+        <p>共有相手の追加・解除と、メモグリッドの削除を行います。</p>
+
+        <section class="management-subsection share-management-section" aria-labelledby="share-management-heading">
+          <h3 id="share-management-heading">共有相手管理</h3>
+          <p>このメモグリッドを共有する相手を管理します。</p>
+
+          <div id="share-management-message" class="message" aria-live="polite">
+            共有相手一覧を読み込んでいます。
+          </div>
+
+          <form id="share-add-form" class="share-add-form">
+            <label class="form-field" for="share-username">
+              共有相手のユーザー名
+              <input id="share-username" name="username" type="text" autocomplete="off" placeholder="例: otheruser">
+            </label>
+            <button id="share-add-submit" type="submit">共有相手を追加</button>
+          </form>
+
+          <div id="share-list" class="share-list" aria-live="polite">
+            共有相手一覧を読み込んでいます。
+          </div>
+        </section>
+
+        <section class="management-subsection" aria-labelledby="delete-area-heading">
+          <h3 id="delete-area-heading">削除</h3>
+          <p>不要になったメモグリッドを削除します。元に戻せません。</p>
+
+          <div class="section-actions">
+            <button
+              type="button"
+              id="delete-current-area"
+              class="danger-button"
+              data-area-id="{{ area.id }}"
+              data-area-name="{{ area.name }}"
+            >
+              このメモグリッドを削除
+            </button>
+          </div>
+
+          <p id="area-delete-status" class="rating-form-status" aria-live="polite"></p>
+        </section>
+      </section>
+    {% endif %}
 
   </div>
 {% endblock %}

@@ -3,34 +3,41 @@
 {% block title %}ログイン{% endblock %}
 
 {% block content %}
-  <h1>ログイン</h1>
-  <p>メモグリッドを作成・採点するためにログインします。</p>
+  <section class="page-heading" aria-labelledby="login-heading">
+    <div>
+      <h1 id="login-heading">ログイン</h1>
+      <p>メモグリッドを作成・採点するためにログインします。</p>
+    </div>
+  </section>
 
-  {% if form.errors %}
-    <section aria-label="ログインエラー">
-      <p>ユーザー名またはパスワードが正しくありません。</p>
-      {{ form.non_field_errors }}
-    </section>
-  {% endif %}
+  <section class="content-section login-section" aria-labelledby="login-form-heading">
+    <h2 id="login-form-heading">アカウント情報</h2>
 
-  <form method="post">
-    {% csrf_token %}
-    <input type="hidden" name="next" value="{{ next }}">
+    {% if form.errors %}
+      <div class="message login-error-message" data-message-type="error" role="alert">
+        <p>ユーザー名またはパスワードが正しくありません。</p>
+        {{ form.non_field_errors }}
+      </div>
+    {% endif %}
 
-    <label for="{{ form.username.id_for_label }}">
-      username
-      {{ form.username }}
-    </label>
+    <form class="login-form" method="post">
+      {% csrf_token %}
+      <input type="hidden" name="next" value="{{ next }}">
 
-    <label for="{{ form.password.id_for_label }}">
-      password
-      {{ form.password }}
-    </label>
+      <label class="form-field" for="{{ form.username.id_for_label }}">
+        ユーザー名
+        {{ form.username }}
+      </label>
 
-    <button type="submit">ログイン</button>
-  </form>
+      <label class="form-field" for="{{ form.password.id_for_label }}">
+        パスワード
+        {{ form.password }}
+      </label>
 
-  <p>
-    <a href="{% url 'map-area-page-list' %}">メモグリッドへ戻る</a>
-  </p>
+      <div class="login-actions">
+        <button type="submit">ログイン</button>
+        <a class="back-link" href="{% url 'map-area-page-list' %}">メモグリッドへ戻る</a>
+      </div>
+    </form>
+  </section>
 {% endblock %}

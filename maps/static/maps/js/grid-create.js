@@ -2,6 +2,16 @@
   const formElement = document.querySelector("#map-area-create-form");
   const statusElement = document.querySelector("#memo-grid-create-status");
   const submitButton = document.querySelector("#map-area-create-submit");
+  const pageLoadingOverlay = document.querySelector("#site-loading-overlay");
+  const mapPreviewElement = document.querySelector("#create-map-preview");
+  const mapPreviewStatusElement = document.querySelector("#create-map-preview-status");
+  const earthRadiusMeters = 6378137;
+  const maxPreviewGridCells = 400;
+  const mapPreviewState = {
+    map: null,
+    areaLayer: null,
+    gridLayer: null,
+  };
 
   function getCookie(name) {
     const cookies = document.cookie ? document.cookie.split(";") : [];
@@ -21,6 +31,30 @@
 
     statusElement.textContent = message;
     statusElement.dataset.messageType = type;
+  }
+
+  function showPageLoading() {
+    if (!pageLoadingOverlay) {
+      return;
+    }
+    pageLoadingOverlay.hidden = false;
+    pageLoadingOverlay.setAttribute("aria-hidden", "false");
+  }
+
+  function hidePageLoading() {
+    if (!pageLoadingOverlay) {
+      return;
+    }
+    pageLoadingOverlay.hidden = true;
+    pageLoadingOverlay.setAttribute("aria-hidden", "true");
+  }
+
+  function setMapPreviewStatus(message, type = "") {
+    if (!mapPreviewStatusElement) {
+      return;
+    }
+    mapPreviewStatusElement.textContent = message;
+    mapPreviewStatusElement.dataset.messageType = type;
   }
 
   function fieldValue(name) {
@@ -45,6 +79,158 @@
       return NaN;
     }
     return value;
+  }
+
+  function readPreviewInputs() {
+    return {
+      centerLat: numberValue("center_lat"),
+      centerLng: numberValue("center_lng"),
+      rows: integerValue("rows"),
+      cols: integerValue("cols"),
+      gridSizeMeters: numberValue("grid_size_meters"),
+    };
+  }
+
+  function validatePreviewInputs(input) {
+    if (!Number.isFinite(input.centerLat) || input.centerLat < -90 || input.centerLat > 90) {
+      throw new Error("中心緯度は -90 から 90 の数値で入力してください。");
+    }
+    if (!Number.isFinite(input.centerLng) || input.centerLng < -180 || input.centerLng > 180) {
+      throw new Error("中心経度は -180 から 180 の数値で入力してください。");
+    }
+    if (!Number.isInteger(input.rows) || input.rows < 1) {
+      throw new Error("縦方向のマス数は 1 以上の整数で入力してください。");
+    }
+    if (!Number.isInteger(input.cols) || input.cols < 1) {
+      throw new Error("横方向のマス数は 1 以上の整数で入力してください。");
+    }
+    if (!Number.isFinite(input.gridSizeMeters) || input.gridSizeMeters < 1) {
+      throw new Error("1マスの大きさは 1 以上の数値で入力してください。");
+    }
+  }
+
+  function calculatePreviewBounds(input) {
+    const totalHeightMeters = input.rows * input.gridSizeMeters;
+    const totalWidthMeters = input.cols * input.gridSizeMeters;
+    const centerLatRadians = input.centerLat * Math.PI / 180;
+    const latitudeDelta = totalHeightMeters / earthRadiusMeters * 180 / Math.PI / 2;
+    const longitudeScale = Math.max(Math.cos(centerLatRadians), 0.000001);
+    const longitudeDelta = totalWidthMeters / (earthRadiusMeters * longitudeScale) * 180 / Math.PI / 2;
+
+    return {
+      north: input.centerLat + latitudeDelta,
+      south: input.centerLat - latitudeDelta,
+      east: input.centerLng + longitudeDelta,
+      west: input.centerLng - longitudeDelta,
+    };
+  }
+
+  function boundsArray(bounds) {
+    return [
+      [bounds.south, bounds.west],
+      [bounds.north, bounds.east],
+    ];
+  }
+
+  function ensureMapPreview() {
+    if (!mapPreviewElement || !window.L) {
+      return null;
+    }
+
+    if (mapPreviewState.map) {
+      return mapPreviewState.map;
+    }
+
+    mapPreviewState.map = window.L.map(mapPreviewElement, {
+      scrollWheelZoom: false,
+    }).setView([35.681236, 139.767125], 13);
+
+    window.L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      attribution: "&copy; OpenStreetMap contributors",
+    }).addTo(mapPreviewState.map);
+
+    mapPreviewState.gridLayer = window.L.layerGroup().addTo(mapPreviewState.map);
+    window.setTimeout(() => {
+      mapPreviewState.map.invalidateSize();
+    }, 0);
+
+    return mapPreviewState.map;
+  }
+
+  function clearMapPreviewLayers() {
+    if (mapPreviewState.areaLayer) {
+      mapPreviewState.areaLayer.remove();
+      mapPreviewState.areaLayer = null;
+    }
+    if (mapPreviewState.gridLayer) {
+      mapPreviewState.gridLayer.clearLayers();
+    }
+  }
+
+  function renderPreviewGridCells(input, bounds) {
+    if (!mapPreviewState.gridLayer || input.rows * input.cols > maxPreviewGridCells) {
+      return false;
+    }
+
+    const latStep = (bounds.north - bounds.south) / input.rows;
+    const lngStep = (bounds.east - bounds.west) / input.cols;
+
+    for (let row = 0; row < input.rows; row += 1) {
+      const north = bounds.north - latStep * row;
+      const south = north - latStep;
+      for (let col = 0; col < input.cols; col += 1) {
+        const west = bounds.west + lngStep * col;
+        const east = west + lngStep;
+        window.L.rectangle([[south, west], [north, east]], {
+          color: "#6f8faf",
+          weight: 1,
+          opacity: 0.45,
+          fillOpacity: 0,
+          interactive: false,
+          className: "create-map-preview-grid-cell",
+        }).addTo(mapPreviewState.gridLayer);
+      }
+    }
+
+    return true;
+  }
+
+  function updateMapPreview() {
+    const map = ensureMapPreview();
+    if (!map) {
+      setMapPreviewStatus("地図ライブラリを読み込めませんでした。", "error");
+      return;
+    }
+
+    clearMapPreviewLayers();
+
+    const input = readPreviewInputs();
+    try {
+      validatePreviewInputs(input);
+    } catch (error) {
+      setMapPreviewStatus(error.message);
+      return;
+    }
+
+    const bounds = calculatePreviewBounds(input);
+    mapPreviewState.areaLayer = window.L.rectangle(boundsArray(bounds), {
+      color: "#176f5c",
+      weight: 3,
+      opacity: 0.9,
+      fillColor: "#d8f3e5",
+      fillOpacity: 0.18,
+      interactive: false,
+      className: "create-map-preview-area",
+    }).addTo(map);
+
+    const renderedGrid = renderPreviewGridCells(input, bounds);
+    map.fitBounds(boundsArray(bounds), { padding: [24, 24], maxZoom: 18 });
+    setMapPreviewStatus(
+      renderedGrid
+        ? "入力値から作成予定範囲とマス境界を概算表示しています。"
+        : `入力値から作成予定範囲を概算表示しています。マス数が多いため境界表示は省略しています。`,
+      "success"
+    );
   }
 
   function readInitialScoreSettings() {
@@ -137,10 +323,23 @@
       return data.join(" ");
     }
     if (typeof data === "object") {
+      const fieldLabels = {
+        name: "名前",
+        description: "説明",
+        center_lat: "中心緯度",
+        center_lng: "中心経度",
+        grid_size_meters: "1マスの大きさ",
+        rows: "縦方向のマス数",
+        cols: "横方向のマス数",
+        initial_score_mode: "初期スコア設定",
+        region_feature_level: "初期スコア設定",
+        source: "取得元・メモ",
+        non_field_errors: "入力内容",
+      };
       return Object.entries(data)
         .map(([key, value]) => {
           const detail = Array.isArray(value) ? value.join(" ") : String(value);
-          return `${key}: ${detail}`;
+          return `${fieldLabels[key] || key}: ${detail}`;
         })
         .join(" / ");
     }
@@ -160,6 +359,7 @@
       submitButton.disabled = true;
     }
     setStatus("メモグリッドを作成しています。");
+    showPageLoading();
 
     try {
       const response = await fetch("/api/maps/areas/", {
@@ -177,8 +377,8 @@
         const detail = formatErrorData(data);
         throw new Error(
           detail
-            ? `HTTP ${response.status}. ${detail}`
-            : `HTTP ${response.status}.`
+            ? `通信エラー ${response.status}. ${detail}`
+            : `通信エラー ${response.status}.`
         );
       }
 
@@ -193,10 +393,30 @@
       if (submitButton) {
         submitButton.disabled = false;
       }
+    } finally {
+      hidePageLoading();
     }
   }
 
   if (formElement) {
+    updateMapPreview();
+
+    ["center_lat", "center_lng", "rows", "cols", "grid_size_meters"].forEach((name) => {
+      const field = formElement.elements[name];
+      if (!field) {
+        return;
+      }
+      field.addEventListener("input", updateMapPreview);
+      field.addEventListener("change", updateMapPreview);
+    });
+
+    window.addEventListener("resize", () => {
+      if (!mapPreviewState.map) {
+        return;
+      }
+      mapPreviewState.map.invalidateSize();
+    });
+
     formElement.addEventListener("submit", (event) => {
       event.preventDefault();
       submitMapArea();
