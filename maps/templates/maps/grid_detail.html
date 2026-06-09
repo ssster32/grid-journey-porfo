@@ -79,6 +79,22 @@
       <h2 id="map-preview-heading">地図プレビュー</h2>
       <p>地図上で範囲とスコアを確認し、マスを選択できます。</p>
       <p class="map-preview-help">Ctrl / Command クリックで複数選択、Shift + ドラッグで範囲選択できます。Escape でキャンセルできます。</p>
+      <div class="section-actions map-preview-actions">
+        <button type="button" id="reload-grid-cells" class="secondary-button">
+          グリッドを再取得
+        </button>
+      </div>
+      <label class="map-opacity-control" for="grid-opacity-scale">
+        <span>色の濃さ</span>
+        <input
+          id="grid-opacity-scale"
+          type="range"
+          min="0"
+          max="100"
+          value="50"
+          step="1"
+        >
+      </label>
 
       <p id="map-preview-status" class="map-preview-status" aria-live="polite">
         地図を読み込んでいます。
@@ -112,25 +128,6 @@
           未分類
         </span>
       </div>
-    </section>
-
-    <section class="content-section" aria-labelledby="grid-cell-list-heading">
-      <p class="section-kicker">一覧から選択</p>
-      <h2 id="grid-cell-list-heading">マス一覧</h2>
-      <p>行・列・スコアを見ながらマスを選択できます。</p>
-      <div class="section-actions">
-        <button type="button" id="reload-grid-cells" class="secondary-button">
-          マスを再取得
-        </button>
-      </div>
-
-      <div id="grid-cell-list-message" class="message" aria-live="polite">
-        マス一覧を読み込んでいます。
-      </div>
-
-      <p id="grid-cell-count" class="grid-cell-count"></p>
-
-      <div id="grid-cell-list" class="grid-cell-list" aria-live="polite"></div>
     </section>
 
     <section class="content-section selected-grid-cell-section" aria-labelledby="selected-grid-cell-heading">

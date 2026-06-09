@@ -1,8 +1,6 @@
 (function () {
   const rootElement = document.querySelector("#grid-detail-root");
-  const messageElement = document.querySelector("#grid-cell-list-message");
-  const countElement = document.querySelector("#grid-cell-count");
-  const listElement = document.querySelector("#grid-cell-list");
+  const messageElement = document.querySelector("#map-preview-status");
   const reloadGridCellsButton = document.querySelector("#reload-grid-cells");
   const selectedGridDetailElement = document.querySelector(
     "#selected-grid-cell-detail"
@@ -20,8 +18,16 @@
   const shareListElement = document.querySelector("#share-list");
   const mapPreviewElement = document.querySelector("#map-preview");
   const mapPreviewStatusElement = document.querySelector("#map-preview-status");
+  const gridOpacityScaleInput = document.querySelector("#grid-opacity-scale");
   const pageLoadingOverlay = document.querySelector("#site-loading-overlay");
-  const maxVisibleGridCount = 50;
+  const defaultMapPreviewMessage = "メモグリッド範囲を表示しています。";
+  const temporaryMapPreviewMessageDuration = 2200;
+  const defaultOpacityScaleValue = 50;
+  const minGridFillOpacityMultiplier = 0.15;
+  const maxGridFillOpacityMultiplier = 1.45;
+  const maxGridFillOpacity = 0.48;
+  const maxSelectedGridFillOpacity = 0.58;
+  let mapPreviewMessageResetTimer = null;
   const utils = window.GridDetailUtils;
   if (!utils) {
     console.error("GridDetailUtils is not loaded.");
@@ -55,6 +61,7 @@
     gridBoundaryLayer: null,
     scoreLabelLayer: null,
     mapGridRectanglesById: new Map(),
+    gridOpacityScaleValue: defaultOpacityScaleValue,
     selectionDrag: {
       isDragging: false,
       startLatLng: null,
@@ -67,6 +74,10 @@
   function setMessage(text, type = "") {
     if (!messageElement) {
       return;
+    }
+    if (mapPreviewMessageResetTimer) {
+      window.clearTimeout(mapPreviewMessageResetTimer);
+      mapPreviewMessageResetTimer = null;
     }
     messageElement.textContent = text;
     messageElement.dataset.messageType = type;
@@ -111,13 +122,6 @@
     shareListElement.textContent = text;
   }
 
-  function setCount(text) {
-    if (!countElement) {
-      return;
-    }
-    countElement.textContent = text;
-  }
-
   function setSelectedGridCount(count) {
     if (!selectedGridCountElement) {
       return;
@@ -132,81 +136,11 @@
     clearSelectedGridsButton.hidden = state.selectedGridIds.size === 0;
   }
 
-  function clearList() {
-    if (!listElement) {
-      return;
-    }
-    listElement.replaceChildren();
-  }
-
   function setReloadGridCellsButtonDisabled(isDisabled) {
     if (!reloadGridCellsButton) {
       return;
     }
     reloadGridCellsButton.disabled = isDisabled;
-  }
-
-  function gridIdValue(grid) {
-    return Number(grid.id);
-  }
-
-  function isGridSelected(gridId) {
-    return state.selectedGridIds.has(gridId);
-  }
-
-  function gridSummaryParts(grid) {
-    return [
-      `#${textOrFallback(grid.id)}`,
-      `行 ${displayIndex(grid.row_index)}`,
-      `列 ${displayIndex(grid.col_index)}`,
-      `初期スコア ${formatNumber(grid.initial_score)}`,
-      `ユーザー平均スコア ${formatNumber(grid.average_user_score)}`,
-      `採点数 ${formatNumber(grid.rating_count)}`,
-      `表示スコア ${formatNumber(grid.calculated_score)}`,
-    ];
-  }
-
-  function createGridSummary(grid) {
-    const summary = document.createElement("span");
-    summary.className = "grid-cell-summary";
-    summary.textContent = gridSummaryParts(grid).join(" / ");
-    return summary;
-  }
-
-  function createGridSelectButton(grid, selected) {
-    const selectButton = document.createElement("button");
-    selectButton.type = "button";
-    selectButton.className = "secondary-button";
-    selectButton.dataset.selectGridId = textOrFallback(grid.id, "");
-    selectButton.textContent = selected ? "選択中" : "選択";
-    return selectButton;
-  }
-
-  function applyGridItemSelectionState(item) {
-    const itemGridId = Number(item.dataset.gridId);
-    const selected = isGridSelected(itemGridId);
-    item.classList.toggle("is-selected", selected);
-
-    const selectButton = item.querySelector("[data-select-grid-id]");
-    if (selectButton) {
-      selectButton.textContent = selected ? "選択中" : "選択";
-    }
-  }
-
-  function createGridItem(grid) {
-    const item = document.createElement("li");
-    const gridId = gridIdValue(grid);
-    const selected = isGridSelected(gridId);
-    item.className = "grid-cell-item";
-    item.dataset.gridId = textOrFallback(grid.id, "");
-    item.classList.toggle("is-selected", selected);
-
-    item.append(
-      createGridSummary(grid),
-      " ",
-      createGridSelectButton(grid, selected)
-    );
-    return item;
   }
 
   function setSelectedGridDetail(text) {
@@ -718,16 +652,6 @@
     );
   }
 
-  function updateSelectedGridListState() {
-    if (!listElement) {
-      return;
-    }
-
-    listElement.querySelectorAll(".grid-cell-item").forEach((item) => {
-      applyGridItemSelectionState(item);
-    });
-  }
-
   function gridScoreStyle(grid) {
     const rawScore = grid ? grid.calculated_score : undefined;
 
@@ -735,7 +659,7 @@
       return {
         color: "#8a94a1",
         fillColor: "#e5e7eb",
-        fillOpacity: 0.08,
+        fillOpacity: 0.12,
       };
     }
 
@@ -745,37 +669,59 @@
       return {
         color: "#8a94a1",
         fillColor: "#e5e7eb",
-        fillOpacity: 0.08,
+        fillOpacity: 0.12,
       };
     }
 
     if (score < 3) {
       return {
         color: "#b84a4a",
-        fillColor: "#f8dede",
-        fillOpacity: 0.08,
+        fillColor: "#f3b6b6",
+        fillOpacity: 0.32,
       };
     }
     if (score < 6) {
       return {
         color: "#d08a2f",
-        fillColor: "#fdebd0",
-        fillOpacity: 0.08,
+        fillColor: "#f8c878",
+        fillOpacity: 0.32,
       };
     }
     if (score < 8) {
       return {
         color: "#8da63a",
-        fillColor: "#edf7d4",
-        fillOpacity: 0.08,
+        fillColor: "#cfe887",
+        fillOpacity: 0.32,
       };
     }
 
     return {
       color: "#176f5c",
-      fillColor: "#d8f3e5",
-      fillOpacity: 0.08,
+      fillColor: "#86d9b3",
+      fillOpacity: 0.32,
     };
+  }
+
+  function gridFillOpacityMultiplier() {
+    const normalizedValue = Math.min(
+      Math.max(Number(state.gridOpacityScaleValue), 0),
+      100
+    );
+    if (normalizedValue <= defaultOpacityScaleValue) {
+      return minGridFillOpacityMultiplier
+        + (normalizedValue / defaultOpacityScaleValue)
+        * (1 - minGridFillOpacityMultiplier);
+    }
+    return 1
+      + ((normalizedValue - defaultOpacityScaleValue) / defaultOpacityScaleValue)
+      * (maxGridFillOpacityMultiplier - 1);
+  }
+
+  function scaledGridFillOpacity(baseOpacity, isSelected) {
+    const scaledOpacity = baseOpacity * gridFillOpacityMultiplier();
+    const selectedOpacity = isSelected ? scaledOpacity + 0.12 : scaledOpacity;
+    const maxOpacity = isSelected ? maxSelectedGridFillOpacity : maxGridFillOpacity;
+    return Math.min(selectedOpacity, maxOpacity);
   }
 
   function scoreLabelToneClass(value) {
@@ -805,13 +751,11 @@
 
     return {
       color: scoreStyle.color,
-      weight: isSelected ? 3 : 1,
-      opacity: isSelected ? 0.95 : 0.65,
+      weight: isSelected ? 4 : 1,
+      opacity: isSelected ? 1 : 0.72,
       fill: true,
       fillColor: scoreStyle.fillColor,
-      fillOpacity: isSelected
-        ? Math.min(scoreStyle.fillOpacity + 0.1, 0.24)
-        : scoreStyle.fillOpacity,
+      fillOpacity: scaledGridFillOpacity(scoreStyle.fillOpacity, isSelected),
     };
   }
 
@@ -846,6 +790,22 @@
     bringMapAreaRectangleToFront();
   }
 
+  function readGridOpacityScaleValue() {
+    if (!gridOpacityScaleInput) {
+      return defaultOpacityScaleValue;
+    }
+    const inputValue = Number(gridOpacityScaleInput.value);
+    if (!Number.isFinite(inputValue)) {
+      return defaultOpacityScaleValue;
+    }
+    return Math.min(Math.max(inputValue, 0), 100);
+  }
+
+  function updateGridOpacityScale() {
+    state.gridOpacityScaleValue = readGridOpacityScaleValue();
+    updateSelectedMapGridState();
+  }
+
   function renderSelectionState(
     message = "",
     messageType = "",
@@ -856,7 +816,6 @@
     renderSelectedGridSelection(grids);
     renderRatingFormForSelection(grids, message, messageType);
     renderBulkRatingFormForSelection(grids, bulkMessage, bulkMessageType);
-    updateSelectedGridListState();
     updateSelectedMapGridState();
   }
 
@@ -899,20 +858,14 @@
     renderSelectionState();
   }
 
-  function selectGrid(gridId) {
-    selectSingleGrid(gridId);
-  }
-
   function resetGridStateForRender() {
-    clearList();
     state.gridsById = new Map();
     state.selectedGridId = null;
     state.selectedGridIds = new Set();
   }
 
   function renderEmptyGridList() {
-    setCount("");
-    setMessage("このメモグリッドには、まだマスがありません。");
+    setMessage("このメモグリッドには、まだグリッドがありません。");
     setSelectedGridDetail("表示できるマスがありません。");
     setRatingFormMessage("表示できるマスがないため、採点フォームは表示できません。");
     setBulkRatingFormMessage(
@@ -924,18 +877,17 @@
   }
 
   function renderGridListLoadError(error) {
-    setCount("");
     resetGridStateForRender();
     setSelectedGridCount(0);
     updateClearSelectedButton();
     clearMapGridBoundaries();
-    setMessage(`マス一覧を取得できませんでした。${error.message}`, "error");
-    setSelectedGridDetail("マス一覧を取得できなかったため、マスを選択できません。");
+    setMessage(`グリッドを取得できませんでした。${error.message}`, "error");
+    setSelectedGridDetail("グリッドを取得できなかったため、マスを選択できません。");
     setRatingFormMessage(
-      "マス一覧を取得できなかったため、採点フォームは表示できません。"
+      "グリッドを取得できなかったため、採点フォームは表示できません。"
     );
     setBulkRatingFormMessage(
-      "マス一覧を取得できなかったため、一括採点フォームは表示できません。"
+      "グリッドを取得できなかったため、一括採点フォームは表示できません。"
     );
   }
 
@@ -983,39 +935,6 @@
     }
   }
 
-  function createGridList(grids) {
-    const visibleGrids = grids.slice(0, maxVisibleGridCount);
-    const list = document.createElement("ul");
-    list.className = "grid-cell-list-items";
-    visibleGrids.forEach((grid) => {
-      list.appendChild(createGridItem(grid));
-    });
-    return list;
-  }
-
-  function createGridLimitNote(totalGridCount) {
-    if (totalGridCount <= maxVisibleGridCount) {
-      return null;
-    }
-
-    const limitNote = document.createElement("p");
-    limitNote.textContent = `先頭${maxVisibleGridCount}件を表示しています。`;
-    return limitNote;
-  }
-
-  function renderGridListItems(grids) {
-    if (!listElement) {
-      return;
-    }
-
-    listElement.appendChild(createGridList(grids));
-
-    const limitNote = createGridLimitNote(grids.length);
-    if (limitNote) {
-      listElement.appendChild(limitNote);
-    }
-  }
-
   function renderGrids(grids, options = {}) {
     const previousSelectedGridIds = new Set(state.selectedGridIds);
     const previousSelectedGridId = state.selectedGridId;
@@ -1027,15 +946,11 @@
     }
 
     state.gridsById = gridMapById(grids);
-    setCount(`マス数: ${grids.length}`);
-    setMessage("マス一覧を取得しました。");
     restoreSelectedGridState(
       options,
       previousSelectedGridIds,
       previousSelectedGridId
     );
-    renderGridListItems(grids);
-
     renderMapGridBoundaries(grids);
     renderSelectionState(
       options.ratingMessage || "",
@@ -1043,6 +958,13 @@
       options.bulkRatingMessage || "",
       options.bulkRatingMessageType || ""
     );
+
+    if (options.reloadMessage) {
+      setTemporaryMapPreviewStatus(
+        options.reloadMessage,
+        options.reloadMessageType || "success"
+      );
+    }
   }
 
   function areaId() {
@@ -1053,8 +975,20 @@
     if (!mapPreviewStatusElement) {
       return;
     }
+    if (mapPreviewMessageResetTimer) {
+      window.clearTimeout(mapPreviewMessageResetTimer);
+      mapPreviewMessageResetTimer = null;
+    }
     mapPreviewStatusElement.textContent = text;
     mapPreviewStatusElement.dataset.messageType = type;
+  }
+
+  function setTemporaryMapPreviewStatus(text, type = "") {
+    setMapPreviewStatus(text, type);
+    mapPreviewMessageResetTimer = window.setTimeout(() => {
+      mapPreviewMessageResetTimer = null;
+      setMapPreviewStatus(defaultMapPreviewMessage, "success");
+    }, temporaryMapPreviewMessageDuration);
   }
 
   function leafletAvailable() {
@@ -1422,7 +1356,7 @@
     drawMapAreaRectangle(bounds);
     fitMapAreaBounds(bounds);
     updateMapScoreLabelSize();
-    setMapPreviewStatus("メモグリッド範囲を表示しています。", "success");
+    setMapPreviewStatus(defaultMapPreviewMessage, "success");
     scheduleMapAreaRefit(bounds);
   }
 
@@ -1738,13 +1672,13 @@
   async function loadGridCells(options = {}) {
     const areaId = rootElement ? rootElement.dataset.areaId : "";
     if (!areaId) {
-      setMessage("マス一覧を取得できませんでした。area_id が見つかりません。", "error");
+      setMessage("グリッドを取得できませんでした。area_id が見つかりません。", "error");
       return;
     }
 
-    setMessage("マス一覧を読み込んでいます。");
-    setCount("");
-    clearList();
+    if (!options.keepCurrentMapPreviewMessage) {
+      setMessage("グリッドを読み込んでいます。");
+    }
     setReloadGridCellsButtonDisabled(true);
 
     try {
@@ -1761,6 +1695,9 @@
     loadGridCells({
       selectedGridId: state.selectedGridId,
       selectedGridIds: new Set(state.selectedGridIds),
+      reloadMessage: "グリッドを再取得しました。",
+      reloadMessageType: "success",
+      keepCurrentMapPreviewMessage: true,
     });
   }
 
@@ -1955,21 +1892,7 @@
     }
   }
 
-  if (rootElement && messageElement && countElement && listElement) {
-    listElement.addEventListener("click", (event) => {
-      const selectButton = event.target.closest("[data-select-grid-id]");
-      if (!selectButton) {
-        return;
-      }
-
-      if (event.ctrlKey || event.metaKey) {
-        toggleGridSelection(selectButton.dataset.selectGridId);
-        return;
-      }
-
-      selectSingleGrid(selectButton.dataset.selectGridId);
-    });
-
+  if (rootElement && messageElement) {
     if (clearSelectedGridsButton) {
       clearSelectedGridsButton.addEventListener("click", () => {
         clearSelectedGrids();
@@ -1980,6 +1903,12 @@
       reloadGridCellsButton.addEventListener("click", () => {
         reloadGridCells();
       });
+    }
+
+    if (gridOpacityScaleInput) {
+      state.gridOpacityScaleValue = readGridOpacityScaleValue();
+      gridOpacityScaleInput.addEventListener("input", updateGridOpacityScale);
+      gridOpacityScaleInput.addEventListener("change", updateGridOpacityScale);
     }
 
     if (selectedGridDetailElement) {

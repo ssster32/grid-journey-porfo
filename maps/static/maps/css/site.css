@@ -396,8 +396,7 @@ textarea {
 
 .map-area-meta-list,
 .selected-grid-cell-detail-list,
-.selected-grid-cell-summary-list,
-.grid-cell-list-items {
+.selected-grid-cell-summary-list {
   padding: 0;
   list-style: none;
 }
@@ -482,40 +481,6 @@ textarea {
 
 .login-error-message ul {
   padding-left: 1.2rem;
-}
-
-.grid-cell-count {
-  margin: 0.75rem 0;
-  color: var(--muted);
-  font-weight: 700;
-}
-
-.grid-cell-list-items {
-  display: grid;
-  gap: 0.65rem;
-  margin: 0;
-}
-
-.grid-cell-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem;
-  padding: 0.75rem;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: #ffffff;
-}
-
-.grid-cell-item.is-selected {
-  border-color: var(--border-strong);
-  background: var(--accent-soft);
-  box-shadow: inset 4px 0 0 var(--accent);
-}
-
-.grid-cell-summary {
-  color: var(--text);
-  font-size: 0.95rem;
 }
 
 .selected-grid-cell-detail h3 {
@@ -747,6 +712,21 @@ textarea {
   color: var(--success);
 }
 
+.map-opacity-control {
+  display: grid;
+  gap: 0.35rem;
+  max-width: 18rem;
+  margin: 0.75rem 0 0;
+  color: var(--muted);
+  font-size: 0.92rem;
+  font-weight: 700;
+}
+
+.map-opacity-control input {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
 .map-preview {
   position: relative;
   height: 360px;
@@ -820,22 +800,22 @@ textarea {
 }
 
 .map-score-legend-low {
-  background: #f8dede;
+  background: #f3b6b6;
   border-color: #b84a4a;
 }
 
 .map-score-legend-middle {
-  background: #fdebd0;
+  background: #f8c878;
   border-color: #d08a2f;
 }
 
 .map-score-legend-high {
-  background: #edf7d4;
+  background: #cfe887;
   border-color: #8da63a;
 }
 
 .map-score-legend-very-high {
-  background: #d8f3e5;
+  background: #86d9b3;
   border-color: #176f5c;
 }
 
@@ -855,17 +835,18 @@ textarea {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 1.6rem;
-  padding: 0.1rem 0.25rem;
-  border: 1px solid rgba(15, 23, 42, 0.18);
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.82);
-  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.18);
+  min-width: 1.2rem;
+  padding: 0;
   color: var(--text);
   font-size: 0.75rem;
-  font-weight: 700;
+  font-weight: 800;
   line-height: 1.2;
   pointer-events: none;
+  text-shadow:
+    0 1px 2px rgba(255, 255, 255, 0.95),
+    0 -1px 2px rgba(255, 255, 255, 0.95),
+    1px 0 2px rgba(255, 255, 255, 0.95),
+    -1px 0 2px rgba(255, 255, 255, 0.95);
 }
 
 .map-preview.is-small-score-label .map-score-label span {
@@ -881,32 +862,22 @@ textarea {
 }
 
 .map-score-label--low span {
-  border-color: rgba(184, 74, 74, 0.45);
-  background: rgba(248, 222, 222, 0.9);
   color: #8a2d2d;
 }
 
 .map-score-label--middle span {
-  border-color: rgba(208, 138, 47, 0.45);
-  background: rgba(253, 235, 208, 0.92);
   color: #8a5b17;
 }
 
 .map-score-label--high span {
-  border-color: rgba(141, 166, 58, 0.5);
-  background: rgba(237, 247, 212, 0.92);
   color: #586c1f;
 }
 
 .map-score-label--very-high span {
-  border-color: rgba(23, 111, 92, 0.48);
-  background: rgba(216, 243, 229, 0.92);
   color: #0f5949;
 }
 
 .map-score-label--unknown span {
-  border-color: rgba(138, 148, 161, 0.45);
-  background: rgba(229, 231, 235, 0.9);
   color: #5f6b78;
 }
 
@@ -1060,7 +1031,6 @@ textarea {
 @media (max-width: 720px) {
   .site-header,
   .page-heading,
-  .grid-cell-item,
   .selected-grid-cell-toolbar,
   .share-list-item {
     align-items: stretch;
