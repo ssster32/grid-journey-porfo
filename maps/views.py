@@ -3,7 +3,7 @@ import logging
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.contrib.staticfiles import finders
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import Max, Prefetch, Q
 from django.http import Http404, HttpResponse
 from django.views.generic import TemplateView
 from rest_framework import status
@@ -948,11 +948,27 @@ class MapAreaPageDetailView(LoginRequiredMixin, TemplateView):
             created_by_label = area.created_by.username
         else:
             created_by_label = "不明"
+        grid_size = area.grid_cells.aggregate(
+            max_row_index=Max("row_index"),
+            max_col_index=Max("col_index"),
+        )
+        map_grid_rows = (
+            grid_size["max_row_index"] + 1
+            if grid_size["max_row_index"] is not None
+            else None
+        )
+        map_grid_cols = (
+            grid_size["max_col_index"] + 1
+            if grid_size["max_col_index"] is not None
+            else None
+        )
 
         context["area"] = area
         context["is_owner"] = is_owner
         context["display_type"] = "メモグリッド" if is_owner else "共有メモグリッド"
         context["created_by_label"] = created_by_label
+        context["map_grid_rows"] = map_grid_rows
+        context["map_grid_cols"] = map_grid_cols
         return context
 
 
@@ -972,6 +988,10 @@ class MapAreaListCreateView(APIView):
                 Q(created_by=request.user) | Q(id__in=shared_area_ids)
             )
             .distinct()
+            .annotate(
+                max_grid_row_index=Max("grid_cells__row_index"),
+                max_grid_col_index=Max("grid_cells__col_index"),
+            )
             .order_by("name", "id")
         )
 
@@ -1288,7 +1308,10 @@ class GridRatingCreateView(APIView):
         return Response(
             {
                 "rating": GridRatingResponseSerializer(rating).data,
-                "grid": GridCellScoreSerializer(updated_grid).data,
+                "grid": GridCellScoreSerializer(
+                    updated_grid,
+                    context={"request": request},
+                ).data,
             },
             status=response_status,
         )
@@ -1336,7 +1359,11 @@ class BulkGridRatingCreateView(APIView):
         )
         return Response(
             {
-                "grids": GridCellScoreSerializer(updated_grids, many=True).data,
+                "grids": GridCellScoreSerializer(
+                    updated_grids,
+                    many=True,
+                    context={"request": request},
+                ).data,
             },
             status=response_status,
         )
@@ -1348,7 +1375,13 @@ class GridCellListView(APIView):
 
     def get(self, request, area_id):
         area = get_viewable_map_area_or_404(request.user, area_id)
-        grids = area.grid_cells.order_by("row_index", "col_index")
+        grids = area.grid_cells.prefetch_related(
+            Prefetch(
+                "ratings",
+                queryset=GridRating.objects.filter(user=request.user),
+                to_attr="current_user_ratings",
+            )
+        ).order_by("row_index", "col_index")
 
         return Response(
             {
@@ -1356,7 +1389,11 @@ class GridCellListView(APIView):
                     "id": area.id,
                     "name": area.name,
                 },
-                "grids": GridCellScoreSerializer(grids, many=True).data,
+                "grids": GridCellScoreSerializer(
+                    grids,
+                    many=True,
+                    context={"request": request},
+                ).data,
             },
             status=status.HTTP_200_OK,
         )
@@ -1384,7 +1421,11 @@ class GridCellListView(APIView):
                     "id": area.id,
                     "name": area.name,
                 },
-                "grids": GridCellScoreSerializer(grids, many=True).data,
+                "grids": GridCellScoreSerializer(
+                    grids,
+                    many=True,
+                    context={"request": request},
+                ).data,
             },
             status=status.HTTP_201_CREATED,
         )

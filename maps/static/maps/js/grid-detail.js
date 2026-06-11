@@ -18,15 +18,34 @@
   const shareListElement = document.querySelector("#share-list");
   const mapPreviewElement = document.querySelector("#map-preview");
   const mapPreviewStatusElement = document.querySelector("#map-preview-status");
+  const mapPreviewZoomOutButton = document.querySelector("#map-preview-zoom-out");
+  const mapPreviewZoomInButton = document.querySelector("#map-preview-zoom-in");
+  const mapPreviewFitBoundsButton = document.querySelector(
+    "#map-preview-fit-bounds"
+  );
+  const expandMapPreviewButton = document.querySelector("#expand-map-preview");
+  const expandedMapModalElement = document.querySelector("#expanded-map-modal");
+  const expandedMapPreviewElement = document.querySelector("#expanded-map-preview");
+  const closeExpandedMapButton = document.querySelector("#close-expanded-map");
+  const expandedMapZoomOutButton = document.querySelector("#expanded-map-zoom-out");
+  const expandedMapZoomInButton = document.querySelector("#expanded-map-zoom-in");
+  const expandedMapFitBoundsButton = document.querySelector(
+    "#expanded-map-fit-bounds"
+  );
   const gridOpacityScaleInput = document.querySelector("#grid-opacity-scale");
+  const gridOpacityScaleValueElement = document.querySelector(
+    "#grid-opacity-scale-value"
+  );
+  const scoreLabelToggleInput = document.querySelector("#score-label-toggle");
+  const ratedGridToggleInput = document.querySelector("#rated-grid-toggle");
   const pageLoadingOverlay = document.querySelector("#site-loading-overlay");
   const defaultMapPreviewMessage = "メモグリッド範囲を表示しています。";
   const temporaryMapPreviewMessageDuration = 2200;
   const defaultOpacityScaleValue = 50;
   const minGridFillOpacityMultiplier = 0.15;
-  const maxGridFillOpacityMultiplier = 1.45;
-  const maxGridFillOpacity = 0.48;
-  const maxSelectedGridFillOpacity = 0.58;
+  const maxGridFillOpacityMultiplier = 1.65;
+  const maxGridFillOpacity = 0.54;
+  const maxSelectedGridFillOpacity = 0.64;
   let mapPreviewMessageResetTimer = null;
   const utils = window.GridDetailUtils;
   if (!utils) {
@@ -55,14 +74,30 @@
     selectedGridId: null,
     // selectedGridIds が正式な選択集合。selectedGridId は詳細・単体採点の主対象。
     selectedGridIds: new Set(),
-    bulkRatingMode: "same",
     leafletMap: null,
+    expandedLeafletMap: null,
     mapAreaRectangle: null,
+    expandedMapAreaRectangle: null,
     gridBoundaryLayer: null,
+    expandedGridBoundaryLayer: null,
     scoreLabelLayer: null,
+    expandedScoreLabelLayer: null,
+    ratedGridMarkerLayer: null,
+    expandedRatedGridMarkerLayer: null,
     mapGridRectanglesById: new Map(),
+    expandedMapGridRectanglesById: new Map(),
     gridOpacityScaleValue: defaultOpacityScaleValue,
-    selectionDrag: {
+    scoreLabelsVisible: true,
+    ratedGridMarkersVisible: false,
+    documentDragSelectionHandlersRegistered: false,
+    normalSelectionDrag: {
+      isDragging: false,
+      startLatLng: null,
+      rectangle: null,
+      wasMapDraggingEnabled: true,
+      suppressNextClick: false,
+    },
+    expandedSelectionDrag: {
       isDragging: false,
       startLatLng: null,
       rectangle: null,
@@ -154,6 +189,7 @@
     if (!ratingFormContainer) {
       return;
     }
+    ratingFormContainer.hidden = false;
     ratingFormContainer.textContent = text;
   }
 
@@ -162,6 +198,15 @@
       return;
     }
     bulkRatingFormContainer.textContent = text;
+  }
+
+  function showRatingPanel(panelName) {
+    if (ratingFormContainer) {
+      ratingFormContainer.hidden = panelName === "bulk";
+    }
+    if (bulkRatingFormContainer) {
+      bulkRatingFormContainer.hidden = panelName !== "bulk";
+    }
   }
 
   function createDetailItem(label, value) {
@@ -195,10 +240,10 @@
   }
 
   function createAutoScoreBreakdownSection(grid) {
-    const section = document.createElement("section");
-    section.className = "auto-score-breakdown-section";
+    const section = document.createElement("details");
+    section.className = "selected-grid-panel-details auto-score-breakdown-section";
 
-    const heading = document.createElement("h4");
+    const heading = document.createElement("summary");
     heading.textContent = "自動採点理由";
     section.appendChild(heading);
 
@@ -282,14 +327,6 @@
     return heading;
   }
 
-  function createSelectedGridPosition(grid) {
-    const position = document.createElement("p");
-    position.textContent = `行 ${displayIndex(grid.row_index)} / 列 ${displayIndex(
-      grid.col_index
-    )}`;
-    return position;
-  }
-
   function selectedGridRangeText(grid) {
     return [
       `north ${formatCoordinate(grid.north)}`,
@@ -303,6 +340,10 @@
     const detailList = document.createElement("ul");
     detailList.className = "selected-grid-cell-detail-list";
     detailList.append(
+      createDetailItem(
+        "位置",
+        `行 ${displayIndex(grid.row_index)} / 列 ${displayIndex(grid.col_index)}`
+      ),
       createDetailItem("初期スコア", formatNumber(grid.initial_score)),
       createDetailItem("ユーザー平均スコア", formatNumber(grid.average_user_score)),
       createDetailItem("採点数", formatNumber(grid.rating_count)),
@@ -311,6 +352,53 @@
       createDetailItem("スコア更新日時", formatDateTime(grid.score_updated_at))
     );
     return detailList;
+  }
+
+  function createSelectedGridDetailDetails(grid) {
+    const details = document.createElement("details");
+    details.className = "selected-grid-panel-details";
+
+    const summary = document.createElement("summary");
+    summary.textContent = "グリッド詳細";
+
+    details.append(summary, createSelectedGridDetailList(grid));
+    return details;
+  }
+
+  function gridCommentText(grid) {
+    const commentCandidates = [
+      grid.comment,
+      grid.rating_comment,
+      grid.user_comment,
+      grid.current_user_comment,
+      grid.my_comment,
+      grid.latest_comment,
+      grid.rating?.comment,
+      grid.current_user_rating?.comment,
+      grid.my_rating?.comment,
+    ];
+    const comment = commentCandidates.find(
+      (value) =>
+        value !== null &&
+        value !== undefined &&
+        String(value).trim() !== ""
+    );
+    return comment ? String(comment).trim() : "コメントなし";
+  }
+
+  function createGridCommentDetails(grid) {
+    const details = document.createElement("details");
+    details.className = "selected-grid-panel-details selected-grid-comment-details";
+
+    const summary = document.createElement("summary");
+    summary.textContent = "コメント";
+
+    const commentText = document.createElement("p");
+    commentText.className = "selected-grid-comment-text";
+    commentText.textContent = gridCommentText(grid);
+
+    details.append(summary, commentText);
+    return details;
   }
 
   function renderSelectedGridDetail(grid) {
@@ -327,8 +415,8 @@
 
     selectedGridDetailElement.append(
       createSelectedGridHeading(grid),
-      createSelectedGridPosition(grid),
-      createSelectedGridDetailList(grid),
+      createSelectedGridDetailDetails(grid),
+      createGridCommentDetails(grid),
       createAutoScoreBreakdownSection(grid)
     );
   }
@@ -344,7 +432,7 @@
     item.className = "selected-grid-cell-summary-item";
 
     const summary = document.createElement("span");
-    summary.textContent = `マス #${textOrFallback(grid.id)}: ${[
+    summary.textContent = `#${textOrFallback(grid.id)}: ${[
       `行 ${displayIndex(grid.row_index)}`,
       `列 ${displayIndex(grid.col_index)}`,
       `表示スコア ${formatNumber(grid.calculated_score)}`,
@@ -363,13 +451,17 @@
   function renderMultipleSelectedGridSummary(grids) {
     selectedGridDetailElement.replaceChildren();
 
+    const commentNote = document.createElement("p");
+    commentNote.className = "selected-grid-comment-note";
+    commentNote.textContent = "コメントは1件選択時に表示します。";
+
     const list = document.createElement("ul");
     list.className = "selected-grid-cell-summary-list";
     grids.forEach((grid) => {
       list.appendChild(createSelectedGridSummaryItem(grid));
     });
 
-    selectedGridDetailElement.appendChild(list);
+    selectedGridDetailElement.append(commentNote, list);
   }
 
   function renderSelectedGridSelection(grids) {
@@ -525,18 +617,18 @@
 
     const mode = selectedMode(grids);
     if (mode === "none") {
-      setRatingFormMessage("マスを選択すると、採点フォームを表示します。");
+      showRatingPanel("single");
+      setRatingFormMessage("地図上のグリッドをクリックして選択してください。");
       return;
     }
 
     if (mode === "single") {
+      showRatingPanel("single");
       renderSingleRatingForm(grids[0], message, messageType);
       return;
     }
 
-    setRatingFormMessage(
-      "複数のマスを選択中です。単体採点フォームは1件選択時のみ使用できます。"
-    );
+    ratingFormContainer.replaceChildren();
   }
 
   function createBulkRatingForm(message, messageType) {
@@ -553,83 +645,6 @@
     return form;
   }
 
-  function createBulkRatingModeOption(value, labelText) {
-    const label = document.createElement("label");
-    const input = document.createElement("input");
-    input.type = "radio";
-    input.name = "bulk-rating-mode";
-    input.value = value;
-    input.checked = state.bulkRatingMode === value;
-    label.append(input, " ", labelText);
-    return label;
-  }
-
-  function createBulkRatingModeControls() {
-    const wrapper = document.createElement("div");
-    wrapper.className = "bulk-rating-mode-controls";
-
-    const heading = document.createElement("p");
-    heading.textContent = "採点方式";
-
-    const options = document.createElement("div");
-    options.className = "bulk-rating-mode-options";
-    options.append(
-      createBulkRatingModeOption("same", "全て同じ値で採点"),
-      createBulkRatingModeOption("individual", "マスごとに個別入力")
-    );
-
-    wrapper.append(heading, options);
-    return wrapper;
-  }
-
-  function createIndividualRatingItem(grid) {
-    const item = document.createElement("div");
-    item.className = "individual-rating-item";
-    item.dataset.individualRatingGridId = textOrFallback(grid.id, "");
-
-    const summary = document.createElement("p");
-    summary.className = "individual-rating-summary";
-    summary.textContent = `マス #${textOrFallback(grid.id)}: ${[
-      `行 ${displayIndex(grid.row_index)}`,
-      `列 ${displayIndex(grid.col_index)}`,
-      `表示スコア ${formatNumber(grid.calculated_score)}`,
-    ].join(" / ")}`;
-
-    const scoreLabel = createRatingScoreLabel();
-    const scoreInput = scoreLabel.querySelector('[name="score"]');
-    if (scoreInput) {
-      scoreInput.dataset.individualRatingScore = "";
-    }
-
-    const commentLabel = createRatingCommentLabel("任意入力");
-    const commentInput = commentLabel.querySelector('[name="comment"]');
-    if (commentInput) {
-      commentInput.dataset.individualRatingComment = "";
-    }
-
-    item.append(summary, scoreLabel, commentLabel);
-    return item;
-  }
-
-  function createIndividualBulkRatingForm(grids, message, messageType) {
-    const form = document.createElement("form");
-    form.className = "rating-form individual-bulk-rating-form";
-    form.dataset.individualBulkRatingForm = "";
-
-    const list = document.createElement("div");
-    list.className = "individual-rating-list";
-    grids.forEach((grid) => {
-      list.appendChild(createIndividualRatingItem(grid));
-    });
-
-    form.append(
-      list,
-      createRatingSubmitButton("個別採点を送信"),
-      createRatingStatus("bulkRatingFormStatus", message, messageType)
-    );
-    return form;
-  }
-
   function renderBulkRatingFormForSelection(grids, message = "", messageType = "") {
     if (!bulkRatingFormContainer) {
       return;
@@ -638,17 +653,14 @@
     bulkRatingFormContainer.replaceChildren();
 
     if (selectedMode(grids) !== "multiple") {
-      bulkRatingFormContainer.textContent =
-        "複数のマスを選択すると、一括採点フォームを表示します。";
+      bulkRatingFormContainer.hidden = true;
       return;
     }
 
+    showRatingPanel("bulk");
     bulkRatingFormContainer.append(
       createRatingTarget(`対象: ${grids.length}件のマス`),
-      createBulkRatingModeControls(),
-      state.bulkRatingMode === "individual"
-        ? createIndividualBulkRatingForm(grids, message, messageType)
-        : createBulkRatingForm(message, messageType)
+      createBulkRatingForm(message, messageType)
     );
   }
 
@@ -773,6 +785,12 @@
     }
   }
 
+  function bringExpandedMapAreaRectangleToFront() {
+    if (state.expandedMapAreaRectangle) {
+      state.expandedMapAreaRectangle.bringToFront();
+    }
+  }
+
   function updateSelectedMapGridState() {
     state.mapGridRectanglesById.forEach((rectangle, gridId) => {
       const grid = state.gridsById.get(gridId);
@@ -788,6 +806,23 @@
     });
 
     bringMapAreaRectangleToFront();
+
+    if (expandedMapIsOpen()) {
+      state.expandedMapGridRectanglesById.forEach((rectangle, gridId) => {
+        const grid = state.gridsById.get(gridId);
+        if (!grid) {
+          return;
+        }
+
+        const isSelected = state.selectedGridIds.has(gridId);
+        applyGridRectangleStyle(grid, rectangle, isSelected);
+        if (isSelected) {
+          rectangle.bringToFront();
+        }
+      });
+
+      bringExpandedMapAreaRectangleToFront();
+    }
   }
 
   function readGridOpacityScaleValue() {
@@ -801,8 +836,16 @@
     return Math.min(Math.max(inputValue, 0), 100);
   }
 
+  function updateGridOpacityScaleValueText() {
+    if (!gridOpacityScaleValueElement) {
+      return;
+    }
+    gridOpacityScaleValueElement.textContent = String(state.gridOpacityScaleValue);
+  }
+
   function updateGridOpacityScale() {
     state.gridOpacityScaleValue = readGridOpacityScaleValue();
+    updateGridOpacityScaleValueText();
     updateSelectedMapGridState();
   }
 
@@ -867,6 +910,7 @@
   function renderEmptyGridList() {
     setMessage("このメモグリッドには、まだグリッドがありません。");
     setSelectedGridDetail("表示できるマスがありません。");
+    showRatingPanel("single");
     setRatingFormMessage("表示できるマスがないため、採点フォームは表示できません。");
     setBulkRatingFormMessage(
       "表示できるマスがないため、一括採点フォームは表示できません。"
@@ -883,6 +927,7 @@
     clearMapGridBoundaries();
     setMessage(`グリッドを取得できませんでした。${error.message}`, "error");
     setSelectedGridDetail("グリッドを取得できなかったため、マスを選択できません。");
+    showRatingPanel("single");
     setRatingFormMessage(
       "グリッドを取得できなかったため、採点フォームは表示できません。"
     );
@@ -1045,6 +1090,31 @@
     ];
   }
 
+  function boundsCenter(bounds) {
+    if (!Array.isArray(bounds) || bounds.length !== 2) {
+      return null;
+    }
+
+    const south = Number(bounds[0][0]);
+    const west = Number(bounds[0][1]);
+    const north = Number(bounds[1][0]);
+    const east = Number(bounds[1][1]);
+
+    if (
+      !Number.isFinite(north) ||
+      !Number.isFinite(south) ||
+      !Number.isFinite(east) ||
+      !Number.isFinite(west)
+    ) {
+      return null;
+    }
+
+    return [
+      (north + south) / 2,
+      (east + west) / 2,
+    ];
+  }
+
   function gridCellCenter(grid) {
     const north = Number(grid.north);
     const south = Number(grid.south);
@@ -1096,59 +1166,59 @@
     return bounds ? window.L.latLngBounds(bounds) : null;
   }
 
-  function cleanupDragSelection() {
-    if (state.selectionDrag.rectangle) {
-      state.selectionDrag.rectangle.remove();
+  function cleanupDragSelection(leafletMap, dragState) {
+    if (dragState.rectangle) {
+      dragState.rectangle.remove();
     }
 
     if (
-      state.leafletMap &&
-      state.leafletMap.dragging &&
-      state.selectionDrag.wasMapDraggingEnabled
+      leafletMap &&
+      leafletMap.dragging &&
+      dragState.wasMapDraggingEnabled
     ) {
-      state.leafletMap.dragging.enable();
+      leafletMap.dragging.enable();
     }
 
-    state.selectionDrag.isDragging = false;
-    state.selectionDrag.startLatLng = null;
-    state.selectionDrag.rectangle = null;
-    state.selectionDrag.wasMapDraggingEnabled = true;
+    dragState.isDragging = false;
+    dragState.startLatLng = null;
+    dragState.rectangle = null;
+    dragState.wasMapDraggingEnabled = true;
   }
 
-  function startDragSelection(latlng) {
-    if (!state.leafletMap || !leafletAvailable() || !latlng) {
+  function startDragSelection(leafletMap, dragState, latlng) {
+    if (!leafletMap || !leafletAvailable() || !latlng) {
       return;
     }
 
-    cleanupDragSelection();
-    state.selectionDrag.isDragging = true;
-    state.selectionDrag.startLatLng = latlng;
-    state.selectionDrag.wasMapDraggingEnabled =
-      Boolean(state.leafletMap.dragging && state.leafletMap.dragging.enabled());
+    cleanupDragSelection(leafletMap, dragState);
+    dragState.isDragging = true;
+    dragState.startLatLng = latlng;
+    dragState.wasMapDraggingEnabled =
+      Boolean(leafletMap.dragging && leafletMap.dragging.enabled());
 
-    if (state.leafletMap.dragging) {
-      state.leafletMap.dragging.disable();
+    if (leafletMap.dragging) {
+      leafletMap.dragging.disable();
     }
 
     const bounds = boundsFromLatLngs(latlng, latlng);
-    state.selectionDrag.rectangle = window.L.rectangle(bounds, selectionDragStyle())
-      .addTo(state.leafletMap);
+    dragState.rectangle = window.L.rectangle(bounds, selectionDragStyle())
+      .addTo(leafletMap);
   }
 
-  function updateDragSelection(latlng) {
+  function updateDragSelection(dragState, latlng) {
     if (
-      !state.selectionDrag.isDragging ||
-      !state.selectionDrag.rectangle ||
-      !state.selectionDrag.startLatLng
+      !dragState.isDragging ||
+      !dragState.rectangle ||
+      !dragState.startLatLng
     ) {
       return;
     }
 
-    const bounds = boundsFromLatLngs(state.selectionDrag.startLatLng, latlng);
+    const bounds = boundsFromLatLngs(dragState.startLatLng, latlng);
     if (!bounds) {
       return;
     }
-    state.selectionDrag.rectangle.setBounds(bounds);
+    dragState.rectangle.setBounds(bounds);
   }
 
   function gridIdsIntersectingBounds(selectionBounds) {
@@ -1167,16 +1237,23 @@
     return gridIds;
   }
 
-  function finishDragSelection() {
-    if (!state.selectionDrag.isDragging || !state.selectionDrag.rectangle) {
-      cleanupDragSelection();
+  function suppressDragClick(dragState) {
+    dragState.suppressNextClick = true;
+    window.setTimeout(() => {
+      dragState.suppressNextClick = false;
+    }, 200);
+  }
+
+  function finishDragSelection(leafletMap, dragState) {
+    if (!dragState.isDragging || !dragState.rectangle) {
+      cleanupDragSelection(leafletMap, dragState);
       return;
     }
 
-    const selectionBounds = state.selectionDrag.rectangle.getBounds();
+    const selectionBounds = dragState.rectangle.getBounds();
     const selectedGridIds = gridIdsIntersectingBounds(selectionBounds);
 
-    cleanupDragSelection();
+    cleanupDragSelection(leafletMap, dragState);
 
     if (selectedGridIds.length === 0) {
       return;
@@ -1186,32 +1263,26 @@
       state.selectedGridIds.add(gridId);
     });
     state.selectedGridId = selectedGridIds[selectedGridIds.length - 1];
-    state.selectionDrag.suppressNextClick = true;
-    window.setTimeout(() => {
-      state.selectionDrag.suppressNextClick = false;
-    }, 200);
+    suppressDragClick(dragState);
     renderSelectionState();
   }
 
-  function cancelDragSelection() {
-    if (!state.selectionDrag.isDragging) {
+  function cancelDragSelection(leafletMap, dragState) {
+    if (!dragState.isDragging) {
       return;
     }
 
-    cleanupDragSelection();
-    state.selectionDrag.suppressNextClick = true;
-    window.setTimeout(() => {
-      state.selectionDrag.suppressNextClick = false;
-    }, 200);
+    cleanupDragSelection(leafletMap, dragState);
+    suppressDragClick(dragState);
   }
 
-  function registerDragSelectionHandlers() {
-    if (!state.leafletMap || state.leafletMap._gridDragSelectionRegistered) {
+  function registerDragSelectionHandlers(leafletMap, dragState) {
+    if (!leafletMap || leafletMap._gridDragSelectionRegistered) {
       return;
     }
 
-    state.leafletMap._gridDragSelectionRegistered = true;
-    state.leafletMap.on("mousedown", (event) => {
+    leafletMap._gridDragSelectionRegistered = true;
+    leafletMap.on("mousedown", (event) => {
       if (!event.originalEvent || !event.originalEvent.shiftKey) {
         return;
       }
@@ -1222,34 +1293,48 @@
         event.originalEvent.stopPropagation();
       }
 
-      startDragSelection(event.latlng);
+      startDragSelection(leafletMap, dragState, event.latlng);
     });
 
-    state.leafletMap.on("mousemove", (event) => {
-      updateDragSelection(event.latlng);
+    leafletMap.on("mousemove", (event) => {
+      updateDragSelection(dragState, event.latlng);
     });
 
-    state.leafletMap.on("mouseup", () => {
-      finishDragSelection();
-    });
-
-    document.addEventListener("mouseup", () => {
-      if (state.selectionDrag.isDragging) {
-        finishDragSelection();
-      }
-    });
-
-    document.addEventListener("keydown", (event) => {
-      if (event.key !== "Escape") {
-        return;
-      }
-
-      cancelDragSelection();
+    leafletMap.on("mouseup", () => {
+      finishDragSelection(leafletMap, dragState);
     });
   }
 
-  function createLeafletMap() {
-    state.leafletMap = window.L.map(mapPreviewElement, {
+  function finishActiveDragSelections() {
+    if (state.normalSelectionDrag.isDragging) {
+      finishDragSelection(state.leafletMap, state.normalSelectionDrag);
+    }
+    if (state.expandedSelectionDrag.isDragging) {
+      finishDragSelection(state.expandedLeafletMap, state.expandedSelectionDrag);
+    }
+  }
+
+  function cancelActiveDragSelections() {
+    cancelDragSelection(state.leafletMap, state.normalSelectionDrag);
+    cancelDragSelection(state.expandedLeafletMap, state.expandedSelectionDrag);
+  }
+
+  function registerDocumentDragSelectionHandlers() {
+    if (state.documentDragSelectionHandlersRegistered) {
+      return;
+    }
+
+    state.documentDragSelectionHandlersRegistered = true;
+    document.addEventListener("mouseup", finishActiveDragSelections);
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        cancelActiveDragSelections();
+      }
+    });
+  }
+
+  function createBaseLeafletMap(element) {
+    const leafletMap = window.L.map(element, {
       scrollWheelZoom: false,
       boxZoom: false,
       zoomSnap: 0.25,
@@ -1260,15 +1345,40 @@
       maxZoom: 19,
       attribution:
         '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-    }).addTo(state.leafletMap);
+    }).addTo(leafletMap);
 
+    return leafletMap;
+  }
+
+  function createLeafletMap() {
+    state.leafletMap = createBaseLeafletMap(mapPreviewElement);
     state.leafletMap.on("zoomend", updateMapScoreLabelSize);
-    registerDragSelectionHandlers();
+    registerDragSelectionHandlers(state.leafletMap, state.normalSelectionDrag);
+    registerDocumentDragSelectionHandlers();
   }
 
   function ensureLeafletMap() {
     if (!state.leafletMap) {
       createLeafletMap();
+    }
+  }
+
+  function createExpandedLeafletMap() {
+    state.expandedLeafletMap = createBaseLeafletMap(expandedMapPreviewElement);
+    state.expandedLeafletMap.on("zoomend", updateExpandedMapScoreLabelSize);
+    registerDragSelectionHandlers(
+      state.expandedLeafletMap,
+      state.expandedSelectionDrag
+    );
+    registerDocumentDragSelectionHandlers();
+  }
+
+  function ensureExpandedLeafletMap() {
+    if (!expandedMapPreviewElement || !leafletAvailable()) {
+      return;
+    }
+    if (!state.expandedLeafletMap) {
+      createExpandedLeafletMap();
     }
   }
 
@@ -1316,23 +1426,34 @@
     return "is-medium-score-label";
   }
 
-  function updateMapScoreLabelSize() {
-    if (!state.leafletMap || !mapPreviewElement) {
+  function updateScoreLabelSizeForMap(leafletMap, mapElement) {
+    if (!leafletMap || !mapElement) {
       return;
     }
 
-    const sizeClass = scoreLabelSizeClass(state.leafletMap.getZoom());
-    mapPreviewElement.classList.toggle(
+    const sizeClass = scoreLabelSizeClass(leafletMap.getZoom());
+    mapElement.classList.toggle(
       "is-small-score-label",
       sizeClass === "is-small-score-label"
     );
-    mapPreviewElement.classList.toggle(
+    mapElement.classList.toggle(
       "is-medium-score-label",
       sizeClass === "is-medium-score-label"
     );
-    mapPreviewElement.classList.toggle(
+    mapElement.classList.toggle(
       "is-large-score-label",
       sizeClass === "is-large-score-label"
+    );
+  }
+
+  function updateMapScoreLabelSize() {
+    updateScoreLabelSizeForMap(state.leafletMap, mapPreviewElement);
+  }
+
+  function updateExpandedMapScoreLabelSize() {
+    updateScoreLabelSizeForMap(
+      state.expandedLeafletMap,
+      expandedMapPreviewElement
     );
   }
 
@@ -1365,6 +1486,7 @@
       state.gridBoundaryLayer.clearLayers();
     }
     clearMapScoreLabels();
+    clearRatedGridMarkers();
     state.mapGridRectanglesById = new Map();
   }
 
@@ -1394,6 +1516,183 @@
     }
   }
 
+  function mapRatedGridMarkerLayer() {
+    if (!state.leafletMap || !leafletAvailable()) {
+      return null;
+    }
+    if (!state.ratedGridMarkerLayer) {
+      state.ratedGridMarkerLayer = window.L.layerGroup().addTo(state.leafletMap);
+    }
+    return state.ratedGridMarkerLayer;
+  }
+
+  function clearRatedGridMarkers() {
+    if (state.ratedGridMarkerLayer) {
+      state.ratedGridMarkerLayer.clearLayers();
+    }
+  }
+
+  function expandedMapGridBoundaryLayer() {
+    if (!state.expandedLeafletMap || !leafletAvailable()) {
+      return null;
+    }
+    if (!state.expandedGridBoundaryLayer) {
+      state.expandedGridBoundaryLayer = window.L.layerGroup().addTo(
+        state.expandedLeafletMap
+      );
+    }
+    return state.expandedGridBoundaryLayer;
+  }
+
+  function expandedMapScoreLabelLayer() {
+    if (!state.expandedLeafletMap || !leafletAvailable()) {
+      return null;
+    }
+    if (!state.expandedScoreLabelLayer) {
+      state.expandedScoreLabelLayer = window.L.layerGroup().addTo(
+        state.expandedLeafletMap
+      );
+    }
+    return state.expandedScoreLabelLayer;
+  }
+
+  function clearExpandedMapScoreLabels() {
+    if (state.expandedScoreLabelLayer) {
+      state.expandedScoreLabelLayer.clearLayers();
+    }
+  }
+
+  function expandedMapRatedGridMarkerLayer() {
+    if (!state.expandedLeafletMap || !leafletAvailable()) {
+      return null;
+    }
+    if (!state.expandedRatedGridMarkerLayer) {
+      state.expandedRatedGridMarkerLayer = window.L.layerGroup().addTo(
+        state.expandedLeafletMap
+      );
+    }
+    return state.expandedRatedGridMarkerLayer;
+  }
+
+  function clearExpandedRatedGridMarkers() {
+    if (state.expandedRatedGridMarkerLayer) {
+      state.expandedRatedGridMarkerLayer.clearLayers();
+    }
+  }
+
+  function clearExpandedMapGridBoundaries() {
+    if (state.expandedGridBoundaryLayer) {
+      state.expandedGridBoundaryLayer.clearLayers();
+    }
+    clearExpandedMapScoreLabels();
+    clearExpandedRatedGridMarkers();
+    state.expandedMapGridRectanglesById = new Map();
+  }
+
+  function resetExpandedMapState() {
+    state.expandedLeafletMap = null;
+    state.expandedMapAreaRectangle = null;
+    state.expandedGridBoundaryLayer = null;
+    state.expandedScoreLabelLayer = null;
+    state.expandedRatedGridMarkerLayer = null;
+    state.expandedMapGridRectanglesById = new Map();
+    state.expandedSelectionDrag.suppressNextClick = false;
+  }
+
+  function destroyExpandedMap() {
+    const expandedLeafletMap = state.expandedLeafletMap;
+    cleanupDragSelection(expandedLeafletMap, state.expandedSelectionDrag);
+    resetExpandedMapState();
+
+    if (expandedLeafletMap) {
+      expandedLeafletMap.remove();
+    }
+  }
+
+  function drawExpandedMapAreaRectangle(bounds) {
+    if (!state.expandedLeafletMap) {
+      return;
+    }
+    if (state.expandedMapAreaRectangle) {
+      state.expandedMapAreaRectangle.remove();
+    }
+
+    state.expandedMapAreaRectangle = window.L.rectangle(bounds, {
+      color: "#176f5c",
+      weight: 2,
+      fill: false,
+      interactive: false,
+    }).addTo(state.expandedLeafletMap);
+  }
+
+  function fitExpandedMapAreaBounds(bounds) {
+    if (!state.expandedLeafletMap) {
+      return;
+    }
+    state.expandedLeafletMap.invalidateSize();
+    state.expandedLeafletMap.fitBounds(bounds, {
+      padding: [18, 18],
+      maxZoom: 19,
+    });
+    state.expandedLeafletMap.invalidateSize();
+    updateExpandedMapScoreLabelSize();
+  }
+
+  function refreshExpandedMapLayout(bounds) {
+    if (!state.expandedLeafletMap) {
+      return;
+    }
+    fitExpandedMapAreaBounds(bounds);
+
+    window.setTimeout(() => {
+      if (!state.expandedLeafletMap || !expandedMapIsOpen()) {
+        return;
+      }
+      fitExpandedMapAreaBounds(bounds);
+    }, 80);
+  }
+
+  function expandedMapPreviewHasSize() {
+    if (!expandedMapPreviewElement) {
+      return false;
+    }
+    return (
+      expandedMapPreviewElement.clientWidth > 0 &&
+      expandedMapPreviewElement.clientHeight > 0
+    );
+  }
+
+  function waitForExpandedMapPreviewSize(callback, attempts = 0) {
+    if (!expandedMapIsOpen()) {
+      return;
+    }
+
+    if (expandedMapPreviewHasSize() || attempts >= 8) {
+      callback();
+      return;
+    }
+
+    window.setTimeout(() => {
+      waitForExpandedMapPreviewSize(callback, attempts + 1);
+    }, 50);
+  }
+
+  function prepareExpandedBaseMap(bounds) {
+    ensureExpandedLeafletMap();
+
+    if (!state.expandedLeafletMap) {
+      return;
+    }
+
+    const center = boundsCenter(bounds);
+    if (center) {
+      state.expandedLeafletMap.setView(center, 13, {
+        animate: false,
+      });
+    }
+    state.expandedLeafletMap.invalidateSize();
+  }
+
   function createMapScoreLabel(grid, center) {
     return window.L.marker(center, {
       interactive: false,
@@ -1409,6 +1708,10 @@
 
   function renderMapScoreLabels(grids) {
     clearMapScoreLabels();
+
+    if (!state.scoreLabelsVisible) {
+      return;
+    }
 
     if (!Array.isArray(grids) || grids.length === 0) {
       return;
@@ -1430,15 +1733,176 @@
     updateMapScoreLabelSize();
   }
 
+  function renderExpandedMapScoreLabels(grids) {
+    if (!expandedMapIsOpen()) {
+      return;
+    }
+
+    clearExpandedMapScoreLabels();
+
+    if (!state.scoreLabelsVisible) {
+      return;
+    }
+
+    if (!Array.isArray(grids) || grids.length === 0) {
+      return;
+    }
+
+    const labelLayer = expandedMapScoreLabelLayer();
+    if (!labelLayer) {
+      return;
+    }
+
+    grids.forEach((grid) => {
+      const center = gridCellCenter(grid);
+      if (!center) {
+        return;
+      }
+
+      createMapScoreLabel(grid, center).addTo(labelLayer);
+    });
+    updateExpandedMapScoreLabelSize();
+  }
+
+  function updateScoreLabelVisibility() {
+    if (scoreLabelToggleInput) {
+      state.scoreLabelsVisible = scoreLabelToggleInput.checked;
+    }
+    const grids = Array.from(state.gridsById.values());
+    renderMapScoreLabels(grids);
+    if (expandedMapIsOpen()) {
+      renderExpandedMapScoreLabels(grids);
+    }
+  }
+
+  function ratedGridMarkerPosition(grid) {
+    const north = Number(grid.north);
+    const south = Number(grid.south);
+    const east = Number(grid.east);
+    const west = Number(grid.west);
+
+    if (
+      !Number.isFinite(north) ||
+      !Number.isFinite(south) ||
+      !Number.isFinite(east) ||
+      !Number.isFinite(west) ||
+      north <= south ||
+      east <= west
+    ) {
+      return null;
+    }
+
+    return [
+      north - (north - south) * 0.12,
+      east - (east - west) * 0.12,
+    ];
+  }
+
+  function createRatedGridMarker(position) {
+    return window.L.marker(position, {
+      interactive: false,
+      keyboard: false,
+      icon: window.L.divIcon({
+        className: "map-rated-grid-marker",
+        html: "<span>✓</span>",
+        iconSize: [20, 20],
+        iconAnchor: [10, 10],
+      }),
+    });
+  }
+
+  function renderRatedGridMarkers(grids) {
+    clearRatedGridMarkers();
+
+    if (!state.ratedGridMarkersVisible) {
+      return;
+    }
+
+    if (!Array.isArray(grids) || grids.length === 0) {
+      return;
+    }
+
+    const markerLayer = mapRatedGridMarkerLayer();
+    if (!markerLayer) {
+      return;
+    }
+
+    grids.forEach((grid) => {
+      if (!grid.current_user_has_rating) {
+        return;
+      }
+
+      const position = ratedGridMarkerPosition(grid);
+      if (!position) {
+        return;
+      }
+
+      createRatedGridMarker(position).addTo(markerLayer);
+    });
+  }
+
+  function renderExpandedRatedGridMarkers(grids) {
+    if (!expandedMapIsOpen()) {
+      return;
+    }
+
+    clearExpandedRatedGridMarkers();
+
+    if (!state.ratedGridMarkersVisible) {
+      return;
+    }
+
+    if (!Array.isArray(grids) || grids.length === 0) {
+      return;
+    }
+
+    const markerLayer = expandedMapRatedGridMarkerLayer();
+    if (!markerLayer) {
+      return;
+    }
+
+    grids.forEach((grid) => {
+      if (!grid.current_user_has_rating) {
+        return;
+      }
+
+      const position = ratedGridMarkerPosition(grid);
+      if (!position) {
+        return;
+      }
+
+      createRatedGridMarker(position).addTo(markerLayer);
+    });
+  }
+
+  function updateRatedGridMarkerVisibility() {
+    if (ratedGridToggleInput) {
+      state.ratedGridMarkersVisible = ratedGridToggleInput.checked;
+    }
+    const grids = Array.from(state.gridsById.values());
+    renderRatedGridMarkers(grids);
+    if (expandedMapIsOpen()) {
+      renderExpandedRatedGridMarkers(grids);
+    }
+  }
+
   function gridIdForMap(grid) {
     const gridId = Number(grid.id);
     return Number.isFinite(gridId) ? gridId : null;
   }
 
+  function dragStateForMapEvent(event) {
+    if (event.target === state.expandedLeafletMap) {
+      return state.expandedSelectionDrag;
+    }
+    return state.normalSelectionDrag;
+  }
+
   function handleMapGridClick(gridId, event) {
     const originalEvent = event.originalEvent;
+    const dragState = dragStateForMapEvent(event);
     if (
-      state.selectionDrag.suppressNextClick ||
+      dragState.suppressNextClick ||
       (originalEvent && originalEvent.shiftKey)
     ) {
       return;
@@ -1452,6 +1916,20 @@
   }
 
   function createMapGridRectangle(grid, gridId, bounds) {
+    const rectangle = window.L.rectangle(bounds, {
+      ...selectedMapGridStyle(gridId, grid),
+      interactive: true,
+      className: "map-preview-grid-boundary",
+    });
+
+    rectangle.on("click", (event) => {
+      handleMapGridClick(gridId, event);
+    });
+
+    return rectangle;
+  }
+
+  function createExpandedMapGridRectangle(grid, gridId, bounds) {
     const rectangle = window.L.rectangle(bounds, {
       ...selectedMapGridStyle(gridId, grid),
       interactive: true,
@@ -1482,6 +1960,53 @@
     state.mapGridRectanglesById.set(gridId, rectangle);
   }
 
+  function renderExpandedMapGridBoundary(grid, boundaryLayer) {
+    const bounds = gridCellBounds(grid);
+    if (!bounds) {
+      return;
+    }
+
+    const gridId = gridIdForMap(grid);
+    if (gridId === null) {
+      return;
+    }
+
+    const rectangle = createExpandedMapGridRectangle(grid, gridId, bounds).addTo(
+      boundaryLayer
+    );
+    state.expandedMapGridRectanglesById.set(gridId, rectangle);
+  }
+
+  function renderExpandedMapGridBoundaries(grids) {
+    if (!expandedMapIsOpen()) {
+      return;
+    }
+
+    clearExpandedMapGridBoundaries();
+
+    if (!state.expandedLeafletMap) {
+      return;
+    }
+
+    if (!Array.isArray(grids) || grids.length === 0) {
+      bringExpandedMapAreaRectangleToFront();
+      return;
+    }
+
+    const boundaryLayer = expandedMapGridBoundaryLayer();
+    if (!boundaryLayer) {
+      return;
+    }
+
+    grids.forEach((grid) => {
+      renderExpandedMapGridBoundary(grid, boundaryLayer);
+    });
+
+    updateSelectedMapGridState();
+    renderExpandedMapScoreLabels(grids);
+    renderExpandedRatedGridMarkers(grids);
+  }
+
   function renderMapGridBoundaries(grids) {
     clearMapGridBoundaries();
 
@@ -1502,6 +2027,146 @@
 
     updateSelectedMapGridState();
     renderMapScoreLabels(grids);
+    renderRatedGridMarkers(grids);
+    if (expandedMapIsOpen()) {
+      renderExpandedMapGridBoundaries(grids);
+    }
+  }
+
+  function normalMapReady() {
+    return Boolean(state.leafletMap);
+  }
+
+  function zoomNormalMapOut() {
+    if (!normalMapReady()) {
+      return;
+    }
+
+    state.leafletMap.zoomOut();
+  }
+
+  function zoomNormalMapIn() {
+    if (!normalMapReady()) {
+      return;
+    }
+
+    state.leafletMap.zoomIn();
+  }
+
+  function fitNormalMapToArea() {
+    if (!normalMapReady()) {
+      return;
+    }
+
+    const bounds = readMapAreaBounds();
+    if (!bounds) {
+      return;
+    }
+
+    fitMapAreaBounds(bounds);
+    updateMapScoreLabelSize();
+  }
+
+  function expandedMapIsOpen() {
+    return expandedMapModalElement && !expandedMapModalElement.hidden;
+  }
+
+  function expandedMapReady() {
+    return expandedMapIsOpen() && state.expandedLeafletMap;
+  }
+
+  function zoomExpandedMapOut() {
+    if (!expandedMapReady()) {
+      return;
+    }
+
+    state.expandedLeafletMap.zoomOut();
+  }
+
+  function zoomExpandedMapIn() {
+    if (!expandedMapReady()) {
+      return;
+    }
+
+    state.expandedLeafletMap.zoomIn();
+  }
+
+  function fitExpandedMapToArea() {
+    if (!expandedMapReady()) {
+      return;
+    }
+
+    const bounds = readMapAreaBounds();
+    if (!bounds) {
+      return;
+    }
+
+    refreshExpandedMapLayout(bounds);
+  }
+
+  function openExpandedMapPreview() {
+    if (!expandedMapModalElement || !expandedMapPreviewElement) {
+      return;
+    }
+
+    if (!leafletAvailable()) {
+      setMapPreviewStatus("地図ライブラリを読み込めませんでした。", "error");
+      return;
+    }
+
+    const bounds = readMapAreaBounds();
+    if (!bounds) {
+      setMapPreviewStatus("メモグリッド範囲を拡大表示できません。", "error");
+      return;
+    }
+
+    expandedMapModalElement.hidden = false;
+    document.body.classList.add("is-expanded-map-open");
+
+    window.requestAnimationFrame(() => {
+      if (!expandedMapIsOpen()) {
+        return;
+      }
+
+      waitForExpandedMapPreviewSize(() => {
+        prepareExpandedBaseMap(bounds);
+
+        window.setTimeout(() => {
+          if (!expandedMapIsOpen() || !state.expandedLeafletMap) {
+            return;
+          }
+
+          drawExpandedMapAreaRectangle(bounds);
+          renderExpandedMapGridBoundaries(Array.from(state.gridsById.values()));
+          refreshExpandedMapLayout(bounds);
+        }, 80);
+      });
+
+      if (closeExpandedMapButton) {
+        closeExpandedMapButton.focus();
+      }
+    });
+  }
+
+  function closeExpandedMapPreview() {
+    if (!expandedMapModalElement || expandedMapModalElement.hidden) {
+      return;
+    }
+
+    expandedMapModalElement.hidden = true;
+    document.body.classList.remove("is-expanded-map-open");
+    destroyExpandedMap();
+
+    if (state.leafletMap) {
+      window.setTimeout(() => {
+        state.leafletMap.invalidateSize();
+        updateMapScoreLabelSize();
+      }, 0);
+    }
+
+    if (expandMapPreviewButton) {
+      expandMapPreviewButton.focus();
+    }
   }
 
   function shareUsername(share) {
@@ -1737,35 +2402,6 @@
     };
   }
 
-  function readIndividualBulkRatingForm(form) {
-    const items = Array.from(form.querySelectorAll("[data-individual-rating-grid-id]"));
-    if (items.length < 2) {
-      throw new Error("個別採点するには、2件以上のマスを選択してください。");
-    }
-
-    return items.map((item) => {
-      const gridId = Number(item.dataset.individualRatingGridId);
-      const scoreInput = item.querySelector("[data-individual-rating-score]");
-      const commentInput = item.querySelector("[data-individual-rating-comment]");
-      const score = Number(scoreInput ? scoreInput.value : "");
-
-      if (!Number.isFinite(gridId) || !state.gridsById.has(gridId)) {
-        throw new Error("採点対象のマスが見つかりません。");
-      }
-      if (!Number.isInteger(score) || score < 1 || score > 10) {
-        throw new Error(`マス #${gridId} のスコアは 1 から 10 の整数で入力してください。`);
-      }
-
-      return {
-        gridId,
-        payload: {
-          score,
-          comment: commentInput ? commentInput.value : "",
-        },
-      };
-    });
-  }
-
   async function submitBulkRating(form) {
     const submitButton = form.querySelector('button[type="submit"]');
     let payload;
@@ -1800,62 +2436,6 @@
       setBulkRatingFormStatus(`一括採点に失敗しました。${error.message}`, "error");
     } finally {
       hidePageLoading();
-    }
-  }
-
-  async function submitIndividualBulkRating(form) {
-    const submitButton = form.querySelector('button[type="submit"]');
-    let ratings;
-    try {
-      ratings = readIndividualBulkRatingForm(form);
-    } catch (error) {
-      setBulkRatingFormStatus(error.message, "error");
-      return;
-    }
-
-    const submittedGridIds = new Set(ratings.map((rating) => rating.gridId));
-    const submittedPrimaryGridId = state.selectedGridId;
-    const failures = [];
-    let successCount = 0;
-
-    if (submitButton) {
-      submitButton.disabled = true;
-    }
-    setBulkRatingFormStatus("個別採点を送信しています。");
-    showPageLoading();
-
-    for (const rating of ratings) {
-      try {
-        await api.submitRating(rating.gridId, rating.payload);
-        successCount += 1;
-      } catch (error) {
-        failures.push({ gridId: rating.gridId, message: error.message });
-      }
-    }
-
-    const failedCount = failures.length;
-    const firstFailure = failures[0];
-    const message = failedCount === 0
-      ? "選択中のマスを個別採点しました。"
-      : successCount > 0
-        ? `${successCount}件の採点に成功し、${failedCount}件の採点に失敗しました。`
-        : `個別採点に失敗しました。${firstFailure ? firstFailure.message : ""}`;
-    const messageType = failedCount === 0 ? "success" : "error";
-
-    try {
-      await loadGridCells({
-        selectedGridId: submittedPrimaryGridId,
-        selectedGridIds: submittedGridIds,
-        bulkRatingMessage: message,
-        bulkRatingMessageType: messageType,
-      });
-    } catch (error) {
-      setBulkRatingFormStatus(error.message, "error");
-    } finally {
-      hidePageLoading();
-      if (submitButton) {
-        submitButton.disabled = false;
-      }
     }
   }
 
@@ -1905,10 +2485,86 @@
       });
     }
 
+    if (expandMapPreviewButton) {
+      expandMapPreviewButton.addEventListener("click", () => {
+        openExpandedMapPreview();
+      });
+    }
+
+    if (mapPreviewZoomOutButton) {
+      mapPreviewZoomOutButton.addEventListener("click", () => {
+        zoomNormalMapOut();
+      });
+    }
+
+    if (mapPreviewZoomInButton) {
+      mapPreviewZoomInButton.addEventListener("click", () => {
+        zoomNormalMapIn();
+      });
+    }
+
+    if (mapPreviewFitBoundsButton) {
+      mapPreviewFitBoundsButton.addEventListener("click", () => {
+        fitNormalMapToArea();
+      });
+    }
+
+    if (closeExpandedMapButton) {
+      closeExpandedMapButton.addEventListener("click", () => {
+        closeExpandedMapPreview();
+      });
+    }
+
+    if (expandedMapModalElement) {
+      expandedMapModalElement.addEventListener("click", (event) => {
+        if (event.target.closest("[data-expanded-map-close]")) {
+          closeExpandedMapPreview();
+        }
+      });
+
+      document.addEventListener("keydown", (event) => {
+        if (event.key !== "Escape" || !expandedMapIsOpen()) {
+          return;
+        }
+
+        event.preventDefault();
+        closeExpandedMapPreview();
+      });
+    }
+
+    if (expandedMapZoomOutButton) {
+      expandedMapZoomOutButton.addEventListener("click", () => {
+        zoomExpandedMapOut();
+      });
+    }
+
+    if (expandedMapZoomInButton) {
+      expandedMapZoomInButton.addEventListener("click", () => {
+        zoomExpandedMapIn();
+      });
+    }
+
+    if (expandedMapFitBoundsButton) {
+      expandedMapFitBoundsButton.addEventListener("click", () => {
+        fitExpandedMapToArea();
+      });
+    }
+
     if (gridOpacityScaleInput) {
       state.gridOpacityScaleValue = readGridOpacityScaleValue();
+      updateGridOpacityScaleValueText();
       gridOpacityScaleInput.addEventListener("input", updateGridOpacityScale);
       gridOpacityScaleInput.addEventListener("change", updateGridOpacityScale);
+    }
+
+    if (scoreLabelToggleInput) {
+      state.scoreLabelsVisible = scoreLabelToggleInput.checked;
+      scoreLabelToggleInput.addEventListener("change", updateScoreLabelVisibility);
+    }
+
+    if (ratedGridToggleInput) {
+      state.ratedGridMarkersVisible = ratedGridToggleInput.checked;
+      ratedGridToggleInput.addEventListener("change", updateRatedGridMarkerVisibility);
     }
 
     if (selectedGridDetailElement) {
@@ -1935,23 +2591,8 @@
     }
 
     if (bulkRatingFormContainer) {
-      bulkRatingFormContainer.addEventListener("change", (event) => {
-        if (!event.target.matches('[name="bulk-rating-mode"]')) {
-          return;
-        }
-
-        state.bulkRatingMode = event.target.value;
-        renderSelectionState();
-      });
-
       bulkRatingFormContainer.addEventListener("submit", (event) => {
         event.preventDefault();
-        const individualForm = event.target.closest("[data-individual-bulk-rating-form]");
-        if (individualForm) {
-          submitIndividualBulkRating(individualForm);
-          return;
-        }
-
         const form = event.target.closest("[data-bulk-rating-form]");
         if (!form) {
           return;

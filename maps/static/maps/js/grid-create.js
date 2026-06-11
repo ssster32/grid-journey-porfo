@@ -300,7 +300,6 @@
       initial_score_mode: initialScoreSettings.initial_score_mode,
       rows,
       cols,
-      source: fieldValue("source"),
     };
   }
 
@@ -333,7 +332,6 @@
         cols: "横方向のマス数",
         initial_score_mode: "初期スコア設定",
         region_feature_level: "初期スコア設定",
-        source: "取得元・メモ",
         non_field_errors: "入力内容",
       };
       return Object.entries(data)

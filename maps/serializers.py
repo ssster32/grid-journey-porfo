@@ -122,6 +122,8 @@ class MapAreaListSerializer(MapAreaSerializer):
     display_type = serializers.SerializerMethodField()
     is_owner = serializers.SerializerMethodField()
     created_by_username = serializers.SerializerMethodField()
+    map_grid_rows = serializers.SerializerMethodField()
+    map_grid_cols = serializers.SerializerMethodField()
 
     class Meta(MapAreaSerializer.Meta):
         fields = MapAreaSerializer.Meta.fields + [
@@ -129,6 +131,8 @@ class MapAreaListSerializer(MapAreaSerializer):
             "display_type",
             "is_owner",
             "created_by_username",
+            "map_grid_rows",
+            "map_grid_cols",
         ]
         read_only_fields = fields
 
@@ -150,6 +154,18 @@ class MapAreaListSerializer(MapAreaSerializer):
         if obj.created_by is None:
             return None
         return obj.created_by.username
+
+    def get_map_grid_rows(self, obj):
+        max_row_index = getattr(obj, "max_grid_row_index", None)
+        if max_row_index is None:
+            return None
+        return max_row_index + 1
+
+    def get_map_grid_cols(self, obj):
+        max_col_index = getattr(obj, "max_grid_col_index", None)
+        if max_col_index is None:
+            return None
+        return max_col_index + 1
 
 
 class UserSummarySerializer(serializers.ModelSerializer):
@@ -222,6 +238,9 @@ class GridRatingResponseSerializer(serializers.ModelSerializer):
 
 
 class GridCellScoreSerializer(serializers.ModelSerializer):
+    current_user_comment = serializers.SerializerMethodField()
+    current_user_has_rating = serializers.SerializerMethodField()
+
     class Meta:
         model = GridCell
         fields = [
@@ -239,8 +258,29 @@ class GridCellScoreSerializer(serializers.ModelSerializer):
             "rating_count",
             "calculated_score",
             "score_updated_at",
+            "current_user_comment",
+            "current_user_has_rating",
         ]
         read_only_fields = fields
+
+    def current_user_rating(self, obj):
+        request = self.context.get("request")
+        if request is None or not request.user.is_authenticated:
+            return None
+
+        current_user_ratings = getattr(obj, "current_user_ratings", None)
+        if current_user_ratings is not None:
+            return current_user_ratings[0] if current_user_ratings else None
+
+        return obj.ratings.filter(user=request.user).first()
+
+    def get_current_user_comment(self, obj):
+        rating = self.current_user_rating(obj)
+
+        return rating.comment if rating is not None else ""
+
+    def get_current_user_has_rating(self, obj):
+        return self.current_user_rating(obj) is not None
 
 
 class BulkGridRatingSerializer(serializers.Serializer):

@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% load static %}
 
-{% block title %}メモグリッド詳細{% endblock %}
+{% block title %}{{ area.name|default:"名称未設定" }} | メモグリッド詳細{% endblock %}
 
 {% block extra_css %}
   <link
@@ -26,143 +26,223 @@
       <a class="back-link" href="{% url 'map-area-page-list' %}">メモグリッド一覧へ戻る</a>
     </p>
 
-    <h1>メモグリッド詳細</h1>
+    <h1>{{ area.name|default:"名称未設定" }}</h1>
+    <p class="section-kicker">メモグリッド詳細</p>
 
     <section class="content-section" aria-labelledby="memo-grid-summary-heading">
-      <h2 id="memo-grid-summary-heading">{{ area.name }}</h2>
+      <h2 id="memo-grid-summary-heading">基本情報</h2>
       <p>{{ area.description|default:"説明はありません。" }}</p>
 
-      <dl class="definition-list">
-        <dt>種別</dt>
-        <dd>
-          {% if is_owner %}
-            自分の{{ display_type }}
-          {% else %}
-            {{ display_type }}
-          {% endif %}
-        </dd>
+      <details class="memo-grid-details">
+        <summary>詳細情報</summary>
+        <dl class="definition-list">
+          <dt>種別</dt>
+          <dd>
+            {% if is_owner %}
+              自分の{{ display_type }}
+            {% else %}
+              {{ display_type }}
+            {% endif %}
+          </dd>
 
-        <dt>作成者</dt>
-        <dd>{{ created_by_label }}</dd>
+          <dt>作成者</dt>
+          <dd>{{ created_by_label }}</dd>
 
-        <dt>1マスの大きさ</dt>
-        <dd>{{ area.grid_size_meters }}m</dd>
+          <dt>1マスの大きさ</dt>
+          <dd>{{ area.grid_size_meters }}m</dd>
 
-        <dt>初期スコア設定</dt>
-        <dd>
-          {% if area.initial_score_mode == "auto" %}
-            自動設定
-          {% elif area.initial_score_mode == "manual" %}
-            手動設定
-          {% else %}
-            {{ area.initial_score_mode|default:"未設定" }}
-          {% endif %}
-        </dd>
+          <dt>マスの数</dt>
+          <dd>
+            {% if map_grid_rows and map_grid_cols %}
+              縦 {{ map_grid_rows }} × 横 {{ map_grid_cols }}
+            {% else %}
+              未設定
+            {% endif %}
+          </dd>
 
-        <dt>地域特徴レベル</dt>
-        <dd>
-          {% if area.region_feature_level is not None %}
-            レベル {{ area.region_feature_level }}
-          {% else %}
-            未設定
-          {% endif %}
-        </dd>
+          <dt>初期スコア設定</dt>
+          <dd>
+            {% if area.initial_score_mode == "auto" %}
+              自動設定
+            {% elif area.initial_score_mode == "manual" %}
+              手動設定
+            {% else %}
+              {{ area.initial_score_mode|default:"未設定" }}
+            {% endif %}
+          </dd>
 
-        <dt>作成日時</dt>
-        <dd>{{ area.created_at }}</dd>
-      </dl>
+          <dt>地域特徴レベル</dt>
+          <dd>
+            {% if area.region_feature_level is not None %}
+              レベル {{ area.region_feature_level }}
+            {% else %}
+              未設定
+            {% endif %}
+          </dd>
+
+          <dt>作成日時</dt>
+          <dd>{{ area.created_at }}</dd>
+        </dl>
+      </details>
 
     </section>
 
-    <section class="content-section map-preview-section" aria-labelledby="map-preview-heading">
-      <p class="section-kicker">地図から選択</p>
-      <h2 id="map-preview-heading">地図プレビュー</h2>
-      <p>地図上で範囲とスコアを確認し、マスを選択できます。</p>
-      <p class="map-preview-help">Ctrl / Command クリックで複数選択、Shift + ドラッグで範囲選択できます。Escape でキャンセルできます。</p>
-      <div class="section-actions map-preview-actions">
-        <button type="button" id="reload-grid-cells" class="secondary-button">
-          グリッドを再取得
-        </button>
-      </div>
-      <label class="map-opacity-control" for="grid-opacity-scale">
-        <span>色の濃さ</span>
-        <input
-          id="grid-opacity-scale"
-          type="range"
-          min="0"
-          max="100"
-          value="50"
-          step="1"
-        >
-      </label>
+    <div class="grid-detail-main-layout">
+      <section class="content-section map-preview-section" aria-labelledby="map-preview-heading">
+        <p class="section-kicker">地図から選択</p>
+        <div class="map-preview-heading-row">
+          <h2 id="map-preview-heading">地図プレビュー</h2>
+          <div class="map-preview-heading-actions">
+            <button
+              type="button"
+              id="expand-map-preview"
+              class="secondary-button map-preview-action-button"
+            >
+              拡大表示
+            </button>
+            <button
+              type="button"
+              id="reload-grid-cells"
+              class="secondary-button map-preview-action-button map-preview-reload-button"
+            >
+              グリッドを再取得
+            </button>
+          </div>
+        </div>
+        <p>地図上で範囲とスコアを確認し、マスを選択できます。</p>
+        <p class="map-preview-help">選択: クリック　複数選択: Ctrl / Cmd + クリック　範囲選択:Shift + ドラッグ</p>
+        <div class="map-preview-controls">
+          <label class="map-opacity-control" for="grid-opacity-scale">
+            <span class="map-opacity-control-heading">
+              色の濃さ
+              <span>
+                <span id="grid-opacity-scale-value">50</span> / 100
+              </span>
+            </span>
+            <input
+              id="grid-opacity-scale"
+              type="range"
+              min="0"
+              max="100"
+              value="50"
+              step="1"
+            >
+            <span class="map-opacity-scale-labels" aria-hidden="true">
+              <span>薄い</span>
+              <span>標準</span>
+              <span>濃い</span>
+            </span>
+          </label>
+          <div class="map-preview-zoom-controls" aria-label="通常地図のズーム操作">
+            <span class="map-preview-zoom-label">地図操作</span>
+            <div class="map-preview-zoom-buttons">
+              <button
+                type="button"
+                id="map-preview-zoom-out"
+                class="secondary-button map-preview-tool-button"
+                aria-label="通常地図をズームアウト"
+              >
+                −
+              </button>
+              <button
+                type="button"
+                id="map-preview-zoom-in"
+                class="secondary-button map-preview-tool-button"
+                aria-label="通常地図をズームイン"
+              >
+                ＋
+              </button>
+              <button
+                type="button"
+                id="map-preview-fit-bounds"
+                class="secondary-button map-preview-fit-button"
+              >
+                範囲に戻す
+              </button>
+            </div>
+          </div>
+          <div class="map-preview-toggle-row">
+            <label class="map-score-label-toggle" for="score-label-toggle">
+              <input
+                id="score-label-toggle"
+                type="checkbox"
+                checked
+              >
+              スコア数値を表示
+            </label>
+            <label class="map-preview-toggle map-rated-grid-toggle" for="rated-grid-toggle">
+              <input
+                id="rated-grid-toggle"
+                type="checkbox"
+              >
+              採点済みを表示
+            </label>
+          </div>
+        </div>
 
-      <p id="map-preview-status" class="map-preview-status" aria-live="polite">
-        地図を読み込んでいます。
-      </p>
+        <p id="map-preview-status" class="map-preview-status" aria-live="polite">
+          地図を読み込んでいます。
+        </p>
 
-      <div
-        id="map-preview"
-        class="map-preview"
-        aria-label="メモグリッド範囲の地図表示"
-      ></div>
+        <div
+          id="map-preview"
+          class="map-preview"
+          aria-label="メモグリッド範囲の地図表示"
+        ></div>
 
-      <div class="map-score-legend" aria-label="スコア色分け凡例">
-        <span class="map-score-legend-item">
-          <span class="map-score-legend-color map-score-legend-low"></span>
-          0〜2.99
-        </span>
-        <span class="map-score-legend-item">
-          <span class="map-score-legend-color map-score-legend-middle"></span>
-          3〜5.99
-        </span>
-        <span class="map-score-legend-item">
-          <span class="map-score-legend-color map-score-legend-high"></span>
-          6〜7.99
-        </span>
-        <span class="map-score-legend-item">
-          <span class="map-score-legend-color map-score-legend-very-high"></span>
-          8以上
-        </span>
-        <span class="map-score-legend-item">
-          <span class="map-score-legend-color map-score-legend-unknown"></span>
-          未分類
-        </span>
-      </div>
-    </section>
-
-    <section class="content-section selected-grid-cell-section" aria-labelledby="selected-grid-cell-heading">
-      <p class="section-kicker">選択状態</p>
-      <h2 id="selected-grid-cell-heading">選択中のマス</h2>
-      <p>選択中のマス情報を表示します。</p>
-      <div class="selected-grid-cell-toolbar">
-        <p id="selected-grid-cell-count" class="selected-grid-cell-count">選択中: 0件</p>
-        <button type="button" id="clear-selected-grids" class="secondary-button" hidden>
-          選択を解除
-        </button>
-      </div>
-      <div id="selected-grid-cell-detail" class="selected-grid-cell-detail" aria-live="polite">
-        マスを選択してください。
-      </div>
-    </section>
-
-    <div class="detail-rating-sections" aria-label="採点フォーム">
-      <section class="content-section grid-rating-form-section" aria-labelledby="grid-rating-form-heading">
-        <p class="section-kicker">1件選択時</p>
-        <h2 id="grid-rating-form-heading">このマスを採点</h2>
-        <p>1件だけ選択して、スコアとコメントを送信します。</p>
-        <div id="grid-rating-form-container" class="grid-rating-form-container" aria-live="polite">
-          マスを選択すると、採点フォームを表示します。
+        <div class="map-score-legend" aria-label="スコア色分け凡例">
+          <span class="map-score-legend-item">
+            <span class="map-score-legend-color map-score-legend-low"></span>
+            0〜2.99
+          </span>
+          <span class="map-score-legend-item">
+            <span class="map-score-legend-color map-score-legend-middle"></span>
+            3〜5.99
+          </span>
+          <span class="map-score-legend-item">
+            <span class="map-score-legend-color map-score-legend-high"></span>
+            6〜7.99
+          </span>
+          <span class="map-score-legend-item">
+            <span class="map-score-legend-color map-score-legend-very-high"></span>
+            8以上
+          </span>
+          <span class="map-score-legend-item">
+            <span class="map-score-legend-color map-score-legend-unknown"></span>
+            未分類
+          </span>
         </div>
       </section>
 
-      <section class="content-section bulk-rating-form-section" aria-labelledby="bulk-rating-form-heading">
-        <p class="section-kicker">2件以上選択時</p>
-        <h2 id="bulk-rating-form-heading">選択中のマスをまとめて採点</h2>
-        <p>複数のマスを同じスコア、または個別入力で採点します。</p>
-        <div id="bulk-rating-form-container" class="bulk-rating-form-container" aria-live="polite">
-          複数のマスを選択すると、一括採点フォームを表示します。
-        </div>
-      </section>
+      <div class="grid-detail-side-panel">
+        <section class="content-section selected-grid-cell-section" aria-labelledby="selected-grid-cell-heading">
+          <p class="section-kicker">選択状態</p>
+          <h2 id="selected-grid-cell-heading">選択中のマス</h2>
+          <p>選択中のマス情報を表示します。</p>
+          <div class="selected-grid-cell-toolbar">
+            <p id="selected-grid-cell-count" class="selected-grid-cell-count">選択中: 0件</p>
+            <button type="button" id="clear-selected-grids" class="secondary-button" hidden>
+              選択を解除
+            </button>
+          </div>
+          <div id="selected-grid-cell-detail" class="selected-grid-cell-detail" aria-live="polite">
+            マスを選択してください。
+          </div>
+        </section>
+
+        <section class="content-section grid-rating-form-section" aria-labelledby="grid-rating-form-heading">
+          <p class="section-kicker">採点</p>
+          <h2 id="grid-rating-form-heading">選択中のマスを採点</h2>
+          <p>選択中のグリッドにスコアとコメントを記録します。</p>
+          <div class="rating-form-panels" aria-live="polite">
+            <div id="grid-rating-form-container" class="grid-rating-form-container" aria-live="polite">
+              地図上のグリッドをクリックして選択してください。
+            </div>
+            <div id="bulk-rating-form-container" class="bulk-rating-form-container" aria-live="polite" hidden>
+            </div>
+          </div>
+        </section>
+      </div>
     </div>
 
     {% if is_owner %}
@@ -213,6 +293,64 @@
       </section>
     {% endif %}
 
+  </div>
+
+  <div
+    id="expanded-map-modal"
+    class="expanded-map-modal"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="expanded-map-heading"
+    hidden
+  >
+    <div class="expanded-map-backdrop" data-expanded-map-close></div>
+    <div class="expanded-map-panel">
+      <div class="expanded-map-header">
+        <div>
+          <p class="section-kicker">拡大表示</p>
+          <h2 id="expanded-map-heading">地図プレビュー</h2>
+        </div>
+        <div class="expanded-map-header-actions">
+          <div class="expanded-map-zoom-controls" aria-label="拡大地図のズーム操作">
+            <button
+              type="button"
+              id="expanded-map-zoom-out"
+              class="secondary-button expanded-map-tool-button"
+              aria-label="拡大地図をズームアウト"
+            >
+              −
+            </button>
+            <button
+              type="button"
+              id="expanded-map-zoom-in"
+              class="secondary-button expanded-map-tool-button"
+              aria-label="拡大地図をズームイン"
+            >
+              ＋
+            </button>
+            <button
+              type="button"
+              id="expanded-map-fit-bounds"
+              class="secondary-button expanded-map-fit-button"
+            >
+              範囲に戻す
+            </button>
+          </div>
+          <button
+            type="button"
+            id="close-expanded-map"
+            class="secondary-button expanded-map-close-button"
+          >
+            閉じる
+          </button>
+        </div>
+      </div>
+      <div
+        id="expanded-map-preview"
+        class="map-preview expanded-map-preview"
+        aria-label="拡大したメモグリッド範囲の地図表示"
+      ></div>
+    </div>
   </div>
 {% endblock %}
 

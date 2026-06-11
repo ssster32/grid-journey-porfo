@@ -141,6 +141,13 @@
     return `レベル ${value}`;
   }
 
+  function gridCountLabel(area) {
+    if (!area || !area.map_grid_rows || !area.map_grid_cols) {
+      return "未設定";
+    }
+    return `縦 ${area.map_grid_rows} × 横 ${area.map_grid_cols}`;
+  }
+
   function createMetaItem(label, value) {
     const item = document.createElement("li");
     const labelElement = document.createElement("span");
@@ -179,6 +186,7 @@
       createMetaItem("初期スコア設定", initialScoreModeLabel(area.initial_score_mode)),
       createMetaItem("地域特徴レベル", regionFeatureLevelLabel(area.region_feature_level)),
       createMetaItem("1マスの大きさ", `${textOrFallback(area.grid_size_meters)}m`),
+      createMetaItem("マスの数", gridCountLabel(area)),
       createMetaItem("作成日時", formatDate(area.created_at))
     );
 

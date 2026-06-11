@@ -957,7 +957,9 @@ GET /api/maps/areas/{area_id}/grids/
       "average_user_score": 8.0,
       "rating_count": 1,
       "calculated_score": 5.5,
-      "score_updated_at": "2026-05-15T10:00:00+09:00"
+      "score_updated_at": "2026-05-15T10:00:00+09:00",
+      "current_user_comment": "水辺が近くて良さそう",
+      "current_user_has_rating": true
     }
   ]
 }
@@ -1344,6 +1346,8 @@ GET /api/maps/areas/
       "east": 139.8,
       "west": 139.7,
       "grid_size_meters": 500,
+      "map_grid_rows": 10,
+      "map_grid_cols": 10,
       "region_feature_level": 2,
       "initial_score_mode": "manual",
       "source": "manual",
@@ -1365,6 +1369,9 @@ GET /api/maps/areas/
   "areas": []
 }
 ```
+
+`map_grid_rows` と `map_grid_cols` は、関連する `GridCell` の最大 `row_index` / `col_index` に 1 を足した表示用の縦横数です。
+GridCell がまだ無い場合は `null` になります。
 
 #### 並び順
 
@@ -1852,6 +1859,8 @@ demo ページからは `region_feature_level=0` を fallback として送信し
 | `rating_count` |
 | `calculated_score` |
 | `score_updated_at` |
+| `current_user_comment` |
+| `current_user_has_rating` |
 
 ### BulkGridRatingSerializer
 
