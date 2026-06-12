@@ -19,8 +19,10 @@ from django.contrib import admin
 from django.contrib.auth.views import LoginView, LogoutView
 from django.urls import include, path
 from rest_framework.authtoken.views import obtain_auth_token
+from django.shortcuts import redirect
 
 urlpatterns = [
+    path("", lambda request: redirect("maps/")), # トップページがまだないのでリダイレクト
     path("admin/", admin.site.urls),
     path(
         "login/",
