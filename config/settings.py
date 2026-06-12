@@ -36,6 +36,12 @@ ALLOWED_HOSTS = [
 # "https://* onrender com"
 # ]
 
+CSRF_TRUSTED_ORIGINS = [
+    origin.strip()
+    for origin in os.environ.get("DJANGO_CSRF_TRUSTED_ORIGINS", "").split(",")
+    if origin.strip()
+]
+
 # SECRET_KEY = os.environ.get('SECRET_KEY', 'django-insecure-CHANGE_ME_IN_PROD')
 
 # DEBUG = 'RENDER' not in os.environ
@@ -123,20 +129,22 @@ USE_TZ = True
 STATIC_URL = "static/"
 
 ## 1. 収集先の設定（本番で必須）
-#STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
+STATIC_ROOT = BASE_DIR / "staticfiles"
 
 ## 2. WhiteNoiseストレージ設定（Django 4.2以降）
-#STORAGES = {
-#"default": { ... },
-#"staticfiles": {
-#"BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
-#},
-#}
+STORAGES = {
+    "default": {
+        "BACKEND": "django.core.files.storage.FileSystemStorage",
+    },
+    "staticfiles": {
+        "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
+    },
+}
 
 # 3. Middlewareの追加（Securityの直下推奨）
 MIDDLEWARE = [
 "django.middleware.security.SecurityMiddleware",
-# "whitenoise.middleware.WhiteNoiseMiddleware",
+"whitenoise.middleware.WhiteNoiseMiddleware",
 "django.contrib.sessions.middleware.SessionMiddleware",
 "django.middleware.common.CommonMiddleware",
 "django.middleware.csrf.CsrfViewMiddleware",
