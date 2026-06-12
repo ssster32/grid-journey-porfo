@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% load static %}
 
-{% block title %}メモグリッド作成{% endblock %}
+{% block title %}新しいメモグリッドを作成 | Grid Journey{% endblock %}
 
 {% block extra_css %}
   <link
@@ -20,8 +20,8 @@
 
     <section class="page-heading" aria-labelledby="memo-grid-create-heading">
       <div>
-        <h1 id="memo-grid-create-heading">メモグリッド作成</h1>
-        <p>中心座標とマス数を指定して、新しいメモグリッドを作るための準備画面です。</p>
+        <h1 id="memo-grid-create-heading">新しいメモグリッドを作成</h1>
+        <p>Grid Journeyで使うメモグリッドを、中心座標とマス数から作成します。</p>
       </div>
     </section>
 
@@ -82,6 +82,9 @@
                 <option value="3">3: 特徴的な地域</option>
               </select>
               <input id="area-initial-score-mode" type="hidden" name="initial_score_mode" value="manual">
+              <p id="auto-score-notice" class="auto-score-notice" hidden>
+                自動設定では地図データの取得と判定を行うため、手動設定より作成に時間がかかる場合があります。
+              </p>
             </div>
           </div>
 
@@ -89,7 +92,10 @@
             入力後に作成できます。
           </p>
 
-          <button id="map-area-create-submit" type="submit">メモグリッドを作成</button>
+          <div class="create-form-actions">
+            <p class="create-form-action-note">入力内容を確認して作成します。</p>
+            <button id="map-area-create-submit" type="submit" data-map-area-create-submit>メモグリッドを作成</button>
+          </div>
         </form>
       </section>
 
@@ -101,12 +107,66 @@
           中心緯度、中心経度、マス数、1マスの大きさを入力するとプレビューを表示します。
         </p>
 
-        <div
-          id="create-map-preview"
-          class="map-preview create-map-preview"
-          aria-label="作成予定メモグリッド範囲の地図表示"
-        ></div>
+        <div class="create-map-preview-frame">
+          <div
+            id="create-map-preview"
+            class="map-preview create-map-preview"
+            aria-label="作成予定メモグリッド範囲の地図表示"
+          ></div>
+          <div class="create-map-crosshair" aria-hidden="true"></div>
+        </div>
+
+        <div class="create-map-center-controls" aria-label="地図中央の座標操作">
+          <p id="create-map-center-coordinate" class="create-map-center-coordinate" aria-live="polite">
+            地図中央: 緯度 -- / 経度 --
+          </p>
+          <div class="create-map-center-actions">
+            <div class="map-preview-zoom-buttons create-map-zoom-buttons" aria-label="作成地図のズーム操作">
+              <button
+                id="create-map-zoom-out"
+                class="secondary-button map-preview-tool-button"
+                type="button"
+                aria-label="作成地図をズームアウト"
+              >
+                −
+              </button>
+              <button
+                id="create-map-zoom-in"
+                class="secondary-button map-preview-tool-button"
+                type="button"
+                aria-label="作成地図をズームイン"
+              >
+                ＋
+              </button>
+              <button
+                id="create-map-return-to-input-center"
+                class="secondary-button map-preview-fit-button"
+                type="button"
+              >
+                入力座標へ戻す
+              </button>
+            </div>
+            <button
+              id="apply-map-center-to-coordinates"
+              class="secondary-button create-map-center-apply-button"
+              type="button"
+            >
+              地図中央を中心座標に反映
+            </button>
+          </div>
+        </div>
       </section>
+    </div>
+
+    <div class="create-sticky-action" aria-label="メモグリッド作成操作">
+      <button
+        type="submit"
+        form="map-area-create-form"
+        class="create-sticky-submit"
+        data-map-area-create-submit
+      >
+        メモグリッドを作成
+      </button>
     </div>
   </div>
 {% endblock %}

@@ -2,9 +2,18 @@
   const formElement = document.querySelector("#map-area-create-form");
   const statusElement = document.querySelector("#memo-grid-create-status");
   const submitButton = document.querySelector("#map-area-create-submit");
+  const submitButtons = Array.from(document.querySelectorAll("[data-map-area-create-submit]"));
   const pageLoadingOverlay = document.querySelector("#site-loading-overlay");
   const mapPreviewElement = document.querySelector("#create-map-preview");
   const mapPreviewStatusElement = document.querySelector("#create-map-preview-status");
+  const mapCenterCoordinateElement = document.querySelector("#create-map-center-coordinate");
+  const applyMapCenterButton = document.querySelector("#apply-map-center-to-coordinates");
+  const createMapZoomOutButton = document.querySelector("#create-map-zoom-out");
+  const createMapZoomInButton = document.querySelector("#create-map-zoom-in");
+  const createMapReturnButton = document.querySelector("#create-map-return-to-input-center");
+  const createFormActionsElement = document.querySelector(".create-form-actions");
+  const stickyActionElement = document.querySelector(".create-sticky-action");
+  const autoScoreNoticeElement = document.querySelector("#auto-score-notice");
   const earthRadiusMeters = 6378137;
   const maxPreviewGridCells = 400;
   const mapPreviewState = {
@@ -31,6 +40,7 @@
 
     statusElement.textContent = message;
     statusElement.dataset.messageType = type;
+    updateStickyCreateAction();
   }
 
   function showPageLoading() {
@@ -47,6 +57,36 @@
     }
     pageLoadingOverlay.hidden = true;
     pageLoadingOverlay.setAttribute("aria-hidden", "true");
+  }
+
+  function setSubmitButtonsDisabled(disabled) {
+    if (submitButtons.length === 0 && submitButton) {
+      submitButton.disabled = disabled;
+      return;
+    }
+    submitButtons.forEach((button) => {
+      button.disabled = disabled;
+    });
+  }
+
+  function updateStickyCreateAction() {
+    if (!createFormActionsElement || !stickyActionElement) {
+      return;
+    }
+
+    const rect = createFormActionsElement.getBoundingClientRect();
+    const bottomVisibilityMargin = 96;
+    const isActionVisible = rect.top < window.innerHeight - bottomVisibilityMargin && rect.bottom > 0;
+    document.body.classList.toggle("is-create-sticky-action-visible", !isActionVisible);
+  }
+
+  function updateAutoScoreNotice() {
+    if (!autoScoreNoticeElement) {
+      return;
+    }
+
+    autoScoreNoticeElement.hidden = fieldValue("region_feature_level") !== "auto";
+    updateStickyCreateAction();
   }
 
   function setMapPreviewStatus(message, type = "") {
@@ -79,6 +119,79 @@
       return NaN;
     }
     return value;
+  }
+
+  function formatCoordinate(value) {
+    return Number(value).toFixed(6);
+  }
+
+  function updateMapCenterCoordinateDisplay() {
+    if (!mapCenterCoordinateElement || !mapPreviewState.map) {
+      return;
+    }
+
+    const center = mapPreviewState.map.getCenter();
+    mapCenterCoordinateElement.textContent = (
+      `地図中央: 緯度 ${formatCoordinate(center.lat)}\n/ 経度 ${formatCoordinate(center.lng)}`
+    );
+  }
+
+  function applyMapCenterToCoordinateInputs() {
+    if (!mapPreviewState.map) {
+      return;
+    }
+
+    const center = mapPreviewState.map.getCenter();
+    const centerLatInput = formElement.elements.center_lat;
+    const centerLngInput = formElement.elements.center_lng;
+    if (!centerLatInput || !centerLngInput) {
+      return;
+    }
+
+    centerLatInput.value = formatCoordinate(center.lat);
+    centerLngInput.value = formatCoordinate(center.lng);
+    updateMapPreview();
+  }
+
+  function zoomCreateMapOut() {
+    if (!mapPreviewState.map) {
+      return;
+    }
+
+    mapPreviewState.map.zoomOut();
+    updateMapCenterCoordinateDisplay();
+  }
+
+  function zoomCreateMapIn() {
+    if (!mapPreviewState.map) {
+      return;
+    }
+
+    mapPreviewState.map.zoomIn();
+    updateMapCenterCoordinateDisplay();
+  }
+
+  function returnCreateMapToInputCenter() {
+    if (!mapPreviewState.map) {
+      return;
+    }
+
+    const centerLat = numberValue("center_lat");
+    const centerLng = numberValue("center_lng");
+    if (
+      !Number.isFinite(centerLat) ||
+      centerLat < -90 ||
+      centerLat > 90 ||
+      !Number.isFinite(centerLng) ||
+      centerLng < -180 ||
+      centerLng > 180
+    ) {
+      return;
+    }
+
+    mapPreviewState.map.setView([centerLat, centerLng], mapPreviewState.map.getZoom());
+    updateMapCenterCoordinateDisplay();
+    updateMapPreview();
   }
 
   function readPreviewInputs() {
@@ -150,8 +263,11 @@
     }).addTo(mapPreviewState.map);
 
     mapPreviewState.gridLayer = window.L.layerGroup().addTo(mapPreviewState.map);
+    mapPreviewState.map.on("moveend zoomend", updateMapCenterCoordinateDisplay);
+    updateMapCenterCoordinateDisplay();
     window.setTimeout(() => {
       mapPreviewState.map.invalidateSize();
+      updateMapCenterCoordinateDisplay();
     }, 0);
 
     return mapPreviewState.map;
@@ -225,6 +341,7 @@
 
     const renderedGrid = renderPreviewGridCells(input, bounds);
     map.fitBounds(boundsArray(bounds), { padding: [24, 24], maxZoom: 18 });
+    updateMapCenterCoordinateDisplay();
     setMapPreviewStatus(
       renderedGrid
         ? "入力値から作成予定範囲とマス境界を概算表示しています。"
@@ -353,9 +470,7 @@
       return;
     }
 
-    if (submitButton) {
-      submitButton.disabled = true;
-    }
+    setSubmitButtonsDisabled(true);
     setStatus("メモグリッドを作成しています。");
     showPageLoading();
 
@@ -388,9 +503,7 @@
       window.location.href = `/maps/${data.id}/`;
     } catch (error) {
       setStatus(`メモグリッドを作成できませんでした。${error.message}`, "error");
-      if (submitButton) {
-        submitButton.disabled = false;
-      }
+      setSubmitButtonsDisabled(false);
     } finally {
       hidePageLoading();
     }
@@ -398,6 +511,8 @@
 
   if (formElement) {
     updateMapPreview();
+    updateAutoScoreNotice();
+    updateStickyCreateAction();
 
     ["center_lat", "center_lng", "rows", "cols", "grid_size_meters"].forEach((name) => {
       const field = formElement.elements[name];
@@ -408,12 +523,38 @@
       field.addEventListener("change", updateMapPreview);
     });
 
+    const initialScoreSelect = formElement.elements.region_feature_level;
+    if (initialScoreSelect) {
+      initialScoreSelect.addEventListener("change", updateAutoScoreNotice);
+    }
+
+    if (applyMapCenterButton) {
+      applyMapCenterButton.addEventListener("click", applyMapCenterToCoordinateInputs);
+    }
+
+    if (createMapZoomOutButton) {
+      createMapZoomOutButton.addEventListener("click", zoomCreateMapOut);
+    }
+
+    if (createMapZoomInButton) {
+      createMapZoomInButton.addEventListener("click", zoomCreateMapIn);
+    }
+
+    if (createMapReturnButton) {
+      createMapReturnButton.addEventListener("click", returnCreateMapToInputCenter);
+    }
+
     window.addEventListener("resize", () => {
       if (!mapPreviewState.map) {
+        updateStickyCreateAction();
         return;
       }
       mapPreviewState.map.invalidateSize();
+      updateMapCenterCoordinateDisplay();
+      updateStickyCreateAction();
     });
+
+    window.addEventListener("scroll", updateStickyCreateAction, { passive: true });
 
     formElement.addEventListener("submit", (event) => {
       event.preventDefault();

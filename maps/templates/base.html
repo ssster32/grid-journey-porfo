@@ -4,13 +4,13 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>{% block title %}メモグリッド{% endblock %}</title>
+    <title>{% block title %}Grid Journey{% endblock %}</title>
     <link rel="stylesheet" href="{% static 'maps/css/site.css' %}">
     {% block extra_css %}{% endblock %}
   </head>
   <body>
     <header class="site-header">
-      <a class="site-brand" href="{% url 'map-area-page-list' %}">メモグリッド</a>
+      <a class="site-brand" href="{% url 'map-area-page-list' %}">Grid Journey</a>
       <nav class="site-nav" aria-label="サイト内ナビゲーション">
         <a href="{% url 'map-area-page-list' %}">メモグリッド</a>
         {% if user.is_authenticated %}

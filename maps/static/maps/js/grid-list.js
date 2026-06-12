@@ -134,11 +134,28 @@
     return textOrFallback(value);
   }
 
-  function regionFeatureLevelLabel(value) {
+  function regionFeatureLevelLabel(area) {
+    if (area && area.initial_score_mode === "auto") {
+      return "-";
+    }
+
+    const value = area ? area.region_feature_level : undefined;
     if (value === null || value === undefined || value === "") {
       return "未設定";
     }
-    return `レベル ${value}`;
+    if (Number(value) === 0) {
+      return "0: 初期値";
+    }
+    if (Number(value) === 1) {
+      return "1: ありふれた地域";
+    }
+    if (Number(value) === 2) {
+      return "2: 普通の地域";
+    }
+    if (Number(value) === 3) {
+      return "3: 特徴的な地域";
+    }
+    return String(value);
   }
 
   function gridCountLabel(area) {
@@ -184,7 +201,7 @@
     metaList.append(
       createMetaItem("作成者", ownerLabel(area)),
       createMetaItem("初期スコア設定", initialScoreModeLabel(area.initial_score_mode)),
-      createMetaItem("地域特徴レベル", regionFeatureLevelLabel(area.region_feature_level)),
+      createMetaItem("地域特徴レベル", regionFeatureLevelLabel(area)),
       createMetaItem("1マスの大きさ", `${textOrFallback(area.grid_size_meters)}m`),
       createMetaItem("マスの数", gridCountLabel(area)),
       createMetaItem("作成日時", formatDate(area.created_at))

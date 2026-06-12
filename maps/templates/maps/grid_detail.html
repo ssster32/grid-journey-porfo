@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% load static %}
 
-{% block title %}{{ area.name|default:"名称未設定" }} | メモグリッド詳細{% endblock %}
+{% block title %}{{ area.name|default:"名称未設定" }} | Grid Journey{% endblock %}
 
 {% block extra_css %}
   <link
@@ -73,8 +73,18 @@
 
           <dt>地域特徴レベル</dt>
           <dd>
-            {% if area.region_feature_level is not None %}
-              レベル {{ area.region_feature_level }}
+            {% if area.initial_score_mode == "auto" %}
+              -
+            {% elif area.region_feature_level == 0 %}
+              0: 初期値
+            {% elif area.region_feature_level == 1 %}
+              1: ありふれた地域
+            {% elif area.region_feature_level == 2 %}
+              2: 普通の地域
+            {% elif area.region_feature_level == 3 %}
+              3: 特徴的な地域
+            {% elif area.region_feature_level is not None %}
+              {{ area.region_feature_level }}
             {% else %}
               未設定
             {% endif %}

@@ -1,17 +1,17 @@
 {% extends "base.html" %}
 
-{% block title %}ログイン{% endblock %}
+{% block title %}ログイン | Grid Journey{% endblock %}
 
 {% block content %}
   <section class="page-heading" aria-labelledby="login-heading">
     <div>
-      <h1 id="login-heading">ログイン</h1>
+      <h1 id="login-heading">Grid Journey</h1>
       <p>メモグリッドを作成・採点するためにログインします。</p>
     </div>
   </section>
 
   <section class="content-section login-section" aria-labelledby="login-form-heading">
-    <h2 id="login-form-heading">アカウント情報</h2>
+    <h2 id="login-form-heading">ログイン</h2>
 
     {% if form.errors %}
       <div class="message login-error-message" data-message-type="error" role="alert">

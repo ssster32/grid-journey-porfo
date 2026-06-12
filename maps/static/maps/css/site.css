@@ -214,9 +214,12 @@ textarea {
 }
 
 .site-brand {
-  color: var(--text);
-  font-size: 1.15rem;
+  color: #12315f;
+  font-family: "Avenir Next", Avenir, "Trebuchet MS", "Segoe UI", sans-serif;
+  font-size: 1.22rem;
   font-weight: 800;
+  line-height: 1;
+  letter-spacing: 0.02em;
 }
 
 .site-nav {
@@ -1049,9 +1052,179 @@ body.is-expanded-map-open {
   min-width: 0;
 }
 
+.auto-score-notice {
+  margin: 0.1rem 0 0;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid #fde7bd;
+  border-radius: 6px;
+  background: #fffaf0;
+  color: #7a4b12;
+  font-size: 0.88rem;
+  font-weight: 600;
+  line-height: 1.55;
+}
+
+.auto-score-notice[hidden] {
+  display: none;
+}
+
+.create-form-actions {
+  display: grid;
+  gap: 0.55rem;
+  margin-top: 0.25rem;
+  padding: 0.85rem;
+  border: 1px solid #bdd0f8;
+  border-radius: 8px;
+  background: linear-gradient(180deg, #f8fbff 0%, #eef4ff 100%);
+}
+
+.create-form-action-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.create-form-actions #map-area-create-submit {
+  width: 100%;
+  min-height: 2.75rem;
+  font-size: 1.02rem;
+}
+
+.create-sticky-action {
+  display: none;
+}
+
 .create-map-preview {
   height: 340px;
   min-height: 340px;
+}
+
+.create-map-preview-frame {
+  position: relative;
+}
+
+.create-map-preview-frame .map-preview {
+  z-index: 0;
+}
+
+.create-map-crosshair {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  z-index: 800;
+  width: 2.6rem;
+  height: 2.6rem;
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+}
+
+.create-map-crosshair::before,
+.create-map-crosshair::after {
+  position: absolute;
+  content: "";
+  background: rgba(15, 23, 42, 0.78);
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.85),
+    0 1px 3px rgba(15, 23, 42, 0.22);
+}
+
+.create-map-crosshair::before {
+  top: 50%;
+  left: 0;
+  width: 100%;
+  height: 2px;
+  transform: translateY(-50%);
+}
+
+.create-map-crosshair::after {
+  top: 0;
+  left: 50%;
+  width: 2px;
+  height: 100%;
+  transform: translateX(-50%);
+}
+
+.create-map-crosshair {
+  background:
+    radial-gradient(
+      circle,
+      rgba(255, 255, 255, 0.92) 0 0.2rem,
+      rgba(15, 23, 42, 0.78) 0.21rem 0.31rem,
+      transparent 0.32rem
+    );
+}
+
+.create-map-center-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-top: 0.7rem;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fbfcfe;
+}
+
+.create-map-center-coordinate {
+  margin: 0;
+  color: var(--text);
+  font-size: 0.9rem;
+  font-weight: 700;
+  white-space: pre-line;
+}
+
+.create-map-center-actions {
+  display: grid;
+  gap: 0.45rem;
+  flex: 0 1 18rem;
+  width: min(18rem, 100%);
+}
+
+.create-map-zoom-buttons {
+  display: grid;
+  grid-template-columns: 2rem 2rem minmax(0, 1fr);
+  width: 100%;
+}
+
+.create-map-center-apply-button {
+  width: 100%;
+  min-height: 2.1rem;
+  padding: 0.35rem 0.65rem;
+  font-size: 0.88rem;
+}
+
+body.is-create-sticky-action-visible .create-layout {
+  margin-bottom: 5.5rem;
+}
+
+body.is-create-sticky-action-visible .create-sticky-action {
+  position: fixed;
+  right: max(0.75rem, env(safe-area-inset-right));
+  bottom: max(0.75rem, env(safe-area-inset-bottom));
+  left: max(0.75rem, env(safe-area-inset-left));
+  z-index: 900;
+  display: block;
+  max-width: 34rem;
+  margin: 0 auto;
+  padding: 0.65rem;
+  border: 1px solid rgba(37, 99, 235, 0.22);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 0.8rem 2rem rgba(31, 41, 51, 0.18);
+  backdrop-filter: blur(10px);
+}
+
+.create-sticky-submit {
+  width: 100%;
+  min-height: 2.65rem;
+}
+
+@media (max-width: 720px) {
+  .create-layout {
+    margin-bottom: 1rem;
+  }
 }
 
 @media (min-width: 900px) {
@@ -1400,6 +1573,25 @@ body.is-expanded-map-open {
 
   .form-grid {
     grid-template-columns: 1fr;
+  }
+
+  .create-map-center-controls {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .create-map-center-actions {
+    align-items: stretch;
+    flex-direction: column;
+    width: 100%;
+  }
+
+  .create-map-zoom-buttons {
+    justify-content: stretch;
+  }
+
+  .create-map-center-apply-button {
+    width: 100%;
   }
 
   .map-preview {
