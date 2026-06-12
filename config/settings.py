@@ -78,21 +78,11 @@ WSGI_APPLICATION = "config.wsgi.application"
 # https://docs.djangoproject.com/en/6.0/ref/settings/#databases
 
 DATABASES = {
-#    "default": {dj_database_url.config(
-#        # Renderの環境変数 DATABASE_URLを読み込む
-#        default=os.environ.get('DATABASE_URL'),
-#
-#        # 接続を600秒間維持（パフォーマンス向上）
-#        conn_max_age=600,
-#
-#        # SSL接続を強制（Renderでは必須）
-#        ssl_require=True
-#    )
-#    }
-    "default": {
-        "ENGINE": "django.db.backends.sqlite3",
-        "NAME": BASE_DIR / "db.sqlite3",
-    }
+    "default": dj_database_url.config(
+        default=f"sqlite:///{BASE_DIR / 'db.sqlite3'}",
+        conn_max_age=600,
+        ssl_require=bool(os.environ.get("DATABASE_URL")),
+    )
 }
 
 
