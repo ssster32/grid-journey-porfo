@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+
+{% block title %}新規アカウント作成 | Grid Journey{% endblock %}
+
+{% block content %}
+  <section class="page-heading" aria-labelledby="signup-heading">
+    <div>
+      <h1 id="signup-heading">Grid Journey</h1>
+      <p>メモグリッドを作成・採点するためのアカウントを作成します。</p>
+    </div>
+  </section>
+
+  <section class="content-section login-section" aria-labelledby="signup-form-heading">
+    <h2 id="signup-form-heading">新規アカウント作成</h2>
+
+    {% if form.errors %}
+      <div class="message login-error-message" data-message-type="error" role="alert">
+        <p>入力内容を確認してください。</p>
+        {{ form.non_field_errors }}
+      </div>
+    {% endif %}
+
+    <form class="login-form" method="post">
+      {% csrf_token %}
+
+      <div class="form-field">
+        <label for="{{ form.username.id_for_label }}">ユーザー名</label>
+        {{ form.username }}
+        {{ form.username.errors }}
+        {% if form.username.help_text %}
+          <div class="form-help-text">{{ form.username.help_text }}</div>
+        {% endif %}
+      </div>
+
+      <div class="form-field">
+        <label for="{{ form.password1.id_for_label }}">パスワード</label>
+        {{ form.password1 }}
+        {{ form.password1.errors }}
+        {% if form.password1.help_text %}
+          <div class="form-help-text">{{ form.password1.help_text }}</div>
+        {% endif %}
+      </div>
+
+      <div class="form-field">
+        <label for="{{ form.password2.id_for_label }}">パスワード確認</label>
+        {{ form.password2 }}
+        {{ form.password2.errors }}
+        {% if form.password2.help_text %}
+          <div class="form-help-text">{{ form.password2.help_text }}</div>
+        {% endif %}
+      </div>
+
+      <div class="login-actions">
+        <button type="submit">アカウントを作成</button>
+      </div>
+
+      <p class="auth-switch-link">
+        すでにアカウントをお持ちの方は
+        <a href="{% url 'login' %}">ログイン</a>
+      </p>
+    </form>
+  </section>
+{% endblock %}

@@ -13,6 +13,14 @@
   <section class="content-section login-section" aria-labelledby="login-form-heading">
     <h2 id="login-form-heading">ログイン</h2>
 
+    {% if messages %}
+      {% for message in messages %}
+        <div class="message" data-message-type="{{ message.tags }}" role="status">
+          {{ message }}
+        </div>
+      {% endfor %}
+    {% endif %}
+
     {% if form.errors %}
       <div class="message login-error-message" data-message-type="error" role="alert">
         <p>ユーザー名またはパスワードが正しくありません。</p>
@@ -36,8 +44,12 @@
 
       <div class="login-actions">
         <button type="submit">ログイン</button>
-        <a class="back-link" href="{% url 'map-area-page-list' %}">メモグリッドへ戻る</a>
       </div>
+
+      <p class="auth-switch-link">
+        アカウントをお持ちでない方は
+        <a href="{% url 'signup' %}">新規登録</a>
+      </p>
     </form>
   </section>
 {% endblock %}

@@ -1,11 +1,14 @@
 import logging
 
+from django.contrib import messages
+from django.contrib.auth.forms import UserCreationForm
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.contrib.staticfiles import finders
 from django.db import transaction
 from django.db.models import Max, Prefetch, Q
 from django.http import Http404, HttpResponse
-from django.views.generic import TemplateView
+from django.urls import reverse_lazy
+from django.views.generic import CreateView, TemplateView
 from rest_framework import status
 from rest_framework.authentication import TokenAuthentication
 from rest_framework.authentication import BasicAuthentication, SessionAuthentication
@@ -970,6 +973,19 @@ class MapAreaPageDetailView(LoginRequiredMixin, TemplateView):
         context["map_grid_rows"] = map_grid_rows
         context["map_grid_cols"] = map_grid_cols
         return context
+
+
+class SignUpView(CreateView):
+    form_class = UserCreationForm
+    template_name = "accounts/signup.html"
+    success_url = reverse_lazy("login")
+
+    def form_valid(self, form):
+        messages.success(
+            self.request,
+            "登録が完了しました。ログインしてください。",
+        )
+        return super().form_valid(form)
 
 
 class MapAreaListCreateView(APIView):
