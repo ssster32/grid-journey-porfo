@@ -180,6 +180,9 @@
   function createAreaCard(area) {
     const article = document.createElement("article");
     article.className = "map-area-list-item";
+    if (!area.is_owner) {
+      article.classList.add("shared-map-area-card");
+    }
     article.dataset.areaId = textOrFallback(area.id, "");
 
     const heading = document.createElement("h2");

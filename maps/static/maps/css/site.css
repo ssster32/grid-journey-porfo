@@ -350,6 +350,14 @@ textarea {
   flex-direction: column;
   gap: 0.7rem;
   padding: 1rem;
+  border: 2px solid #2563eb;
+}
+
+.shared-map-area-card {
+  border: 2px solid #16a34a;
+  background: #f8fffb;
+  color: var(--text);
+  box-shadow: 0 0.7rem 1.4rem rgba(22, 163, 74, 0.12);
 }
 
 .map-area-list-item h2,
@@ -419,6 +427,16 @@ textarea {
   gap: 0.25rem;
   color: var(--muted);
   font-size: 0.93rem;
+}
+
+.shared-map-area-card .map-area-description,
+.shared-map-area-card .map-area-meta-list {
+  color: var(--muted);
+}
+
+.shared-map-area-card .map-area-badge {
+  background: #c9f9d8;
+  color: #166534;
 }
 
 .detail-shell {

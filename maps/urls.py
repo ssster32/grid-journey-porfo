@@ -11,6 +11,8 @@ from .views import (
     MapAreaShareListCreateView,
 )
 
+# /api/maps/ 配下のJSON API用URLをまとめる。
+# 画面表示ではなく、作成・詳細・共有・GridCell取得・採点処理への入口。
 urlpatterns = [
     path(
         "demo/",

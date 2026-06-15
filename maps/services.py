@@ -1,12 +1,14 @@
 from math import ceil, cos, isfinite, radians
 
 import requests
-from django.db.models import Avg, Count
+from django.db.models import Avg, Count, Sum
 from django.utils import timezone
 
 from .models import GridCell
 
 
+# MapArea creation, OSM feature collection, auto scoring, and score aggregation live
+# together here because each step feeds the next one in the map preview workflow.
 METERS_PER_DEGREE = 111000
 MAX_GENERAL_USER_GRID_CELLS = 500
 MAX_GENERAL_USER_GRID_HEIGHT_METERS = 30000
@@ -82,6 +84,7 @@ PARK_WATERFRONT_COMBO_CONTEXT_BONUS = 0.15
 HIGH_CONTEXT_3_CONTEXT_BONUS = 0.10
 HIGH_CONTEXT_4_CONTEXT_BONUS = 0.20
 HIGH_CONTEXT_5_CONTEXT_BONUS = 0.25
+DEFAULT_GRID_SIZE_SCORE_MULTIPLIER = 1.0
 AUTO_SCORE_BREAKDOWN_SCORE_KEYS = (
     "base_score",
     "diversity_bonus",
@@ -211,6 +214,35 @@ def _feature_ratio(feature_summary, key, default=0.0):
     return value
 
 
+def calculate_grid_size_score_multiplier(grid_size_meters):
+    """Return the auto-score bonus multiplier for a GridCell size.
+
+    Large cells naturally contain more features, so presence-based bonuses are
+    softened as grid_size_meters grows. 300m is treated as the neutral size.
+    """
+    if grid_size_meters is None:
+        return DEFAULT_GRID_SIZE_SCORE_MULTIPLIER
+
+    try:
+        grid_size = float(grid_size_meters)
+    except (TypeError, ValueError):
+        return DEFAULT_GRID_SIZE_SCORE_MULTIPLIER
+
+    if grid_size <= 100:
+        return 1.4
+    if grid_size <= 200:
+        return 1.25
+    if grid_size <= 300:
+        return 1.0
+    if grid_size <= 400:
+        return 0.95
+    if grid_size <= 500:
+        return 0.9
+    if grid_size < 1000:
+        return 0.8
+    return 0.7
+
+
 def _bounds_number(bounds, key):
     value = bounds.get(key)
     if isinstance(value, bool):
@@ -246,7 +278,11 @@ def _normalize_bounds(bounds):
 
 
 def classify_osm_element(tags):
-    """Classify OSM tags into one map_features kind."""
+    """Classify OSM tags into one app-level map feature kind.
+
+    OSM has many tag combinations. The app keeps only the kinds that currently
+    affect scoring and leaves unsupported tags unused instead of guessing.
+    """
     if not isinstance(tags, dict):
         raise ValueError("tags は辞書で指定してください。")
 
@@ -349,7 +385,7 @@ def build_bounds_from_osm_element(element):
 
 
 def build_map_feature_from_osm_element(element):
-    """Build one map_features dict from one OSM element."""
+    """Build one app feature from one OSM element when it has usable bounds."""
     if not isinstance(element, dict):
         raise ValueError("element は辞書で指定してください。")
 
@@ -398,7 +434,7 @@ def build_map_feature_from_osm_element(element):
 
 
 def parse_overpass_elements_to_map_features(elements):
-    """Convert Overpass elements into map_features."""
+    """Convert Overpass elements into map features, skipping unusable entries."""
     if not isinstance(elements, list):
         raise ValueError("elements はリストで指定してください。")
 
@@ -419,7 +455,11 @@ def parse_overpass_elements_to_map_features(elements):
 
 
 def build_overpass_query(bounds):
-    """Build an Overpass QL query for map feature candidates within bounds."""
+    """Build an Overpass QL query for map feature candidates within bounds.
+
+    The query intentionally requests broad candidates first; later steps narrow
+    them down per GridCell so unsupported or oversized features can be skipped.
+    """
     bounds = _normalize_bounds(bounds)
     bbox = (
         f'{bounds["south"]},{bounds["west"]},'
@@ -484,7 +524,11 @@ def fetch_osm_features_from_overpass(
     endpoint="https://overpass-api.de/api/interpreter",
     timeout=25,
 ):
-    """Fetch OSM features from Overpass and convert them into map_features."""
+    """Fetch OSM features from Overpass and convert them into map features.
+
+    External API responses may be unavailable or malformed, so this function
+    validates the response shape before the scoring pipeline uses it.
+    """
     query = build_overpass_query(bounds)
 
     if not isinstance(endpoint, str) or not endpoint.strip():
@@ -1869,7 +1913,11 @@ def feature_intersects_grid_cell(feature_bounds, grid_cell_bounds):
 
 
 def calculate_bounds_overlap_ratio(feature_bounds, grid_cell_bounds):
-    """Return the overlap area ratio within one GridCell bbox."""
+    """Return the overlap area ratio within one GridCell bbox.
+
+    Coverage ratios let wide features such as water, forest, and parks affect
+    scoring by how much of the cell they occupy, not just by existing nearby.
+    """
     feature_bounds = _normalize_bounds(feature_bounds)
     grid_cell_bounds = _normalize_bounds(grid_cell_bounds)
 
@@ -1912,7 +1960,11 @@ def calculate_bounds_size_ratios(feature_bounds, grid_cell_bounds):
 
 
 def is_large_waterway_river_bounds_for_map_area(feature_bounds, map_area_bounds):
-    """Return True when a waterway=river bbox is too large for MapArea scoring."""
+    """Return True when a waterway=river bbox is too large for MapArea scoring.
+
+    Some OSM river bounds cover an area much wider than the visible river. Using
+    them as-is can make unrelated cells look like river cells.
+    """
     size_ratios = calculate_bounds_size_ratios(feature_bounds, map_area_bounds)
     return (
         size_ratios["area_ratio"]
@@ -1954,7 +2006,11 @@ def build_feature_summary_for_grid_cell(
     map_features,
     map_area_bounds=None,
 ):
-    """Build feature summary for one GridCell from provisional bbox features."""
+    """Build feature summary for one GridCell from provisional bbox features.
+
+    The summary keeps both simple presence counts and overlap ratios so the
+    scorer can distinguish "contains a feature" from "mostly covered by it".
+    """
     grid_cell_bounds = _normalize_bounds(grid_cell_bounds)
     if map_area_bounds is not None:
         map_area_bounds = _normalize_bounds(map_area_bounds)
@@ -2039,6 +2095,8 @@ def build_feature_summary_for_grid_cell(
         if feature_kind == "building":
             feature_summary["building_count"] += 1
         elif feature_kind == "road":
+            # Very large road bounds are often coarse OSM geometry, so they are
+            # ignored for road counts to avoid making every nearby cell busy.
             size_ratios = calculate_bounds_size_ratios(
                 feature_bounds,
                 grid_cell_bounds,
@@ -2109,6 +2167,8 @@ def build_feature_summary_for_grid_cell(
                 if station_type in SCORED_STATION_SUMMARY_TYPES:
                     station_centers.append(_bounds_center(feature_bounds))
         elif feature_kind == "expressway":
+            # Expressway bounds can be much larger than the actual road segment;
+            # counting only local-sized bounds keeps the score from spreading.
             if _is_large_expressway_bounds_for_grid_cell(
                 feature_bounds,
                 grid_cell_bounds,
@@ -2155,7 +2215,7 @@ def build_feature_summary_for_grid_cell(
 
 
 def build_feature_summaries_for_grid_cells(grid_cells, map_features):
-    """Build feature summaries keyed by each GridCell position."""
+    """Build feature summaries keyed by each saved GridCell position."""
     feature_summaries = {}
 
     for grid_cell in grid_cells:
@@ -2177,7 +2237,11 @@ def build_feature_summaries_for_grid_cell_contexts(
     map_features,
     map_area_bounds=None,
 ):
-    """Build feature summaries keyed by each unsaved GridCell context position."""
+    """Build feature summaries keyed by each unsaved GridCell context position.
+
+    Create-time auto scoring runs before GridCell rows are saved, so it uses the
+    same summary logic against temporary context dictionaries.
+    """
     if not isinstance(grid_cell_contexts, list):
         raise ValueError("grid_cell_contexts はリストで指定してください。")
     if map_area_bounds is not None:
@@ -2216,8 +2280,15 @@ def build_feature_summaries_for_grid_cell_contexts(
     return feature_summaries
 
 
-def calculate_initial_score_breakdown_from_feature_summary(feature_summary):
-    """Calculate score details from feature summary data."""
+def calculate_initial_score_breakdown_from_feature_summary(
+    feature_summary,
+    grid_size_meters=None,
+):
+    """Calculate score details from feature summary data.
+
+    Auto scoring is split into base, diversity, context, and penalty so the UI
+    can explain why a GridCell received its initial score.
+    """
     if not isinstance(feature_summary, dict):
         raise ValueError("feature_summary は辞書で指定してください。")
 
@@ -2580,6 +2651,13 @@ def calculate_initial_score_breakdown_from_feature_summary(feature_summary):
     if has_empty_cell_penalty:
         penalty += 0.6
 
+    grid_size_multiplier = calculate_grid_size_score_multiplier(grid_size_meters)
+    # Presence and diversity bonuses are easier to trigger in larger cells, so
+    # only the positive bonus parts are size-adjusted. Penalty stays unchanged.
+    base_score *= grid_size_multiplier
+    diversity_bonus *= grid_size_multiplier
+    context_bonus *= grid_size_multiplier
+
     raw_score = base_score + diversity_bonus + context_bonus - penalty
     clamped_score = _clamp_initial_score(raw_score)
 
@@ -2592,6 +2670,7 @@ def calculate_initial_score_breakdown_from_feature_summary(feature_summary):
         "penalty": penalty,
         "raw_score": raw_score,
         "clamped_score": clamped_score,
+        "grid_size_multiplier": grid_size_multiplier,
         "feature_category_count": feature_category_count,
         "surface_railway_count": surface_railway_count,
         "underground_railway_count": underground_railway_count,
@@ -2697,22 +2776,35 @@ def calculate_initial_score_breakdown_from_feature_summary(feature_summary):
     }
 
 
-def calculate_initial_score_from_feature_summary(feature_summary):
+def calculate_initial_score_from_feature_summary(
+    feature_summary,
+    grid_size_meters=None,
+):
     """Calculate a provisional 0.0-3.0 initial score from feature summary data."""
     breakdown = calculate_initial_score_breakdown_from_feature_summary(
-        feature_summary
+        feature_summary,
+        grid_size_meters=grid_size_meters,
     )
     return breakdown["clamped_score"]
 
 
-def build_auto_score_breakdown_from_feature_summary(feature_summary):
-    """Build a compact JSON-safe score breakdown for GridCell API display."""
+def build_auto_score_breakdown_from_feature_summary(
+    feature_summary,
+    grid_size_meters=None,
+):
+    """Build a compact JSON-safe score breakdown for GridCell API display.
+
+    The compact shape is stored on GridCell so the detail page can explain the
+    automatic score without exposing every internal intermediate value.
+    """
     breakdown = calculate_initial_score_breakdown_from_feature_summary(
-        feature_summary
+        feature_summary,
+        grid_size_meters=grid_size_meters,
     )
 
     return {
         **{key: breakdown[key] for key in AUTO_SCORE_BREAKDOWN_SCORE_KEYS},
+        "grid_size_multiplier": breakdown["grid_size_multiplier"],
         "bonuses": {
             key: breakdown[key]
             for key in AUTO_SCORE_BREAKDOWN_BONUS_KEYS
@@ -2733,7 +2825,11 @@ def determine_initial_score_for_grid_cell(
     region_feature_level,
     grid_context=None,
 ):
-    """Return the initial GridCell score as a 0.0-3.0 float value."""
+    """Return the initial GridCell score as a 0.0-3.0 float value.
+
+    Feature summaries take priority for auto mode; manual mode falls back to the
+    selected region_feature_level so both creation paths share one generator.
+    """
     if isinstance(grid_context, dict) and "feature_summary" in grid_context:
         return calculate_initial_score_from_feature_summary(
             grid_context["feature_summary"]
@@ -2778,7 +2874,11 @@ def calculate_bounds_from_center(
     rows,
     cols,
 ):
-    """Calculate MapArea bounds from center position and grid dimensions."""
+    """Calculate MapArea bounds from center position and grid dimensions.
+
+    Latitude can use a fixed meters-per-degree approximation, but longitude
+    narrows toward the poles, so it is corrected with cos(center_lat).
+    """
     grid_size_meters = _validate_positive_grid_dimensions(
         grid_size_meters,
         rows,
@@ -2823,7 +2923,11 @@ def validate_center_grid_limits(
     cols,
     is_staff=False,
 ):
-    """Validate general-user limits for center-based MapArea creation."""
+    """Validate general-user limits for center-based MapArea creation.
+
+    This keeps accidental huge grids from producing too many GridCells or
+    expensive Overpass requests, while still allowing staff-only large checks.
+    """
     grid_size_meters = _validate_positive_grid_dimensions(
         grid_size_meters,
         rows,
@@ -2866,7 +2970,11 @@ def build_grid_cell_contexts_for_area(
     lat_step=None,
     lng_step=None,
 ):
-    """Build GridCell context dictionaries without saving them."""
+    """Build GridCell context dictionaries without saving them.
+
+    Contexts let preview/auto-score code calculate each cell's bounds before
+    the database rows exist, while keeping saved GridCells inside MapArea bounds.
+    """
     if map_area.grid_size_meters <= 0:
         raise ValueError("grid_size_meters は 0 より大きい値にしてください。")
     if map_area.north <= map_area.south:
@@ -2940,7 +3048,11 @@ def generate_grid_cells_for_area(
     lng_step=None,
     feature_summaries_by_position=None,
 ):
-    """Generate and save GridCell rows for one MapArea."""
+    """Generate and save GridCell rows for one MapArea.
+
+    A cell either receives an auto-score breakdown from OSM summaries or falls
+    back to the manually selected region feature level.
+    """
     if feature_summaries_by_position is None:
         feature_summaries_by_position = {}
     elif not isinstance(feature_summaries_by_position, dict):
@@ -2965,7 +3077,8 @@ def generate_grid_cells_for_area(
         if feature_summary is not None:
             grid_context["feature_summary"] = feature_summary
             auto_score_breakdown = build_auto_score_breakdown_from_feature_summary(
-                feature_summary
+                feature_summary,
+                grid_size_meters=map_area.grid_size_meters,
             )
             initial_score = auto_score_breakdown["clamped_score"]
         else:
@@ -2997,10 +3110,16 @@ def generate_grid_cells_for_area(
 
 
 def update_grid_cell_score(grid_cell):
-    """Recalculate and save score fields for one GridCell."""
+    """Recalculate and save score fields for one GridCell.
+
+    initial_score is treated as the first vote. average_user_score and
+    rating_count still describe only user ratings, while calculated_score blends
+    the initial score with every user score so its influence fades naturally.
+    """
     rating_summary = grid_cell.ratings.aggregate(
         average_score=Avg("score"),
         rating_count=Count("id"),
+        score_sum=Sum("score"),
     )
     rating_count = rating_summary["rating_count"]
 
@@ -3011,11 +3130,12 @@ def update_grid_cell_score(grid_cell):
         grid_cell.score_updated_at = None
     else:
         average_user_score = rating_summary["average_score"]
+        user_score_sum = rating_summary["score_sum"] or 0
         grid_cell.average_user_score = average_user_score
         grid_cell.rating_count = rating_count
         grid_cell.calculated_score = (
-            grid_cell.initial_score + average_user_score
-        ) / 2
+            grid_cell.initial_score + user_score_sum
+        ) / (1 + rating_count)
         grid_cell.score_updated_at = timezone.now()
 
     grid_cell.save(

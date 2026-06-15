@@ -1,4 +1,5 @@
 (function () {
+  // メモグリッド詳細画面の地図描画、GridCell選択、採点UI、共有相手管理を担当する。
   const rootElement = document.querySelector("#grid-detail-root");
   const messageElement = document.querySelector("#map-preview-status");
   const reloadGridCellsButton = document.querySelector("#reload-grid-cells");
@@ -256,6 +257,7 @@
       return section;
     }
 
+    // 点数だけでは判断理由が見えないため、主な加点・減点要因を折りたたんで表示する。
     const scoreKeys = [
       "clamped_score",
       "base_score",
@@ -366,6 +368,7 @@
   }
 
   function gridCommentText(grid) {
+    // APIの変遷に備え、既知のコメント候補を拾って表示側の互換性を保つ。
     const commentCandidates = [
       grid.comment,
       grid.rating_comment,
@@ -473,6 +476,7 @@
     setSelectedGridCount(grids.length);
     updateClearSelectedButton();
 
+    // 選択数に応じて、未選択案内・単体詳細・複数選択一覧を切り替える。
     if (mode === "none") {
       renderSelectedGridDetail(null);
     } else if (mode === "single") {
@@ -622,6 +626,7 @@
       return;
     }
 
+    // 単体選択ではコメント付きで1マスを採点し、複数選択時は一括採点UIへ譲る。
     if (mode === "single") {
       showRatingPanel("single");
       renderSingleRatingForm(grids[0], message, messageType);
@@ -657,6 +662,7 @@
       return;
     }
 
+    // 複数選択時は同じスコアをまとめて送れるようにして入力の手間を減らす。
     showRatingPanel("bulk");
     bulkRatingFormContainer.append(
       createRatingTarget(`対象: ${grids.length}件のマス`),
@@ -677,6 +683,7 @@
 
     const score = Number(rawScore);
 
+    // calculated_score を色に変換し、地図だけで傾向をざっと読めるようにする。
     if (!Number.isFinite(score)) {
       return {
         color: "#8a94a1",
@@ -792,6 +799,7 @@
   }
 
   function updateSelectedMapGridState() {
+    // 通常地図と拡大地図は同じ選択集合を共有し、どちらで選んでも見た目を同期する。
     state.mapGridRectanglesById.forEach((rectangle, gridId) => {
       const grid = state.gridsById.get(gridId);
       if (!grid) {
@@ -856,6 +864,7 @@
     bulkMessageType = ""
   ) {
     const grids = selectedGrids();
+    // 選択状態は詳細欄・採点フォーム・地図スタイルの3か所に同時反映する。
     renderSelectedGridSelection(grids);
     renderRatingFormForSelection(grids, message, messageType);
     renderBulkRatingFormForSelection(grids, bulkMessage, bulkMessageType);
@@ -955,6 +964,7 @@
     previousSelectedGridIds,
     previousSelectedGridId
   ) {
+    // 採点後や再取得後も、残っているGridCellだけ選択状態を復元する。
     const requestedSelectedGridIds = requestedGridSelection(
       options,
       previousSelectedGridIds
@@ -985,6 +995,7 @@
     const previousSelectedGridId = state.selectedGridId;
     resetGridStateForRender();
 
+    // APIから取得したGridCellを、地図・選択欄・採点欄の共通データとして持つ。
     if (!Array.isArray(grids) || grids.length === 0) {
       renderEmptyGridList();
       return;
@@ -1200,6 +1211,7 @@
       leafletMap.dragging.disable();
     }
 
+    // Shiftドラッグ中は地図移動より範囲選択を優先し、連続したマスをまとめて選ぶ。
     const bounds = boundsFromLatLngs(latlng, latlng);
     dragState.rectangle = window.L.rectangle(bounds, selectionDragStyle())
       .addTo(leafletMap);
@@ -1259,6 +1271,7 @@
       return;
     }
 
+    // 範囲内のマスは一括採点の候補として選択集合へ追加する。
     selectedGridIds.forEach((gridId) => {
       state.selectedGridIds.add(gridId);
     });
@@ -1334,6 +1347,7 @@
   }
 
   function createBaseLeafletMap(element) {
+    // 通常地図と拡大地図で同じLeaflet設定を使い、操作感と描画を揃える。
     const leafletMap = window.L.map(element, {
       scrollWheelZoom: false,
       boxZoom: false,
@@ -1474,6 +1488,7 @@
     }
 
     ensureLeafletMap();
+    // 詳細画面ではまずMapArea全体を見せ、そこにGridCellを重ねていく。
     drawMapAreaRectangle(bounds);
     fitMapAreaBounds(bounds);
     updateMapScoreLabelSize();
@@ -1672,6 +1687,7 @@
       return;
     }
 
+    // モーダル表示直後は地図コンテナが0pxになることがあるため、少し待ってから描く。
     window.setTimeout(() => {
       waitForExpandedMapPreviewSize(callback, attempts + 1);
     }, 50);
@@ -1694,6 +1710,7 @@
   }
 
   function createMapScoreLabel(grid, center) {
+    // スコア数値はLeaflet markerではなく軽いdivIconとして重ねる。
     return window.L.marker(center, {
       interactive: false,
       keyboard: false,
@@ -1722,6 +1739,7 @@
       return;
     }
 
+    // スコア色の面に数値を足すことで、地図上で点数を確認しやすくする。
     grids.forEach((grid) => {
       const center = gridCellCenter(grid);
       if (!center) {
@@ -1827,6 +1845,7 @@
       return;
     }
 
+    // 自分が採点済みのマスだけを軽い印で示し、未採点マスを探しやすくする。
     grids.forEach((grid) => {
       if (!grid.current_user_has_rating) {
         return;
@@ -1912,6 +1931,7 @@
       return;
     }
 
+    // 通常クリックは単体採点を素早く始めるため、選択集合を1件に絞る。
     selectSingleGrid(gridId);
   }
 
@@ -2021,6 +2041,7 @@
       return;
     }
 
+    // 同じGridCellデータから面の色、スコアラベル、採点済み表示をまとめて描く。
     grids.forEach((grid) => {
       renderMapGridBoundary(grid, boundaryLayer);
     });
@@ -2224,6 +2245,7 @@
       return;
     }
 
+    // 共有管理は作成者用の操作なので、表示されている画面だけで一覧を同期する。
     setShareMessage("共有相手一覧を読み込んでいます。");
     setShareListMessage("共有相手一覧を読み込んでいます。");
 
@@ -2255,6 +2277,7 @@
       return;
     }
 
+    // 追加後に一覧を取り直し、権限状態を画面内で完結して確認できるようにする。
     if (shareAddSubmitButton) {
       shareAddSubmitButton.disabled = true;
     }
@@ -2290,6 +2313,7 @@
       return;
     }
 
+    // 共有解除は相手の閲覧・採点権限に影響するため、確認を挟んでから実行する。
     deleteButton.disabled = true;
     setShareMessage("共有を解除しています。");
 
@@ -2321,6 +2345,7 @@
       return;
     }
 
+    // MapArea削除は関連するGridCell・採点・共有設定も消えるため、完了後は一覧へ戻す。
     deleteAreaButton.disabled = true;
     setDeleteStatus("メモグリッドを削除しています。");
 
@@ -2347,6 +2372,7 @@
     setReloadGridCellsButtonDisabled(true);
 
     try {
+      // 採点後や再取得時はAPIから取り直し、表示スコアとコメントを最新状態にする。
       const data = await api.fetchGridCells(areaId);
       renderGrids(data && data.grids ? data.grids : [], options);
     } catch (error) {
@@ -2357,6 +2383,7 @@
   }
 
   function reloadGridCells() {
+    // 手動再取得では現在の選択を保ち、地図だけ最新のGridCell情報へ差し替える。
     loadGridCells({
       selectedGridId: state.selectedGridId,
       selectedGridIds: new Set(state.selectedGridIds),
@@ -2423,6 +2450,7 @@
 
     try {
       await api.submitBulkRating(payload);
+      // 採点APIの戻り値だけに頼らず、再取得して地図色・数値・コメントを揃える。
       await loadGridCells({
         selectedGridId: submittedPrimaryGridId,
         selectedGridIds: submittedGridIds,
@@ -2459,6 +2487,7 @@
 
     try {
       await api.submitRating(gridId, payload);
+      // 単体採点後も再取得し、計算済みスコアと選択欄を同じデータで更新する。
       await loadGridCells({
         selectedGridId: gridId,
         selectedGridIds: new Set(state.selectedGridIds),

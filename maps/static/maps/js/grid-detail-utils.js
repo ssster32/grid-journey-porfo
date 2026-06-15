@@ -1,7 +1,9 @@
 (() => {
   "use strict";
 
+  // 詳細画面で使う表示整形と共通処理をまとめ、地図制御本体を読みやすくする。
   const autoScoreBreakdownLabels = {
+    // auto_score_breakdownの内部キーを、選択中マスで読める日本語に変換する。
     base_score: "基礎スコア",
     building_base_bonus: "建物による基礎加点",
     road_base_bonus: "道路による基礎加点",
@@ -53,6 +55,7 @@
     has_empty_cell_penalty: "建物・道路なしのため減点",
   };
 
+  // API値を画面に出す前に、未設定・数値・日時・座標を同じ基準で整える。
   function textOrFallback(value, fallback = "未設定") {
     if (value === null || value === undefined || value === "") {
       return fallback;
@@ -116,6 +119,7 @@
   }
 
   function getCookie(name) {
+    // DjangoのCSRF tokenをcookieから取り出し、POST/DELETEの共通ヘッダーで使う。
     const cookies = document.cookie ? document.cookie.split(";") : [];
     for (const cookie of cookies) {
       const trimmedCookie = cookie.trim();
@@ -127,6 +131,7 @@
   }
 
   function autoScoreLabel(key) {
+    // 未知のキーが来ても崩れないよう、対応表にないものは読みやすく整形する。
     if (autoScoreBreakdownLabels[key]) {
       return autoScoreBreakdownLabels[key];
     }
@@ -183,6 +188,7 @@
   }
 
   function autoScoreReasonLabels(breakdown) {
+    // 詳細なbreakdownから、ユーザーが把握しやすい主な採点理由だけを抜き出す。
     const flags = isPlainObject(breakdown.flags) ? breakdown.flags : {};
     const bonuses = isPlainObject(breakdown.bonuses) ? breakdown.bonuses : {};
     const reasonRules = [
@@ -232,6 +238,7 @@
   }
 
   async function readResponse(response) {
+    // DELETEのようにJSON本文がないレスポンスでもAPI呼び出し側を簡潔に保つ。
     const contentType = response.headers.get("content-type") || "";
     if (!contentType.includes("application/json")) {
       return null;
@@ -240,6 +247,7 @@
   }
 
   function errorText(response, data) {
+    // APIエラーの表示文をここで揃え、呼び出し側ごとの文言ばらつきを減らす。
     if (!data) {
       return `通信エラー ${response.status}.`;
     }

@@ -1,6 +1,7 @@
 (() => {
   "use strict";
 
+  // 詳細画面のAPI通信を集約し、grid-detail.js側を画面制御に集中させる。
   const utils = window.GridDetailUtils;
   if (!utils) {
     console.error("GridDetailUtils is not loaded.");
@@ -10,6 +11,7 @@
   const { getCookie, readResponse, errorText } = utils;
 
   async function requestJson(url, options = {}) {
+    // fetch後のJSON読み取りとエラー文生成を共通化し、各API関数を薄く保つ。
     const response = await fetch(url, options);
     const data = await readResponse(response);
 
@@ -21,12 +23,14 @@
   }
 
   function csrfHeaders(extraHeaders = {}) {
+    // POST/DELETEではDjangoのCSRFチェックを通すため、cookieのtokenを付ける。
     return {
       ...extraHeaders,
       "X-CSRFToken": getCookie("csrftoken"),
     };
   }
 
+  // GridCell取得と採点API。採点後の再取得は呼び出し側で制御する。
   async function fetchGridCells(areaId) {
     return requestJson(`/api/maps/areas/${areaId}/grids/`, {
       credentials: "same-origin",
@@ -55,6 +59,7 @@
     });
   }
 
+  // MapArea自体の削除API。危険操作の確認は画面側で行う。
   async function deleteArea(areaId) {
     return requestJson(`/api/maps/areas/${areaId}/`, {
       method: "DELETE",
@@ -63,6 +68,7 @@
     });
   }
 
+  // 共有相手の一覧・追加・解除を詳細画面から扱うためのAPI群。
   async function fetchShares(areaId) {
     return requestJson(`/api/maps/areas/${areaId}/shares/`, {
       credentials: "same-origin",

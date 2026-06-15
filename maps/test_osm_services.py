@@ -5582,6 +5582,7 @@ class DetermineInitialScoreForGridCellTests(TestCase):
             "penalty",
             "raw_score",
             "clamped_score",
+            "grid_size_multiplier",
             "feature_category_count",
             "surface_railway_count",
             "underground_railway_count",
@@ -6933,7 +6934,10 @@ class GenerateGridCellsFeatureSummaryTests(TestCase):
             "is_coastal": True,
             "water_coverage_ratio": 0.1,
         }
-        expected_score = calculate_initial_score_from_feature_summary(feature_summary)
+        expected_score = calculate_initial_score_from_feature_summary(
+            feature_summary,
+            grid_size_meters=self.area.grid_size_meters,
+        )
 
         generate_grid_cells_for_area(
             self.area,
@@ -6975,7 +6979,8 @@ class GenerateGridCellsFeatureSummaryTests(TestCase):
             map_features,
         )
         expected_score = calculate_initial_score_from_feature_summary(
-            feature_summaries[(0, 0)]
+            feature_summaries[(0, 0)],
+            grid_size_meters=self.area.grid_size_meters,
         )
 
         generate_grid_cells_for_area(

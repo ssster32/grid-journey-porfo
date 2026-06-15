@@ -3,8 +3,10 @@ from django.contrib import admin
 from .models import GridCell, GridRating, MapArea, MapAreaShare
 
 
+# Django管理画面で、提出前のデータ確認や検索をしやすくする設定。
 @admin.register(MapArea)
 class MapAreaAdmin(admin.ModelAdmin):
+    # MapAreaの作成者・範囲設定を一覧から追いやすくする。
     list_display = (
         "id",
         "name",
@@ -19,6 +21,7 @@ class MapAreaAdmin(admin.ModelAdmin):
 
 @admin.register(MapAreaShare)
 class MapAreaShareAdmin(admin.ModelAdmin):
+    # どのメモグリッドを誰に共有しているかを確認する。
     list_display = ("id", "area", "user", "created_at")
     search_fields = ("area__name", "user__username")
     list_filter = ("created_at",)
@@ -26,6 +29,7 @@ class MapAreaShareAdmin(admin.ModelAdmin):
 
 @admin.register(GridCell)
 class GridCellAdmin(admin.ModelAdmin):
+    # マスごとの位置とスコア状態を管理画面で確認する。
     list_display = (
         "id",
         "area",
@@ -41,6 +45,7 @@ class GridCellAdmin(admin.ModelAdmin):
 
 @admin.register(GridRating)
 class GridRatingAdmin(admin.ModelAdmin):
+    # ユーザー採点とコメントの紐づき確認に使う。
     list_display = (
         "id",
         "grid",

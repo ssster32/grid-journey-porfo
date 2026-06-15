@@ -1,16 +1,165 @@
-# map-score-api
+# Grid Journey
 
-職業訓練校の共用 Mac で使うことを想定した Django REST Framework プロジェクトです。
+Grid Journey は、地図上の任意の範囲をグリッド状に分割し、各マスに対して初期スコア・ユーザー採点・コメントを記録できる Web アプリです。
+
+OSM / Overpass API を使った自動初期スコア設定にも対応しており、建物、公園、川、水辺、森林、海岸、鉄道、駅、高速道路、観光名所などの地域特徴をもとにメモグリッドを作成できます。
+
+画面上では、個人用の `MapArea` を「メモグリッド」と表示します。
+API 内部の model 名やエンドポイント名は、従来どおり `MapArea` / `GridCell` のままです。
+
+## 主な機能
+
+- ユーザー登録・ログイン
+- メモグリッド一覧表示
+- メモグリッド作成
+  - 中心座標
+  - 説明
+  - 1マスの大きさ
+  - 縦横のマス数
+  - 手動設定 / 自動設定
+- 作成画面の地図プレビュー
+  - 地図中央座標表示
+  - 地図中央座標を入力欄へ反映
+  - 中央位置を示すクロスヘア
+  - `−` / `＋` / `入力座標へ戻す` のズーム操作
+- 詳細画面の GridCell 表示
+  - 地図上にマスを表示
+  - スコア別の色表示
+  - スコア数値ラベル
+  - 採点済み表示
+  - 色の濃さ調整
+- 採点・コメント
+  - 単体採点
+  - Ctrl / Command クリックによる複数選択
+  - Shift ドラッグによる範囲選択
+  - 複数マスへの一括採点
+- 自動初期スコア
+  - OSM / Overpass API から地域特徴を取得
+  - 各 GridCell ごとに特徴を集計
+  - 自動採点理由を詳細画面で表示
+- メモグリッド共有
+  - 共有相手追加
+  - 共有相手削除
+  - 共有されたメモグリッドの閲覧・採点
+- メモグリッド削除
+  - 作成者のみ削除可能
+
+## 画面構成
+
+- `/login/`: ログイン
+- `/signup/`: 新規ユーザー登録
+- `/maps/`: メモグリッド一覧
+- `/maps/new/`: メモグリッド作成
+- `/maps/<area_id>/`: メモグリッド詳細
+- `/api/maps/`: メモグリッド関連 API
+- `/api/auth/token/`: Token 認証用 API
+
+トップページ `/` は、現在 `/maps/` へリダイレクトします。
+
+## 使い方
+
+1. `/signup/` でユーザー登録する。
+2. `/login/` でログインする。
+3. `/maps/new/` でメモグリッドを作成する。
+4. 作成画面の地図プレビューを見ながら、中心座標・マス数・1マスの大きさを調整する。
+5. 手動設定または自動設定を選んで、メモグリッドを作成する。
+6. `/maps/<area_id>/` の地図上でマスを選択する。
+7. 選択したマスにスコアとコメントを記録する。
+8. 必要に応じて、共有相手を追加する。
+
+作成フォームが縦に長く、通常の作成ボタンが画面内に見えていない場合は、下部固定の `メモグリッドを作成` ボタンを表示します。
+固定ボタンも既存フォームの submit を使うため、作成処理は二重管理していません。
+
+## 自動初期スコア
+
+自動設定では、OSM / Overpass API から地物情報を取得し、各 GridCell ごとに地域特徴を集計します。
+
+スコア計算では、主に次の要素を組み合わせます。
+
+- `base_score`: 建物や道路など、マス自体の基本的な特徴
+- `diversity_bonus`: 複数種類の特徴があることによる加点
+- `context_bonus`: 周辺の駅、公園、水辺、観光名所などによる加点
+- `penalty`: 水域中心、森林中心、建物・道路なしなどによる減点
+
+最終的な初期スコアは `0.0〜3.0` に収めます。
+大きいマスほど地物が多く入りやすく、自動スコアが上がりやすいため、`base_score` / `diversity_bonus` / `context_bonus` にはマスサイズ補正を入れています。
+`penalty` にはこの補正をかけません。
+
+また、大きすぎる river / expressway bounds による過検出を抑えるため、地物ごとの判定条件も調整しています。
+詳細画面では、保存された `auto_score_breakdown` から主な自動採点理由を確認できます。
+
+## 表示スコア計算
+
+地図上の色分けやスコアラベルには `calculated_score` を使います。
+
+表示スコアは、初期スコアを最初の1票として扱い、ユーザー採点と合わせて平均します。
+
+```text
+calculated_score = (initial_score + 全ユーザー採点の合計) / (1 + rating_count)
+```
+
+- `average_user_score`: ユーザー採点だけの平均
+- `rating_count`: ユーザー採点数
+- 採点がない場合: `calculated_score = initial_score`
+
+ユーザー採点が増えるほど、初期スコアの影響が自然に薄まる設計です。
+
+## 自動設定時の注意
+
+自動設定は外部 API 取得とスコア計算を行うため、手動設定より時間がかかる場合があります。
+
+特に都市部の広範囲では、地物数が多くなり処理が重くなることがあります。
+現在は自動設定時のみ、1辺が `2000m以上` のメモグリッド作成を画面側で制限しています。
+手動設定ではこの制限はかけていません。
+
+安定利用の目安として、都市部の自動設定は 1 辺 1.5km 以内が扱いやすいです。
+
+## 認証・権限
+
+- 本サイト画面は Django のログイン機能を使います。
+- 新規登録は Django 標準の `UserCreationForm` を使います。
+- 独自 User model は使っていません。
+- メモグリッドは、作成者本人と共有されたユーザーが閲覧できます。
+- 共有されたユーザーは、共有メモグリッドを閲覧・採点できます。
+- 共有相手管理とメモグリッド削除は作成者のみ可能です。
+- API では Session 認証、Basic 認証、Token 認証を利用できます。
+
+## UI 面の工夫
+
+- 作成画面では、地図を見ながら中心座標を調整できます。
+- クロスヘアで地図中央が分かるようにしています。
+- 地図中央座標を `center_lat` / `center_lng` へ反映できます。
+- 作成ボタンが画面外にある場合、下部固定ボタンを表示します。
+- 詳細画面では、スコア分布を地図上の色で確認できます。
+- スコア数値ラベルは背景をなくし、地図上で軽く読める形にしています。
+- クリック、Ctrl / Command クリック、Shift ドラッグで GridCell を選択できます。
+- 通常地図と拡大表示モーダルに `−` / `＋` / `範囲に戻す` のズーム操作を用意しています。
+- 一覧画面では、通常メモグリッドと共有メモグリッドを視覚的に区別しています。
+
+## 技術構成
+
+- Python
+- Django
+- Django REST Framework
+- SQLite
+- PostgreSQL 対応
+- Leaflet
+- OpenStreetMap
+- Overpass API
+- HTML / CSS / JavaScript
+- WhiteNoise
+- gunicorn
+- Render 想定
+
+ローカル開発では SQLite を使います。
+`DATABASE_URL` が設定されている環境では、`dj-database-url` 経由で PostgreSQL などへ接続できます。
+
+## セットアップ
+
+職業訓練校の共用 Mac で使うことを想定しています。
 Python パッケージはプロジェクト直下の `.venv` にだけ入れ、PC 本体の Python 環境はできるだけ汚さない構成にします。
 
-## プロジェクトの目標
-
-地図情報を取得してグリッド状に分割し、各グリッドに点数を付けられる API を作ります。
-ユーザーが採点した点数を集計し、分割された地図上で一目でわかる形に反映することを目指します。
-
-現時点では仕様未定の点が多いため、まずは `API_SPEC.md` と `TASK.md` を更新しながら、小さい単位で設計と実装を進めます。
-
-## 前提
+### 前提
 
 - Python 3.12 以上
 - macOS のターミナル
@@ -18,9 +167,7 @@ Python パッケージはプロジェクト直下の `.venv` にだけ入れ、P
 
 現在の依存関係は Django 6 系を前提にしているため、Python 3.11 以下では動きません。
 
-## 初回セットアップ
-
-プロジェクト直下で実行します。
+### 初回セットアップ
 
 ```bash
 python3 --version
@@ -28,19 +175,23 @@ python3 -m venv .venv
 source .venv/bin/activate
 PIP_CACHE_DIR=.pip-cache python -m pip install --upgrade pip
 PIP_CACHE_DIR=.pip-cache python -m pip install -r requirements.txt
+python manage.py migrate
 ```
 
 仮想環境が有効な間は、プロンプトの先頭に `(.venv)` が表示されます。
 
-## 起動
+### 起動
 
 ```bash
 source .venv/bin/activate
-python manage.py migrate
 python manage.py runserver
 ```
 
-ブラウザで `http://127.0.0.1:8000/` を開きます。
+ブラウザで次を開きます。
+
+```text
+http://127.0.0.1:8000/
+```
 
 ## 開発時のコマンド
 
@@ -57,68 +208,19 @@ python manage.py migrate
 # 開発サーバー
 python manage.py runserver
 
+# Django の設定確認
+python manage.py check
+
 # 仮想環境を終了
 deactivate
 ```
 
-## 実装済み API の手動確認
+## API の手動確認
 
-ここでは、ローカル開発用 DB に確認用ユーザーを作り、実装済み API を `curl` で確認します。
+API の詳細な仕様は `API_SPEC.md` を参照します。
+ここでは代表的な入口だけを示します。
 
-`curl` はターミナルから API にリクエストを送るためのコマンドです。
-`-u testuser:test-password` は Basic 認証で、ユーザー名とパスワードを送る指定です。
-Token 認証を使う場合は、先に token を発行し、`Authorization: Token <TOKEN>` ヘッダーを送ります。
-
-画面上では、個人用の `MapArea` を「メモグリッド」と表示します。
-API 内部の model 名やエンドポイント名は、従来どおり `MapArea` のままです。
-
-### 1. 事前準備
-
-プロジェクト直下で実行します。
-
-```bash
-source .venv/bin/activate
-python manage.py migrate
-```
-
-確認用ユーザーを作成します。
-すでに同じユーザーがある場合は再利用します。
-
-```bash
-python manage.py shell
-```
-
-`>>>` が表示されたら、次の Python コードを貼り付けて Enter を押します。
-
-```python
-from django.contrib.auth import get_user_model
-
-User = get_user_model()
-user, _ = User.objects.get_or_create(
-    username="testuser",
-    defaults={"email": "test@example.com"},
-)
-user.set_password("test-password")
-user.save()
-print("user:", user.username)
-```
-
-確認が終わったら、`exit()` で shell を終了します。
-
-別のターミナルを開き、開発サーバーを起動します。
-
-```bash
-source .venv/bin/activate
-python manage.py runserver
-```
-
-### 2. Token 認証の確認
-
-このプロジェクトでは、Basic 認証と Session 認証に加えて、DRF の Token 認証も使えます。
-Token 認証を追加した後は、Token 用テーブルを作るために `python manage.py migrate` が必要です。
-上の事前準備で `migrate` 済みなら、ここで追加実行しなくても大丈夫です。
-
-まず token を発行します。
+### Token 発行
 
 ```bash
 curl -i \
@@ -127,10 +229,7 @@ curl -i \
   -d '{"username": "testuser", "password": "test-password"}'
 ```
 
-正常な username/password なら `200 OK` が返り、レスポンスに `token` が含まれます。
-返ってきた token を、以降の `<TOKEN>` に置き換えてください。
-
-Token 認証で MapArea 一覧 API を呼びます。
+### メモグリッド一覧
 
 ```bash
 curl -i \
@@ -138,410 +237,50 @@ curl -i \
   http://127.0.0.1:8000/api/maps/areas/
 ```
 
-正常に認証できた場合は `200 OK` が返ります。
-Basic 認証も当面残しているため、以降の手順は `-u testuser:test-password` のままでも確認できます。
-
-### 3. MapArea 作成 API と GridCell 自動生成
-
-メモグリッドを作成します。
-API 内部では、メモグリッドは `MapArea` として保存されます。
-現在の仕様では、メモグリッド作成後に GridCell も自動生成されます。
+### GridCell 一覧
 
 ```bash
-curl -i -u testuser:test-password \
-  -H "Content-Type: application/json" \
-  -X POST http://127.0.0.1:8000/api/maps/areas/ \
-  -d '{"name": "Manual Test Area", "description": "manual curl test", "center_lat": 35.695, "center_lng": 139.795, "grid_size_meters": 500, "region_feature_level": 3, "initial_score_mode": "manual", "rows": 6, "cols": 8, "source": "manual"}'
+curl -i \
+  -H "Authorization: Token <TOKEN>" \
+  http://127.0.0.1:8000/api/maps/areas/<AREA_ID>/grids/
 ```
 
-Token 認証で確認する場合は、次の形でも同じ API を呼べます。
+### 単体採点
 
 ```bash
 curl -i \
   -H "Authorization: Token <TOKEN>" \
   -H "Content-Type: application/json" \
-  -X POST http://127.0.0.1:8000/api/maps/areas/ \
-  -d '{"name": "Manual Token Area", "description": "manual token test", "center_lat": 35.695, "center_lng": 139.795, "grid_size_meters": 500, "region_feature_level": 3, "initial_score_mode": "manual", "rows": 6, "cols": 8, "source": "manual"}'
-```
-
-正常に作成できた場合は `201 Created` が返ります。
-レスポンスの `id` を、以降の `<AREA_ID>` に置き換えてください。
-
-`region_feature_level` は地域特徴レベルです。
-未指定時は `0` になり、指定する場合は `0` から `3` の整数を使います。
-作成直後の `GridCell.initial_score` と `GridCell.calculated_score` は、この値と同じになります。
-
-| 値 | 意味 |
-| --- | --- |
-| `0` | 初期値 |
-| `1` | ありふれた地域 |
-| `2` | 普通の地域 |
-| `3` | 特徴的な地域 |
-
-`initial_score_mode` は、GridCell の初期点数の決め方です。
-値は `manual` または `auto` です。
-
-| 値 | 意味 | 現在の動作 |
-| --- | --- | --- |
-| `manual` | `region_feature_level` を使う | 実装済み |
-| `auto` | 将来、地物情報から自動判定する | 現時点では `region_feature_level=0` を fallback として使う |
-
-demo ページでは「自動設定」を選ぶと、API へ `initial_score_mode: "auto"` と `region_feature_level: 0` を送信します。
-現時点では OSM / Overpass API 連携が未実装のため、本物の自動判定はまだ行いません。
-
-一般ユーザーは、500マス、南北30,000m、東西30,000mを超えるメモグリッドを作成できません。
-管理者はこの制限の対象外です。
-これは、広すぎる範囲で `GridCell` が大量生成されることを防ぐための制限です。
-
-次に、作成されたメモグリッドの GridCell 一覧を取得します。
-
-```bash
-curl -i -u testuser:test-password \
-  http://127.0.0.1:8000/api/maps/areas/<AREA_ID>/grids/
-```
-
-正常に取得できた場合は `200 OK` が返ります。
-`grids` に含まれる先頭 2 件の `id` を、以降の `<GRID1_ID>`、`<GRID2_ID>` に置き換えてください。
-
-GridCell が返ることを確認することで、メモグリッド作成時の GridCell 自動生成も確認できます。
-
-### 4. 単体採点 API
-
-1 つのグリッドに点数を付けます。
-
-```bash
-curl -i -u testuser:test-password \
-  -H "Content-Type: application/json" \
-  -X POST http://127.0.0.1:8000/api/maps/grids/<GRID1_ID>/ratings/ \
+  -X POST http://127.0.0.1:8000/api/maps/grids/<GRID_ID>/ratings/ \
   -d '{"score": 8, "comment": "水辺が近くて良さそう"}'
 ```
 
-初回採点では `201 Created` が返ります。
-同じコマンドをもう一度実行すると、新しい採点行は作らず既存採点を更新するため `200 OK` が返ります。
-
-レスポンスには、作成または更新された `rating` と、再集計後の `grid` が含まれます。
-
-### 5. 一括採点 API
-
-複数のグリッドに同じ点数をまとめて付けます。
-
-```bash
-curl -i -u testuser:test-password \
-  -H "Content-Type: application/json" \
-  -X POST http://127.0.0.1:8000/api/maps/grids/bulk-ratings/ \
-  -d '{"grid_ids": [<GRID1_ID>, <GRID2_ID>], "score": 5, "comment": "まとめて採点"}'
-```
-
-すべて新規採点なら `201 Created` が返ります。
-既存採点が 1 件以上更新された場合は `200 OK` が返ります。
-
-レスポンスには、再集計後の `grids` 一覧が含まれます。
-
-### 6. GridCell 自動生成 API
-
-指定した地図範囲から、グリッドを自動生成します。
-
-通常の MapArea 作成 API では、MapArea 作成後に GridCell も自動生成されます。
-この確認手順では、既に GridCell がある場合に自動生成 API が `400 Bad Request` を返すことを確認できます。
-
-`<AREA_ID>` は、MapArea 作成 API で返った `id` に置き換えてください。
-
-```bash
-curl -i -u testuser:test-password \
-  -X POST http://127.0.0.1:8000/api/maps/areas/<AREA_ID>/grids/
-```
-
-MapArea 作成時点ですでに GridCell があるため、`400 Bad Request` が返ります。
-これは、重複生成で既存の採点や集計値を壊さないための動きです。
-
-### 7. 点数付きグリッド一覧 API
-
-指定した地図範囲に属するグリッド一覧を、点数付きで取得します。
-
-```bash
-curl -i -u testuser:test-password \
-  http://127.0.0.1:8000/api/maps/areas/<AREA_ID>/grids/
-```
-
-正常に取得できた場合は `200 OK` が返ります。
-レスポンスには `area` と `grids` が含まれます。
-
-`grids` には、各グリッドの位置情報と点数が含まれます。
-地図画面では `calculated_score` を使って色分け表示する想定です。
-
-```json
-{
-  "area": {
-    "id": 1,
-    "name": "Manual Test Area"
-  },
-  "grids": [
-    {
-      "id": 1,
-      "area": 1,
-      "row_index": 0,
-      "col_index": 0,
-      "north": 35.7,
-      "south": 35.69,
-      "east": 139.8,
-      "west": 139.79,
-      "initial_score": 3.0,
-      "average_user_score": 8.0,
-      "rating_count": 1,
-      "calculated_score": 5.5,
-      "score_updated_at": "2026-05-15T10:00:00+09:00"
-    }
-  ]
-}
-```
-
-この API は保存済みの集計値を読むだけです。
-新しく採点したい場合は、単体採点 API または一括採点 API を使います。
-
-### 8. メモグリッド閲覧制限の確認
-
-メモグリッドは作成者本人だけが一覧・詳細・グリッド一覧で閲覧できます。
-API 内部では `MapArea` として扱います。
-別ユーザーで同じ `area_id` を指定すると、詳細とグリッド一覧は `404 Not Found` になります。
-
-まず別ユーザーを作成します。
-
-```bash
-python manage.py shell
-```
-
-`>>>` が表示されたら、次の Python コードを貼り付けます。
-
-```python
-from django.contrib.auth import get_user_model
-
-User = get_user_model()
-other_user, _ = User.objects.get_or_create(username="otheruser")
-other_user.set_password("other-password")
-other_user.save()
-print("user:", other_user.username)
-```
-
-確認が終わったら、`exit()` で shell を終了します。
-
-`<AREA_ID>` は、MapArea 作成 API で返った `id` に置き換えてください。
-
-```bash
-curl -i -u otheruser:other-password \
-  http://127.0.0.1:8000/api/maps/areas/
-```
-
-`otheruser` が作成したメモグリッドがなければ、`200 OK` で `areas: []` が返ります。
-`testuser` が作成したメモグリッドは含まれません。
-
-```bash
-curl -i -u otheruser:other-password \
-  http://127.0.0.1:8000/api/maps/areas/<AREA_ID>/
-```
-
-`testuser` が作成したメモグリッドを `otheruser` で取得しようとしているため、`404 Not Found` が返ります。
-
-```bash
-curl -i -u otheruser:other-password \
-  http://127.0.0.1:8000/api/maps/areas/<AREA_ID>/grids/
-```
-
-グリッド一覧も同じく、`404 Not Found` が返ります。
-
-### 9. 共有相手管理 API の確認
-
-作成者は、共有相手を追加・一覧取得・削除できます。
-`<AREA_ID>` は共有したいメモグリッドの `id` に置き換えてください。
-
-```bash
-curl -i -u testuser:test-password \
-  -H "Content-Type: application/json" \
-  -X POST http://127.0.0.1:8000/api/maps/areas/<AREA_ID>/shares/ \
-  -d '{"username": "otheruser"}'
-```
-
-正常なら `201 Created` が返ります。
-レスポンスの `share.id` を、以降の `<SHARE_ID>` に置き換えてください。
-
-```bash
-curl -i -u testuser:test-password \
-  http://127.0.0.1:8000/api/maps/areas/<AREA_ID>/shares/
-```
-
-正常なら `200 OK` が返り、`shares` に `otheruser` が含まれます。
-
-共有後は、`otheruser` でも詳細・GridCell 一覧・採点ができます。
-
-```bash
-curl -i -u otheruser:other-password \
-  http://127.0.0.1:8000/api/maps/areas/<AREA_ID>/grids/
-```
-
-共有を解除します。
-
-```bash
-curl -i -u testuser:test-password \
-  -X DELETE http://127.0.0.1:8000/api/maps/areas/<AREA_ID>/shares/<SHARE_ID>/
-```
-
-正常なら `204 No Content` が返ります。
-共有解除後は、`otheruser` で同じメモグリッドを取得すると `404 Not Found` が返ります。
-
-### 10. 他ユーザーでは採点できないことの確認
-
-`<GRID1_ID>` と `<GRID2_ID>` は、GridCell 一覧 API の `grids` に含まれる `id` に置き換えてください。
-
-```bash
-curl -i -u otheruser:other-password \
-  -H "Content-Type: application/json" \
-  -X POST http://127.0.0.1:8000/api/maps/grids/<GRID1_ID>/ratings/ \
-  -d '{"score": 8, "comment": "他ユーザーで採点"}'
-```
-
-`testuser` が作成したメモグリッドに属する `GridCell` を `otheruser` で採点しようとしているため、`404 Not Found` が返ります。
-
-```bash
-curl -i -u otheruser:other-password \
-  -H "Content-Type: application/json" \
-  -X POST http://127.0.0.1:8000/api/maps/grids/bulk-ratings/ \
-  -d '{"grid_ids": [<GRID1_ID>, <GRID2_ID>], "score": 5, "comment": "他ユーザーで一括採点"}'
-```
-
-一括採点でも同じく、他ユーザーの `GridCell` が含まれるため `400 Bad Request` が返ります。
-この場合、一部だけ採点されることはありません。
-
-### 11. エラー確認
-
-ログイン情報を付けずに送ると、ログイン必須のため `401 Unauthorized` になります。
+### 一括採点
 
 ```bash
 curl -i \
-  -H "Content-Type: application/json" \
-  -X POST http://127.0.0.1:8000/api/maps/grids/<GRID1_ID>/ratings/ \
-  -d '{"score": 8}'
-```
-
-点数が 1 から 10 の範囲外の場合は `400 Bad Request` になります。
-
-```bash
-curl -i -u testuser:test-password \
-  -H "Content-Type: application/json" \
-  -X POST http://127.0.0.1:8000/api/maps/grids/<GRID1_ID>/ratings/ \
-  -d '{"score": 11}'
-```
-
-存在しない `grid_id` を一括採点に含めた場合も `400 Bad Request` になります。
-
-```bash
-curl -i -u testuser:test-password \
+  -H "Authorization: Token <TOKEN>" \
   -H "Content-Type: application/json" \
   -X POST http://127.0.0.1:8000/api/maps/grids/bulk-ratings/ \
-  -d '{"grid_ids": [<GRID1_ID>, 999999], "score": 5}'
+  -d '{"grid_ids": [1, 2], "score": 5, "comment": "まとめて採点"}'
 ```
 
-存在しない `area_id` で点数付きグリッド一覧 API を呼ぶと、`404 Not Found` になります。
+## コード整理
 
-```bash
-curl -i -u testuser:test-password \
-  http://127.0.0.1:8000/api/maps/areas/999999/grids/
-```
+提出前に、`services.py` や主要 JavaScript ファイルへ、処理意図が分かるコメントを追加しました。
 
-### 12. メモグリッド削除 API の確認
+特に次のような、仕様の意図が伝わりにくい箇所を中心に整理しています。
 
-削除すると以降の確認で同じ `<AREA_ID>` や `<GRID1_ID>` を使えなくなるため、この確認は最後に行います。
-作成者は、自分が作成したメモグリッドを削除できます。
-削除すると、関連する GridCell、採点、共有相手情報も一緒に削除されます。
+- OSM / Overpass 取得
+- 自動採点
+- マスサイズ補正
+- 表示スコア計算
+- 地図操作
+- 採点 UI
+- 共有管理
+- 削除処理
 
-```bash
-curl -i -u testuser:test-password \
-  -X DELETE http://127.0.0.1:8000/api/maps/areas/<AREA_ID>/
-```
-
-正常なら `204 No Content` が返ります。
-削除後に同じメモグリッドを取得すると、`404 Not Found` が返ります。
-
-```bash
-curl -i -u testuser:test-password \
-  http://127.0.0.1:8000/api/maps/areas/<AREA_ID>/
-```
-
-共有相手や他ユーザーが削除しようとした場合も、`404 Not Found` が返ります。
-
-## 確認用 demo ページ
-
-curl ではなくブラウザで簡単に確認したい場合は、確認用 demo ページを使えます。
-このページは開発確認用です。JavaScript で Basic 認証情報を扱うため、本番向けのログイン画面ではありません。
-
-まず、事前準備の手順で確認用ユーザーを作成しておきます。
-既存のメモグリッドや `GridCell` がなくても、demo ページから作成できます。
-API 内部では、メモグリッドを `MapArea` と呼びます。
-その後、開発サーバーを起動します。
-
-```bash
-source .venv/bin/activate
-python manage.py runserver
-```
-
-ブラウザで次を開きます。
-
-```text
-http://127.0.0.1:8000/api/maps/demo/
-```
-
-画面の username/password には、事前準備で作成した次の値を入力します。
-
-```text
-username: testuser
-password: test-password
-```
-
-確認する流れ:
-
-1. `メモグリッド作成` フォームで、中心緯度・中心経度・1マスの大きさ・初期スコア設定・縦横のマス数を確認する。
-   例: `center_lat=35.695`, `center_lng=139.795`, `grid_size_meters=500`, `initial_score_mode=manual`, `region_feature_level=2`, `rows=6`, `cols=8`
-2. 必要に応じて値を調整し、`メモグリッドを作成` を押す。
-   `north / south / east / west` は入力せず、サーバー側で自動計算されます。
-3. 作成したメモグリッドが一覧に表示され、選択状態になることを確認する。
-4. `GridCell` が `rows * cols` 件作成され、`manual` では作成直後のスコアが地域特徴レベルと同じ値になることを確認する。
-   「自動設定」を選んだ場合は、現時点では fallback の `region_feature_level=0` が使われます。
-   上記の例なら `6 * 8 = 48` 件です。
-5. `Map Preview` に、選択中メモグリッドの範囲が四角で表示されることを確認する。
-6. `Map Preview` 上に、`GridCell` 境界が薄い線で表示され、`calculated_score` に応じて薄く色分けされることを確認する。
-7. 必要に応じて `セルの再取得` を押し、表示を更新できることを確認する。
-8. Map Preview 上の GridCell をクリックし、`選択数` が増えることを確認する。
-9. 選択済みのマスをもう一度クリックし、選択解除できることを確認する。
-10. Map Preview 上で Shift キーを押しながらドラッグし、範囲内の GridCell をまとめて選択できることを確認する。
-11. Shift を押さずに Map Preview をドラッグし、通常どおり地図を移動できることを確認する。
-12. `選択中のマス` パネルで、直近の選択・選択数・選択グリッド一覧が更新されることを確認する。
-13. `個別に入力し、まとめて採点` を選び、選択中 GridCell ごとに 1 から 10 の score を入力する。
-14. `まとめて採点する` を押し、採点中の表示が出た後、採点後に選択が解除されて Map Preview の色分けが更新されることを確認する。
-15. 再度複数のマスを選択し、`選択グリッドを全て同じ値で採点` を選ぶ。
-16. 共通 score に 1 から 10 の整数を入力し、`同じ値で採点する` を押して Map Preview が更新されることを確認する。
-17. `選択をすべて解除` で選択状態をリセットできることを確認する。
-18. 作成者ユーザーで、`共有相手 username` に `otheruser` を入力して `共有相手を追加` を押す。
-19. `共有相手一覧を取得` を押し、共有相手一覧に `otheruser` が表示されることを確認する。
-20. 必要に応じて `otheruser` でログインし直し、共有メモグリッドを閲覧・採点できることを確認する。
-21. 作成者ユーザーに戻り、`共有を解除` を押して共有相手一覧から消えることを確認する。
-
-`Map Preview` は Leaflet と OpenStreetMap タイルを使う、開発確認用の地図表示です。
-本番利用する場合は、地図タイル提供元の利用条件を確認してください。
-現在は選択中メモグリッドの範囲と `GridCell` 境界を表示し、`GridCell` は `calculated_score` に応じて色分けします。
-採点後に GridCell 一覧が再読み込みされると、Map Preview 側の色分けも更新されます。
-Map Preview 上の GridCell はクリックで選択できます。
-Shift キーを押しながらドラッグすると、範囲内の GridCell をまとめて選択できます。
-Shift を押さない通常のドラッグは、Leaflet の地図移動として動きます。
-採点操作は、Map Preview 上ではなく `選択中のマス` パネルで行います。
-選択中メモグリッドの範囲が小さい場合、Map Preview は範囲を確認しやすくするため少し寄って表示します。
-これは表示上のズーム調整であり、`grid_size_meters` や GridCell 生成ロジックは変わりません。
-選択後は、個別入力まとめ採点や同じ値での一括採点を使えます。
-`grid_size_meters` は表示サイズではなく、GridCell 生成時の粒度を決める値です。
-`region_feature_level` は、`initial_score_mode=manual` のときに全 GridCell の `initial_score` と `calculated_score` に入る地域特徴レベルです。
-`initial_score_mode` は `manual` / `auto` のどちらかです。
-demo ページで「自動設定」を選ぶと `initial_score_mode=auto` を送信し、現時点では fallback として `region_feature_level=0` を送信します。
-将来は `auto` の場合に地物情報から初期点数を自動判定する予定ですが、現在は外部API接続を行いません。
-demo ページでは、中心座標・`grid_size_meters`・`initial_score_mode`・`region_feature_level`・`rows`・`cols` からメモグリッドを作成します。
-
-demo ページでは、メモグリッド作成時に GridCell が自動生成される前提のため、GridCell 自動生成 API を直接実行するボタンは表示していません。
+コメント追加は、ロジック変更ではなく保守性を上げるための整理です。
 
 ## 依存関係を追加したいとき
 
@@ -569,7 +308,7 @@ python -m pip freeze > requirements.txt
 
 ## 環境変数
 
-通常の開発では設定不要です。
+通常のローカル開発では設定不要です。
 端末ごとに値を変えたい場合は `.env.example` を参考に `.env` を作成し、ターミナルで読み込んでから Django を起動します。
 
 ```bash
@@ -579,6 +318,14 @@ source .env
 set +a
 python manage.py runserver
 ```
+
+主な環境変数:
+
+- `DJANGO_SECRET_KEY`
+- `DJANGO_DEBUG`
+- `DJANGO_ALLOWED_HOSTS`
+- `DJANGO_CSRF_TRUSTED_ORIGINS`
+- `DATABASE_URL`
 
 ## Codex で作業するとき
 
@@ -602,5 +349,6 @@ python manage.py check
 ## 設計メモ
 
 - `TASK.md`: 現在の目標変更と作業メモ
-- `API_SPEC.md`: 地図採点 API の仕様案
+- `API_SPEC.md`: 地図採点 API の仕様
+- `memo.md`: 引き継ぎ用の作業メモ
 - `AGENTS.md`: Codex に依頼するときの役割分担ルール

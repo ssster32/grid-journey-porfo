@@ -66,7 +66,10 @@ def rateable_grid_cells_for_user(user):
 def log_overpass_feature_summary(area, user_id, feature_summaries_by_position):
     summaries = list(feature_summaries_by_position.values())
     scores = [
-        calculate_initial_score_from_feature_summary(summary)
+        calculate_initial_score_from_feature_summary(
+            summary,
+            grid_size_meters=area.grid_size_meters,
+        )
         for summary in summaries
     ]
     score_min = min(scores) if scores else 0.0
@@ -102,7 +105,10 @@ def log_overpass_score_breakdown_summary(
 ):
     summaries = list(feature_summaries_by_position.values())
     breakdowns = [
-        calculate_initial_score_breakdown_from_feature_summary(summary)
+        calculate_initial_score_breakdown_from_feature_summary(
+            summary,
+            grid_size_meters=area.grid_size_meters,
+        )
         for summary in summaries
     ]
 
@@ -307,7 +313,10 @@ def log_overpass_context_candidate_summary(
         station_proximity_summary = {}
 
     breakdowns = [
-        calculate_initial_score_breakdown_from_feature_summary(summary)
+        calculate_initial_score_breakdown_from_feature_summary(
+            summary,
+            grid_size_meters=area.grid_size_meters,
+        )
         for summary in feature_summaries_by_position.values()
     ]
 

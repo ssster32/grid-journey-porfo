@@ -6,6 +6,8 @@ from .views import (
     MapAreaPageListView,
 )
 
+# /maps/ 配下の画面URLをまとめる。
+# API用URLとは分けて、一覧・作成・詳細の3画面へルーティングする。
 urlpatterns = [
     path(
         "",

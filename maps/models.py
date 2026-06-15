@@ -3,7 +3,10 @@ from django.db import models
 from django.db.models import F, Q
 
 
+# Grid Journeyの主要データ構造を定義する。
+# MapAreaを中心に、共有相手・分割マス・ユーザー採点を関連付ける。
 class MapArea(models.Model):
+    # メモグリッド本体。地図範囲、マスサイズ、初期スコア設定を保持する。
     class InitialScoreMode(models.TextChoices):
         MANUAL = "manual", "Manual"
         AUTO = "auto", "Auto"
@@ -42,6 +45,7 @@ class MapArea(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
+        # 地図範囲や設定値の不正な保存をDB側でも防ぐ。
         constraints = [
             models.CheckConstraint(
                 condition=Q(north__gt=F("south")),
@@ -68,6 +72,7 @@ class MapArea(models.Model):
 
 
 class MapAreaShare(models.Model):
+    # MapAreaを共有した相手を表し、同じ相手への重複共有を防ぐ。
     area = models.ForeignKey(
         MapArea,
         on_delete=models.CASCADE,
@@ -94,6 +99,7 @@ class MapAreaShare(models.Model):
 
 
 class GridCell(models.Model):
+    # MapAreaを行・列で分割した1マス。表示スコアと自動採点理由を持つ。
     area = models.ForeignKey(
         MapArea,
         on_delete=models.CASCADE,
@@ -115,6 +121,7 @@ class GridCell(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
+        # 同じMapArea内で、同じ行・列のマスが重複しないようにする。
         constraints = [
             models.UniqueConstraint(
                 fields=["area", "row_index", "col_index"],
@@ -128,6 +135,7 @@ class GridCell(models.Model):
 
 
 class GridRating(models.Model):
+    # ユーザーごとのGridCell採点とコメントを表し、1人1マス1採点に制限する。
     grid = models.ForeignKey(
         GridCell,
         on_delete=models.CASCADE,
@@ -144,6 +152,7 @@ class GridRating(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
+        # スコア範囲と重複採点をDB側でも守る。
         constraints = [
             models.CheckConstraint(
                 condition=Q(score__gte=1) & Q(score__lte=10),

@@ -22,6 +22,7 @@ from .serializers import (
 from .services import (
     METERS_PER_DEGREE,
     build_grid_cell_contexts_for_area,
+    calculate_grid_size_score_multiplier,
     calculate_initial_score_from_feature_summary,
     calculate_bounds_from_center,
     generate_grid_cells_for_area,
@@ -601,7 +602,47 @@ class UpdateGridCellScoreTests(SerializerTestDataMixin, TestCase):
 
         self.assertEqual(self.grid.average_user_score, 7)
         self.assertEqual(self.grid.rating_count, 2)
-        self.assertEqual(self.grid.calculated_score, 5)
+        self.assertAlmostEqual(self.grid.calculated_score, 17 / 3)
+        self.assertIsNotNone(self.grid.score_updated_at)
+
+    def test_grid_with_many_ratings_treats_initial_score_as_one_score(self):
+        users = [
+            get_user_model().objects.create_user(
+                username=f"ratinguser{i}",
+                password="test-password",
+            )
+            for i in range(5)
+        ]
+        for user in users:
+            GridRating.objects.create(grid=self.grid, user=user, score=1)
+
+        update_grid_cell_score(self.grid)
+        self.grid.refresh_from_db()
+
+        self.assertEqual(self.grid.average_user_score, 1)
+        self.assertEqual(self.grid.rating_count, 5)
+        self.assertAlmostEqual(self.grid.calculated_score, 8 / 6)
+        self.assertIsNotNone(self.grid.score_updated_at)
+
+    def test_grid_with_zero_initial_score_averages_with_user_ratings(self):
+        self.grid.initial_score = 0
+        self.grid.save()
+        users = [
+            get_user_model().objects.create_user(
+                username=f"zeroinitialuser{i}",
+                password="test-password",
+            )
+            for i in range(3)
+        ]
+        for user in users:
+            GridRating.objects.create(grid=self.grid, user=user, score=3)
+
+        update_grid_cell_score(self.grid)
+        self.grid.refresh_from_db()
+
+        self.assertEqual(self.grid.average_user_score, 3)
+        self.assertEqual(self.grid.rating_count, 3)
+        self.assertEqual(self.grid.calculated_score, 2.25)
         self.assertIsNotNone(self.grid.score_updated_at)
 
     def test_grid_without_ratings_uses_initial_score(self):
@@ -782,6 +823,25 @@ class GenerateGridCellsForAreaTests(TestCase):
 
         return area, bounds
 
+    def test_grid_size_score_multiplier_matches_expected_steps(self):
+        cases = [
+            (100, 1.4),
+            (200, 1.25),
+            (300, 1.0),
+            (400, 0.95),
+            (500, 0.9),
+            (750, 0.8),
+            (1000, 0.7),
+            (1500, 0.7),
+        ]
+
+        for grid_size_meters, expected_multiplier in cases:
+            with self.subTest(grid_size_meters=grid_size_meters):
+                self.assertEqual(
+                    calculate_grid_size_score_multiplier(grid_size_meters),
+                    expected_multiplier,
+                )
+
     def test_map_area_generates_grid_cells(self):
         grid_cells = generate_grid_cells_for_area(self.area)
 
@@ -893,6 +953,10 @@ class GenerateGridCellsForAreaTests(TestCase):
         self.assertIn("context_bonus", auto_grid.auto_score_breakdown)
         self.assertIn("penalty", auto_grid.auto_score_breakdown)
         self.assertIn("raw_score", auto_grid.auto_score_breakdown)
+        self.assertEqual(
+            auto_grid.auto_score_breakdown["grid_size_multiplier"],
+            calculate_grid_size_score_multiplier(self.area.grid_size_meters),
+        )
         self.assertIn("flags", auto_grid.auto_score_breakdown)
         self.assertTrue(
             auto_grid.auto_score_breakdown["flags"]["has_landmark_context"]
@@ -1603,9 +1667,13 @@ class MapAreaCreateViewTests(TestCase):
             "unknown_station_count": 1,
             "motorway_count": 1,
         }
-        expected_score = calculate_initial_score_from_feature_summary(feature_summary)
+        expected_score = calculate_initial_score_from_feature_summary(
+            feature_summary,
+            grid_size_meters=self.valid_payload["grid_size_meters"],
+        )
         second_expected_score = calculate_initial_score_from_feature_summary(
-            second_feature_summary
+            second_feature_summary,
+            grid_size_meters=self.valid_payload["grid_size_meters"],
         )
         expected_scores = [expected_score, second_expected_score]
         mock_overpass.return_value = {

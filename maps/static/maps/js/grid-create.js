@@ -1,4 +1,5 @@
 (function () {
+  // メモグリッド作成画面の入力補助、地図プレビュー、送信前チェックを担当する。
   const formElement = document.querySelector("#map-area-create-form");
   const statusElement = document.querySelector("#memo-grid-create-status");
   const submitButton = document.querySelector("#map-area-create-submit");
@@ -16,6 +17,7 @@
   const autoScoreNoticeElement = document.querySelector("#auto-score-notice");
   const earthRadiusMeters = 6378137;
   const maxPreviewGridCells = 400;
+  const autoScoreMaxRangeMeters = 2000;
   const mapPreviewState = {
     map: null,
     areaLayer: null,
@@ -74,6 +76,8 @@
       return;
     }
 
+    // フォーム末尾の通常ボタンが見えていない時だけ固定ボタンを出し、
+    // 送信処理は form 属性経由で既存フォームに集約する。
     const rect = createFormActionsElement.getBoundingClientRect();
     const bottomVisibilityMargin = 96;
     const isActionVisible = rect.top < window.innerHeight - bottomVisibilityMargin && rect.bottom > 0;
@@ -130,6 +134,7 @@
       return;
     }
 
+    // 地図を動かして位置決めする人向けに、現在の中心座標を常に見せる。
     const center = mapPreviewState.map.getCenter();
     mapCenterCoordinateElement.textContent = (
       `地図中央: 緯度 ${formatCoordinate(center.lat)}\n/ 経度 ${formatCoordinate(center.lng)}`
@@ -148,6 +153,7 @@
       return;
     }
 
+    // 緯度経度の手入力負担を減らすため、地図中心を入力欄へ反映できる。
     centerLatInput.value = formatCoordinate(center.lat);
     centerLngInput.value = formatCoordinate(center.lng);
     updateMapPreview();
@@ -158,6 +164,7 @@
       return;
     }
 
+    // Leaflet標準UIに加え、フォーム横の操作導線としてズームを置いている。
     mapPreviewState.map.zoomOut();
     updateMapCenterCoordinateDisplay();
   }
@@ -167,6 +174,7 @@
       return;
     }
 
+    // 地図中心のクロスヘアを見ながら、作成位置を細かく合わせやすくする。
     mapPreviewState.map.zoomIn();
     updateMapCenterCoordinateDisplay();
   }
@@ -189,6 +197,7 @@
       return;
     }
 
+    // 地図操作で位置がずれた時、手入力済みの中心座標へ戻せるようにする。
     mapPreviewState.map.setView([centerLat, centerLng], mapPreviewState.map.getZoom());
     updateMapCenterCoordinateDisplay();
     updateMapPreview();
@@ -226,6 +235,7 @@
     const totalHeightMeters = input.rows * input.gridSizeMeters;
     const totalWidthMeters = input.cols * input.gridSizeMeters;
     const centerLatRadians = input.centerLat * Math.PI / 180;
+    // 経度方向は緯度によって実距離が変わるため、プレビューでもcos補正する。
     const latitudeDelta = totalHeightMeters / earthRadiusMeters * 180 / Math.PI / 2;
     const longitudeScale = Math.max(Math.cos(centerLatRadians), 0.000001);
     const longitudeDelta = totalWidthMeters / (earthRadiusMeters * longitudeScale) * 180 / Math.PI / 2;
@@ -254,6 +264,7 @@
       return mapPreviewState.map;
     }
 
+    // 中心位置はHTML/CSSのクロスヘアで示し、Leaflet操作の邪魔をしない。
     mapPreviewState.map = window.L.map(mapPreviewElement, {
       scrollWheelZoom: false,
     }).setView([35.681236, 139.767125], 13);
@@ -288,6 +299,7 @@
       return false;
     }
 
+    // 大量のマス境界を描くと作成画面が重くなるため、範囲表示だけに切り替える。
     const latStep = (bounds.north - bounds.south) / input.rows;
     const lngStep = (bounds.east - bounds.west) / input.cols;
 
@@ -355,6 +367,7 @@
     let initialScoreMode = "manual";
     let regionFeatureLevel = Number(selectedValue);
 
+    // UI上は同じselectに置き、API送信時だけ auto/manual の形へ変換する。
     if (selectedValue === "auto") {
       initialScoreMode = "auto";
       regionFeatureLevel = 0;
@@ -369,6 +382,22 @@
       initial_score_mode: initialScoreMode,
       region_feature_level: regionFeatureLevel,
     };
+  }
+
+  function validateAutoScoreRange(initialScoreSettings, rows, cols, gridSizeMeters) {
+    if (initialScoreSettings.initial_score_mode !== "auto") {
+      return;
+    }
+
+    // 自動設定はOverpass取得と判定が入るため、広範囲はAPI送信前に止める。
+    // 手動設定は外部取得を行わないので、この制限の対象外にする。
+    const northSouthMeters = gridSizeMeters * rows;
+    const eastWestMeters = gridSizeMeters * cols;
+    if (northSouthMeters >= autoScoreMaxRangeMeters || eastWestMeters >= autoScoreMaxRangeMeters) {
+      throw new Error(
+        "自動設定では広い範囲の地図データ取得に時間がかかるため、縦横どちらかが2km以上の範囲では作成できません。範囲を狭くするか、手動設定を選んでください。"
+      );
+    }
   }
 
   function buildPayload() {
@@ -406,6 +435,7 @@
     ) {
       throw new Error("初期スコア設定を選択してください。");
     }
+    validateAutoScoreRange(initialScoreSettings, rows, cols, gridSizeMeters);
 
     return {
       name,
@@ -472,6 +502,7 @@
 
     setSubmitButtonsDisabled(true);
     setStatus("メモグリッドを作成しています。");
+    // 作成成功後は詳細画面へ移動するため、送信中は二重送信を避ける。
     showPageLoading();
 
     try {

@@ -1,81 +1,41 @@
 # API_SPEC.md
 
-このファイルは、地図採点 API の仕様を整理するためのドキュメントです。
-現在は、実装済み API と今後の設計メモを分けて記録します。
+Grid Journey の API 仕様を整理するドキュメントです。
+
+Grid Journey は、地図上の範囲をメモグリッドとして作成し、生成された GridCell に対してユーザーが採点・コメントできる Web アプリです。
+画面上では `MapArea` を「メモグリッド」と呼びますが、API 内部の model 名や URL は `MapArea` / `GridCell` のままです。
 
 初心者向け補足:
 
 - API は、フロントエンドや外部ツールがサーバーの機能を使うための入口です。
-- リクエストは「API に送る内容」、レスポンスは「API から返ってくる内容」です。
-- ステータスコードは、処理が成功したか、どんなエラーだったかを表す番号です。
+- request は API に送る内容、response は API から返る内容です。
+- serializer は Python のデータと JSON の変換、入力チェックを担当します。
+- view は request を受け取り、権限確認や保存処理を行って response を返します。
 
-## 目的
+## 認証・権限
 
-地図を一定距離幅のグリッドに分割し、各グリッドに点数を付けます。
-ユーザーはグリッドを採点でき、システムは初期点数やユーザー採点をもとに表示用の点数を計算します。
-最終的には、具体的な観光情報を見すぎず、点数を手がかりに気ままに旅先を選べる API を目指します。
+地図 API はログイン必須です。
 
-## 現在の実装状況
+API view では、次の認証方式を併用しています。
 
-実装済み API:
+- Token 認証
+- Basic 認証
+- Session 認証
 
-| メソッド | パス | 目的 | 認証 |
-| --- | --- | --- | --- |
-| `POST` | `/api/maps/areas/` | 地図範囲を登録する | 必要 |
-| `GET` | `/api/maps/areas/` | 地図範囲一覧を取得する | 必要 |
-| `GET` | `/api/maps/areas/{area_id}/` | 地図範囲詳細を取得する | 必要 |
-| `DELETE` | `/api/maps/areas/{area_id}/` | 地図範囲を削除する | 必要 |
-| `POST` | `/api/maps/grids/{grid_id}/ratings/` | 1 つのグリッドを採点する | 必要 |
-| `POST` | `/api/maps/grids/bulk-ratings/` | 複数グリッドをまとめて採点する | 必要 |
-| `GET` | `/api/maps/areas/{area_id}/grids/` | 点数付きグリッド一覧を取得する | 必要 |
-| `POST` | `/api/maps/areas/{area_id}/grids/` | 地図範囲からグリッドを自動生成する | 必要 |
-| `GET` | `/api/maps/areas/{area_id}/shares/` | 共有メモグリッドの共有相手一覧を取得する | 必要 |
-| `POST` | `/api/maps/areas/{area_id}/shares/` | 共有メモグリッドに共有相手を追加する | 必要 |
-| `DELETE` | `/api/maps/areas/{area_id}/shares/{share_id}/` | 共有メモグリッドから共有相手を削除する | 必要 |
-| `POST` | `/api/auth/token/` | Token 認証用 token を発行する | 不要 |
+本サイト画面では Django ログイン + Session + CSRF を使います。
+API 手動確認では Token 認証も使えます。
+既存テストや開発確認では Basic 認証も利用できます。
 
-未実装 API 候補:
+POST / DELETE を Session 認証で呼ぶ場合は、Django の CSRF チェックを通す必要があります。
+本サイトの JavaScript では cookie の `csrftoken` を `X-CSRFToken` ヘッダーに付けています。
 
-| メソッド | パス | 目的 | 認証 | 状態 |
-| --- | --- | --- | --- | --- |
-| `GET` | `/api/maps/grids/search/` | 周辺の高得点グリッドを検索する | 必要 | 未実装 |
-
-## 認証
-
-現在実装済みの地図 API はログイン必須です。
-
-実装では各 view に次を設定しています。
-
-```python
-authentication_classes = [
-    TokenAuthentication,
-    BasicAuthentication,
-    SessionAuthentication,
-]
-permission_classes = [IsAuthenticated]
-```
-
-初心者向け補足:
-
-- 認証は「誰が使っているか」を確認する仕組みです。
-- 権限は「その人が何をしてよいか」を確認する仕組みです。
-- `BasicAuthentication` は、ユーザー名とパスワードを使う認証方式です。
-- `SessionAuthentication` は、Django のログイン状態を使う認証方式です。
-- `TokenAuthentication` は、発行済み token を HTTP ヘッダーで送る認証方式です。
-
-現在は Basic 認証、Session 認証、Token 認証を併用します。
-Basic 認証は開発確認用として当面残します。
-JWT 認証はまだ実装しません。
-
-### Token 発行 API
+### Token 発行
 
 ```text
 POST /api/auth/token/
 ```
 
-username/password から Token 認証用 token を発行します。
-
-#### リクエスト
+リクエスト:
 
 ```json
 {
@@ -84,7 +44,7 @@ username/password から Token 認証用 token を発行します。
 }
 ```
 
-#### レスポンス
+レスポンス:
 
 ```json
 {
@@ -92,350 +52,527 @@ username/password から Token 認証用 token を発行します。
 }
 ```
 
-#### ステータスコード
-
-| 状況 | ステータス |
-| --- | --- |
-| token 発行成功 | `200 OK` |
-| username/password が不正 | `400 Bad Request` |
-
-#### Token 認証ヘッダー
-
-Token 認証で既存 API を呼ぶ場合は、次の HTTP ヘッダーを送ります。
+Token 認証ヘッダー:
 
 ```http
 Authorization: Token <TOKEN>
 ```
 
-created_by ベースの権限チェックは、認証方式に関係なく同じです。
-Basic 認証でも Token 認証でも、`request.user` が `MapArea.created_by` と一致するかで閲覧・採点可否を判断します。
+### 権限の基本方針
 
-## 実装済み: 採点 API の権限
+- 作成者本人は、自分のメモグリッドを閲覧・採点・共有管理・削除できます。
+- 共有されたユーザーは、共有メモグリッドを閲覧・採点できます。
+- 共有されたユーザーは、共有相手管理とメモグリッド削除はできません。
+- 共有されていないユーザーは、対象メモグリッドを取得できません。
+- 権限がない MapArea / GridCell は、存在を推測しにくくするため `404 Not Found` または validation error として扱います。
 
-単体採点 API と一括採点 API では、`GridCell.area.created_by` と `MapAreaShare` を使って採点できる対象を制限します。
+## エンドポイント一覧
 
-採点できるのは、ログイン中ユーザーが作成した `MapArea` に属する `GridCell`、またはログイン中ユーザーに共有された `MapArea` に属する `GridCell` です。
+### API
 
-| 状況 | 結果 |
+| メソッド | パス | 目的 | 認証 |
+| --- | --- | --- | --- |
+| `POST` | `/api/auth/token/` | Token 発行 | 不要 |
+| `GET` | `/api/maps/areas/` | メモグリッド一覧取得 | 必要 |
+| `POST` | `/api/maps/areas/` | メモグリッド作成 | 必要 |
+| `GET` | `/api/maps/areas/<area_id>/` | メモグリッド詳細取得 | 必要 |
+| `DELETE` | `/api/maps/areas/<area_id>/` | メモグリッド削除 | 必要 |
+| `GET` | `/api/maps/areas/<area_id>/shares/` | 共有相手一覧取得 | 必要 |
+| `POST` | `/api/maps/areas/<area_id>/shares/` | 共有相手追加 | 必要 |
+| `DELETE` | `/api/maps/areas/<area_id>/shares/<share_id>/` | 共有解除 | 必要 |
+| `GET` | `/api/maps/areas/<area_id>/grids/` | GridCell 一覧取得 | 必要 |
+| `POST` | `/api/maps/areas/<area_id>/grids/` | GridCell 生成 | 必要 |
+| `POST` | `/api/maps/grids/<grid_id>/ratings/` | 単体採点 | 必要 |
+| `POST` | `/api/maps/grids/bulk-ratings/` | 一括採点 | 必要 |
+
+補足:
+
+- 通常のメモグリッド作成では、`POST /api/maps/areas/` の中で GridCell も生成されます。
+- `POST /api/maps/areas/<area_id>/grids/` は実装上残っていますが、通常画面の主導線ではありません。
+- `/api/maps/demo/` は開発確認用 HTML を返す demo 画面で、通常の JSON API 仕様の主対象ではありません。
+
+### 画面 URL
+
+API ではありませんが、本サイト画面は次の URL で提供しています。
+
+| パス | 目的 |
 | --- | --- |
-| 未ログイン | `401 Unauthorized` |
-| `GridCell.area.created_by == request.user` | 採点許可 |
-| `MapAreaShare(area=GridCell.area, user=request.user)` が存在する | 採点許可 |
-| `GridCell.area.created_by != request.user` | 採点不可 |
-| `GridCell.area.created_by is None` かつ共有されていない | 採点不可 |
+| `/login/` | ログイン |
+| `/signup/` | 新規ユーザー登録 |
+| `/maps/` | メモグリッド一覧 |
+| `/maps/new/` | メモグリッド作成 |
+| `/maps/<area_id>/` | メモグリッド詳細 |
 
-他ユーザーが作成した `MapArea` に属する `GridCell` や、`created_by` が `null` の `MapArea` に属する `GridCell` でも、ログイン中ユーザーに共有されていれば採点できます。
-共有されていない `GridCell` は採点できません。
+## MapArea
 
-単体採点 API では、採点不可の `GridCell` は存在しないものとして扱い、`404 Not Found` を返します。
-一括採点 API では、採点不可の ID が 1 件でも含まれる場合、存在しない ID が含まれる場合と同じく、全体を `400 Bad Request` にします。
-
-一括採点 API は、一部だけ採点して成功にはしません。
-すべての `grid_ids` がログイン中ユーザーの `MapArea`、またはログイン中ユーザーに共有された `MapArea` に属している場合だけ、採点と点数再集計を実行します。
-
-実装では、単体採点 API は次のように対象を絞ります。
-
-```python
-grid = get_object_or_404(
-    GridCell.objects.filter(
-        Q(area__created_by=request.user) | Q(area__shares__user=request.user)
-    ).distinct(),
-    id=grid_id,
-)
-```
-
-一括採点 API は、指定された `grid_ids` を `area__created_by=request.user` または `area__shares__user=request.user` で絞り、取得できた件数が入力 ID 数と一致する場合だけ処理します。
-
-## 実装済み: MapArea の閲覧権限
-
-MapArea 一覧 API、MapArea 詳細 API、点数付きグリッド一覧 API は、`MapArea.created_by` と `MapAreaShare` を使って閲覧範囲を制限します。
-
-対象 API:
-
-| メソッド | パス | 方針 |
-| --- | --- | --- |
-| `GET` | `/api/maps/areas/` | 自分の `MapArea` と自分に共有された `MapArea` を返す |
-| `GET` | `/api/maps/areas/{area_id}/` | 自分の `MapArea` と自分に共有された `MapArea` だけ取得できる |
-| `GET` | `/api/maps/areas/{area_id}/grids/` | 自分の `MapArea` と自分に共有された `MapArea` の `GridCell` だけ取得できる |
-
-### 基本方針
-
-`MapArea.created_by` と `request.user` を比較します。
-また、`MapAreaShare(area=MapArea, user=request.user)` が存在する場合も閲覧を許可します。
-
-| 状況 | 結果 |
-| --- | --- |
-| 未ログイン | `401 Unauthorized` |
-| `MapArea.created_by == request.user` | 閲覧許可 |
-| `MapAreaShare.user == request.user` | 閲覧許可 |
-| `MapArea.created_by != request.user` | `404 Not Found` |
-| `MapArea.created_by is None` かつ共有されていない | `404 Not Found` |
-
-他ユーザーの `MapArea` や `created_by` が `null` の `MapArea` でも、自分に共有されていないものは存在しないものとして扱います。
-これは、他ユーザーのデータが存在すること自体をレスポンスから推測しにくくするためです。
-
-GridCell 自動生成 API は「存在するが操作できない」ことを `403 Forbidden` で返します。
-一方、閲覧 API は、一覧や詳細の取得範囲を「自分が作成したもの + 自分に共有されたもの」に絞るため、共有されていない他ユーザーのデータは `404 Not Found` または一覧に出ない形にします。
-
-### 実装方針
-
-MapArea 一覧 API:
-
-```python
-areas = MapArea.objects.filter(
-    Q(created_by=request.user) | Q(shares__user=request.user)
-).distinct()
-```
-
-MapArea 詳細 API:
-
-```python
-area = get_object_or_404(
-    MapArea.objects.filter(
-        Q(created_by=request.user) | Q(shares__user=request.user)
-    ).distinct(),
-    id=area_id,
-)
-```
-
-点数付きグリッド一覧 API:
-
-```python
-area = get_object_or_404(
-    MapArea.objects.filter(
-        Q(created_by=request.user) | Q(shares__user=request.user)
-    ).distinct(),
-    id=area_id,
-)
-grids = area.grid_cells.order_by("row_index", "col_index")
-```
-
-### レスポンス方針
-
-MapArea 一覧 API:
-
-- 自分が作成した `MapArea` を `areas` に含めます。
-- 自分に共有された `MapArea` も `areas` に含めます。
-- 他ユーザーが作成し、自分に共有されていない `MapArea` は含めません。
-- `created_by is None` の `MapArea` も、自分に共有されていなければ含めません。
-- 対象が 0 件なら `areas: []` を返します。
-
-MapArea 詳細 API:
-
-- 自分が作成した `MapArea` なら `200 OK` を返します。
-- 自分に共有された `MapArea` も `200 OK` を返します。
-- 他ユーザーが作成し、自分に共有されていない `MapArea` なら `404 Not Found` を返します。
-- `created_by is None` の `MapArea` も、自分に共有されていなければ `404 Not Found` を返します。
-
-点数付きグリッド一覧 API:
-
-- 自分が作成した `MapArea` なら、その `MapArea` に属する `GridCell` を返します。
-- 自分に共有された `MapArea` でも、その `MapArea` に属する `GridCell` を返します。
-- 他ユーザーが作成し、自分に共有されていない `MapArea` なら `404 Not Found` を返します。
-- `created_by is None` の `MapArea` も、自分に共有されていなければ `404 Not Found` を返します。
-
-### 今回は実装しないこと
-
-- `created_by` を必須にする model 変更
-- migration の作成
-- 管理者だけ全件閲覧できる特別ルール
-- 採点 API の共有メモグリッド対応
-
-`created_by` は現在 nullable です。
-既存データや管理画面で作成者なしの `MapArea` が作られる可能性があるため、今回は閲覧 API からは見えない扱いにします。
-
-## 設計メモ: MapArea のユーザー向け呼称
-
-実装上の model 名や API 名は、当面 `MapArea` のままにします。
-ただし、ユーザー画面や説明資料では、共有範囲に応じて次の呼称を使います。
-
-| 用途 | ユーザー向け呼称 | 意味 |
-| --- | --- | --- |
-| 個人用 | メモグリッド | ユーザー本人だけが閲覧・採点する小さめの地図範囲 |
-| ユーザー個人の間で共有 | 共有メモグリッド | 特定のユーザー同士で共有する地図範囲 |
-| ユーザー全体用 | ワールドグリッド | ログインユーザー全体で閲覧・採点する広めの地図範囲 |
-
-`MapArea` は内部実装名です。
-画面表示では、ユーザーが触る意味に合わせて `メモグリッド`、`共有メモグリッド`、`ワールドグリッド` を使います。
-
-現時点で実装済みなのは、作成者本人だけが扱える `メモグリッド` 相当の `MapArea` です。
-`共有メモグリッド` と `ワールドグリッド` は今後の設計・実装対象です。
-
-## 設計メモ: 共有 MapArea
-
-将来的に、他ユーザーと共有できる `MapArea` を実装する想定です。
-この時点では段階的に実装します。
-`MapAreaShare` model は実装済みです。
-一覧 API、詳細 API、GridCell 一覧 API の閲覧権限と、採点 API の権限に反映済みです。
-
-この節の既存 `is_public` 方針は、主に `ワールドグリッド` を想定した初期案です。
-今後 `共有メモグリッド` を実装する場合は、特定ユーザーだけを許可する共有メンバー管理も別途設計します。
-
-### 共有メモグリッドの設計メモ
-
-`共有メモグリッド` は、作成者が特定のユーザーにだけ共有する `MapArea` です。
-ワールドグリッドのようにログインユーザー全員へ公開するものではありません。
-
-実装済み model:
-
-```python
-class MapAreaShare(models.Model):
-    area = models.ForeignKey(MapArea, on_delete=models.CASCADE, related_name="shares")
-    user = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.CASCADE,
-        related_name="shared_map_areas",
-    )
-    created_at = models.DateTimeField(auto_now_add=True)
-```
-
-`MapAreaShare` は、どの `MapArea` をどのユーザーに共有しているかを表します。
-同じ `area` と `user` の組み合わせは重複できないようにします。
-現時点では、一覧 API、詳細 API、GridCell 一覧 API の閲覧判定と、単体採点 API / 一括採点 API の採点権限に使っています。
-GridCell 自動生成 API にはまだ使っていません。
-
-共有メモグリッドの権限方針:
-
-| ユーザー | 閲覧 | 採点 | 共有相手の管理 | GridCell 自動生成 |
-| --- | --- | --- | --- | --- |
-| 作成者 | 可 | 可 | 可 | 可 |
-| 共有されたユーザー | 可 | 可 | 不可 | 不可 |
-| 共有されていないユーザー | 不可 | 不可 | 不可 | 不可 |
-
-共有されたユーザーは閲覧と採点だけできます。
-編集、削除、共有相手の追加・削除、GridCell 自動生成は作成者だけが実行できる方針です。
-
-### 共有相手管理 API
-
-共有相手管理 API は、`MapAreaShare` を作成・削除するための API です。
-共有メモグリッドの作成者だけが利用できます。
-
-採用する API:
-
-| メソッド | パス | 目的 |
-| --- | --- | --- |
-| `GET` | `/api/maps/areas/{area_id}/shares/` | 共有相手一覧を取得する |
-| `POST` | `/api/maps/areas/{area_id}/shares/` | 共有相手を追加する |
-| `DELETE` | `/api/maps/areas/{area_id}/shares/{share_id}/` | 共有相手を削除する |
-
-削除 API は `share_id` を URL に含める設計にします。
-理由は、削除対象が `MapAreaShare` という共有関係そのものだからです。
-`user_id` 指定でも実装はできますが、`share_id` を使うと「どの共有レコードを削除するか」が明確になり、DRF の詳細削除 API としても自然です。
-
-共有相手追加 API は、手動確認しやすさを優先して `username` を受け取ります。
-`user_id` は DB 上は扱いやすいですが、curl で確認するときに事前に ID を調べる必要があります。
-一方 `username` なら、人が見て分かる値で共有相手を指定できます。
-
-レスポンスに含めるユーザー情報は、当面 `id` と `username` だけにします。
-`email` は個人情報になりやすく、共有相手管理に必須ではないため返しません。
-
-#### 共通権限
-
-共有相手管理 API はログイン必須です。
-
-操作できるのは、`MapArea.created_by == request.user` の場合だけです。
-共有されたユーザーは、共有相手一覧の取得・追加・削除はできません。
-
-| 状況 | 結果 |
-| --- | --- |
-| 未ログイン | `401 Unauthorized` |
-| `MapArea.created_by == request.user` | 操作許可 |
-| 共有されたユーザー | `404 Not Found` |
-| 共有されていない他ユーザー | `404 Not Found` |
-| `created_by=None` の `MapArea` | `404 Not Found` |
-| 存在しない `area_id` | `404 Not Found` |
-
-権限がない場合は、他ユーザーの `MapArea` が存在することを推測しにくくするため `404 Not Found` を返す方針です。
-これは、閲覧 API の方針に合わせます。
-
-実装時は、共有相手管理用に次のような取得処理を使う想定です。
-
-```python
-area = get_object_or_404(
-    MapArea.objects.filter(created_by=request.user),
-    id=area_id,
-)
-```
-
-#### 共有相手一覧 API
+### 作成
 
 ```text
-GET /api/maps/areas/{area_id}/shares/
+POST /api/maps/areas/
 ```
 
-指定した `MapArea` の共有相手一覧を取得します。
+中心座標、1マスの大きさ、縦横のマス数から地図範囲を計算し、MapArea と GridCell を作成します。
+現在の作成 API は中心座標方式を基本にしています。
+`north` / `south` / `east` / `west` の直接指定は作成入力では使えません。
 
-##### URL パラメータ
-
-| 名前 | 型 | 内容 |
-| --- | --- | --- |
-| `area_id` | integer | 共有相手一覧を取得する `MapArea` ID |
-
-##### リクエスト
-
-リクエストボディはありません。
-
-##### レスポンス
+リクエスト:
 
 ```json
 {
-  "area": {
-    "id": 1,
-    "name": "東京駅周辺"
-  },
-  "shares": [
+  "name": "大阪駅周辺調査",
+  "description": "駅周辺を散歩候補として確認する",
+  "center_lat": 34.702485,
+  "center_lng": 135.495951,
+  "grid_size_meters": 200,
+  "rows": 10,
+  "cols": 10,
+  "initial_score_mode": "manual",
+  "region_feature_level": 2
+}
+```
+
+主な入力項目:
+
+| 項目 | 型 | 必須 | 説明 |
+| --- | --- | --- | --- |
+| `name` | string | 必須 | メモグリッド名 |
+| `description` | string | 任意 | 説明 |
+| `center_lat` | number | 必須 | 中心緯度 |
+| `center_lng` | number | 必須 | 中心经度 |
+| `grid_size_meters` | integer | 必須 | 1マスの大きさ |
+| `rows` | integer | 必須 | 縦方向のマス数 |
+| `cols` | integer | 必須 | 横方向のマス数 |
+| `initial_score_mode` | string | 任意 | `manual` または `auto`。未指定時は `manual` |
+| `region_feature_level` | integer | 任意 | 0〜3。未指定時は 0 |
+| `source` | string | 任意 | model / serializer には残っている任意項目。現在の作成画面の主要入力ではない |
+
+`source` は API 項目としては残っていますが、現在の `/maps/new/` 画面では入力欄や主要 payload から外しています。
+
+一般ユーザー向けの API 側制限:
+
+- `rows * cols <= 500`
+- `grid_size_meters * rows <= 30000`
+- `grid_size_meters * cols <= 30000`
+
+staff ユーザーはこの一般ユーザー制限の対象外です。
+
+ステータス:
+
+| 状況 | ステータス |
+| --- | --- |
+| 作成成功 | `201 Created` |
+| 入力不正 | `400 Bad Request` |
+| 未認証 | `401 Unauthorized` |
+
+### initial_score_mode / region_feature_level
+
+`initial_score_mode`:
+
+| 値 | 意味 |
+| --- | --- |
+| `manual` | `region_feature_level` を初期スコアとして使う |
+| `auto` | OSM / Overpass から地域特徴を取得し、自動初期スコアを計算する |
+
+`region_feature_level`:
+
+| 値 | 意味 |
+| --- | --- |
+| `0` | 初期値 |
+| `1` | ありふれた地域 |
+| `2` | 普通の地域 |
+| `3` | 特徴的な地域 |
+
+手動設定では、`region_feature_level` が各 GridCell の `initial_score` として使われます。
+自動設定では、OSM / Overpass の取得結果から `initial_score` と `auto_score_breakdown` を作成します。
+画面上では「自動設定」を選ぶと `initial_score_mode="auto"`、`region_feature_level=0` として送信します。
+自動設定時の地域特徴レベルは画面では `-` と表示しますが、API値としては `region_feature_level` を持ちます。
+
+### 自動設定時の注意
+
+自動設定は OSM / Overpass API 取得を伴うため、手動設定より時間がかかる場合があります。
+都市部や広範囲では地物数が多くなり、処理が重くなりやすいです。
+
+画面側では自動設定時のみ、1辺が `2000m以上` の作成を API 送信前に制限しています。
+手動設定ではこの画面側制限はかけていません。
+
+API 側には、上記とは別に一般ユーザー向けの `500マス / 南北30000m / 東西30000m` 制限があります。
+都市部の自動設定は、1辺 1.5km 以内が安定しやすい目安です。
+
+Overpass 取得や特徴集計で `ValueError` が発生した場合、MapArea 作成自体は止めず、手動設定相当の fallback で GridCell を生成します。
+
+### 一覧取得
+
+```text
+GET /api/maps/areas/
+```
+
+ログインユーザーが作成したメモグリッドと、ログインユーザーに共有されたメモグリッドを返します。
+
+レスポンス:
+
+```json
+{
+  "areas": [
     {
       "id": 1,
-      "user": {
-        "id": 4,
-        "username": "otheruser"
-      },
-      "created_at": "2026-05-22T10:00:00+09:00"
+      "name": "大阪駅周辺調査",
+      "description": "駅周辺を散歩候補として確認する",
+      "north": 34.711,
+      "south": 34.693,
+      "east": 135.506,
+      "west": 135.486,
+      "grid_size_meters": 200,
+      "region_feature_level": 2,
+      "initial_score_mode": "manual",
+      "source": "",
+      "created_by": 1,
+      "created_at": "2026-06-15T10:00:00+09:00",
+      "updated_at": "2026-06-15T10:00:00+09:00",
+      "visibility": "private",
+      "display_type": "メモグリッド",
+      "is_owner": true,
+      "created_by_username": "testuser",
+      "map_grid_rows": 10,
+      "map_grid_cols": 10
     }
   ]
 }
 ```
 
-共有相手が 0 件の場合は、空配列を返します。
+一覧用の追加項目:
+
+| 項目 | 説明 |
+| --- | --- |
+| `visibility` | `private` または `shared` |
+| `display_type` | `メモグリッド` または `共有メモグリッド` |
+| `is_owner` | ログインユーザーが作成者かどうか |
+| `created_by_username` | 作成者の username。作成者がない場合は `null` |
+| `map_grid_rows` | GridCell の最大 `row_index` + 1。GridCell がない場合は `null` |
+| `map_grid_cols` | GridCell の最大 `col_index` + 1。GridCell がない場合は `null` |
+
+`map_grid_rows` / `map_grid_cols` は、一覧 API で `annotate()` を使ってまとめて取得し、MapArea ごとの個別集計による N+1 を避けています。
+
+### 詳細取得
+
+```text
+GET /api/maps/areas/<area_id>/
+```
+
+閲覧できる MapArea の詳細を返します。
+レスポンス項目は基本的に `MapAreaSerializer` の項目です。
+
+主なレスポンス項目:
+
+- `id`
+- `name`
+- `description`
+- `north`
+- `south`
+- `east`
+- `west`
+- `grid_size_meters`
+- `region_feature_level`
+- `initial_score_mode`
+- `source`
+- `created_by`
+- `created_at`
+- `updated_at`
+
+### 削除
+
+```text
+DELETE /api/maps/areas/<area_id>/
+```
+
+作成者のみ削除できます。
+削除すると、関連する GridCell、採点、共有設定も cascade で削除されます。
+共有されたユーザーは削除できません。
+
+ステータス:
+
+| 状況 | ステータス |
+| --- | --- |
+| 削除成功 | `204 No Content` |
+| 権限なし / 存在しない | `404 Not Found` |
+
+## GridCell
+
+### 一覧取得
+
+```text
+GET /api/maps/areas/<area_id>/grids/
+```
+
+閲覧できる MapArea に属する GridCell 一覧を、`row_index` / `col_index` 順で返します。
+
+レスポンス:
 
 ```json
 {
   "area": {
     "id": 1,
-    "name": "東京駅周辺"
+    "name": "大阪駅周辺調査"
   },
-  "shares": []
+  "grids": [
+    {
+      "id": 1,
+      "area": 1,
+      "row_index": 0,
+      "col_index": 0,
+      "north": 34.703,
+      "south": 34.701,
+      "east": 135.497,
+      "west": 135.495,
+      "initial_score": 2.0,
+      "auto_score_breakdown": null,
+      "average_user_score": 8.0,
+      "rating_count": 1,
+      "calculated_score": 5.0,
+      "score_updated_at": "2026-06-15T10:30:00+09:00",
+      "current_user_comment": "駅が近くて使いやすそう",
+      "current_user_has_rating": true
+    }
+  ]
 }
 ```
 
-並び順は、`MapAreaShare` model の ordering に合わせます。
-現状は `area`, `user`, `id` 順です。
+GridCell レスポンス項目:
 
-##### ステータスコード
+| 項目 | 説明 |
+| --- | --- |
+| `id` | GridCell ID |
+| `area` | 所属 MapArea ID |
+| `row_index` | 0 始まりの行番号 |
+| `col_index` | 0 始まりの列番号 |
+| `north` / `south` / `east` / `west` | GridCell の緯度経度範囲 |
+| `initial_score` | 初期スコア |
+| `auto_score_breakdown` | 自動採点理由。ない場合は `null` |
+| `average_user_score` | ユーザー採点だけの平均 |
+| `rating_count` | ユーザー採点数 |
+| `calculated_score` | 地図表示に使うスコア |
+| `score_updated_at` | スコア更新日時。採点がない場合は `null` |
+| `current_user_comment` | ログインユーザー自身のコメント。未採点時は空文字 |
+| `current_user_has_rating` | ログインユーザー自身が採点済みかどうか |
+
+### GridCell 生成
+
+```text
+POST /api/maps/areas/<area_id>/grids/
+```
+
+指定 MapArea の GridCell を生成します。
+通常は `POST /api/maps/areas/` の作成処理で GridCell も生成されるため、画面の主導線では使いません。
+
+作成者のみ実行できます。
+作成者以外は `403 Forbidden` です。
+既に GridCell がある場合など、生成できない条件では `400 Bad Request` になります。
+
+## auto_score_breakdown
+
+`auto_score_breakdown` は、自動設定時に GridCell ごとの自動採点内訳として保存される JSON です。
+詳細画面の「自動採点理由」に使います。
+
+主な項目:
+
+| 項目 | 説明 |
+| --- | --- |
+| `base_score` | マス自体の基本点 |
+| `diversity_bonus` | 要素の多様性による加点 |
+| `context_bonus` | 周辺要素による加点 |
+| `penalty` | 減点 |
+| `raw_score` | clamp 前のスコア |
+| `clamped_score` | 0.0〜3.0 に収めた自動初期スコア |
+| `grid_size_multiplier` | マスサイズ補正係数 |
+| `flags` | 採点理由の真偽値 |
+| `bonuses` | 加点内訳 |
+| `counts` | 件数・要素数 |
+
+自動設定でない場合や、自動特徴を取得できなかった場合は `null` になる可能性があります。
+自動採点では最終的に `0.0〜3.0` へ clamp します。
+
+## 表示スコア計算
+
+`calculated_score` は、地図上の色分けやスコア数値ラベルで使う表示スコアです。
+
+現在の計算仕様:
+
+```text
+calculated_score = (initial_score + 全ユーザー採点の合計) / (1 + rating_count)
+```
+
+- `initial_score` を最初の1票として扱います。
+- ユーザー採点が増えるほど、初期スコアの影響が自然に薄まります。
+- `average_user_score` はユーザー採点だけの平均です。
+- `rating_count` はユーザー採点数です。
+- 採点がない場合は `calculated_score = initial_score` です。
+
+## 採点 API
+
+### 単体採点
+
+```text
+POST /api/maps/grids/<grid_id>/ratings/
+```
+
+対象 GridCell に対して、ログインユーザーの採点を作成または更新します。
+同じユーザーが同じ GridCell へ複数回採点した場合は、新規行を増やさず既存採点を更新します。
+採点後に対象 GridCell のスコア集計を更新します。
+
+リクエスト:
+
+```json
+{
+  "score": 8,
+  "comment": "駅が近くて使いやすそう"
+}
+```
+
+入力項目:
+
+| 項目 | 型 | 必須 | 説明 |
+| --- | --- | --- | --- |
+| `score` | integer | 必須 | 1〜10 |
+| `comment` | string | 任意 | コメント。空文字可 |
+
+レスポンス:
+
+```json
+{
+  "rating": {
+    "id": 1,
+    "grid": 1,
+    "user": 1,
+    "score": 8,
+    "comment": "駅が近くて使いやすそう",
+    "created_at": "2026-06-15T10:30:00+09:00",
+    "updated_at": "2026-06-15T10:30:00+09:00"
+  },
+  "grid": {
+    "id": 1,
+    "area": 1,
+    "row_index": 0,
+    "col_index": 0,
+    "initial_score": 2.0,
+    "average_user_score": 8.0,
+    "rating_count": 1,
+    "calculated_score": 5.0,
+    "current_user_comment": "駅が近くて使いやすそう",
+    "current_user_has_rating": true
+  }
+}
+```
+
+ステータス:
 
 | 状況 | ステータス |
 | --- | --- |
-| 取得成功 | `200 OK` |
-| 未ログイン | `401 Unauthorized` |
-| `area_id` が存在しない | `404 Not Found` |
-| 作成者以外が取得しようとした | `404 Not Found` |
-| `created_by=None` の `MapArea` を指定した | `404 Not Found` |
+| 初回採点 | `201 Created` |
+| 既存採点更新 | `200 OK` |
+| 入力不正 | `400 Bad Request` |
+| GridCell なし / 権限なし | `404 Not Found` |
 
-#### 共有相手追加 API
+### 一括採点
 
 ```text
-POST /api/maps/areas/{area_id}/shares/
+POST /api/maps/grids/bulk-ratings/
 ```
 
-指定した `MapArea` に共有相手を追加します。
+複数 GridCell に同じスコア・コメントをまとめて登録します。
+権限のない GridCell には採点できません。
+一部だけ採点して成功にはせず、権限なしや存在しない ID が含まれる場合は全体を `400 Bad Request` にします。
 
-##### URL パラメータ
+リクエスト:
 
-| 名前 | 型 | 内容 |
-| --- | --- | --- |
-| `area_id` | integer | 共有相手を追加する `MapArea` ID |
+```json
+{
+  "grid_ids": [1, 2, 3],
+  "score": 7,
+  "comment": "まとめて評価"
+}
+```
 
-##### リクエスト
+入力項目:
+
+| 項目 | 型 | 必須 | 説明 |
+| --- | --- | --- | --- |
+| `grid_ids` | integer[] | 必須 | GridCell ID 配列。空配列不可 |
+| `score` | integer | 必須 | 1〜10 |
+| `comment` | string | 任意 | コメント。空文字可 |
+
+`grid_ids` に重複 ID が含まれる場合、serializer 側で順序を保ったまま重複を取り除きます。
+存在しない GridCell ID が含まれる場合は validation error です。
+
+レスポンス:
+
+```json
+{
+  "grids": [
+    {
+      "id": 1,
+      "area": 1,
+      "row_index": 0,
+      "col_index": 0,
+      "initial_score": 2.0,
+      "average_user_score": 7.0,
+      "rating_count": 1,
+      "calculated_score": 4.5,
+      "current_user_comment": "まとめて評価",
+      "current_user_has_rating": true
+    }
+  ]
+}
+```
+
+ステータス:
+
+| 状況 | ステータス |
+| --- | --- |
+| すべて初回採点 | `201 Created` |
+| 1件以上が既存採点更新 | `200 OK` |
+| 入力不正 / 権限なし ID を含む | `400 Bad Request` |
+
+## 共有 API
+
+共有 API は作成者のみ利用できます。
+共有されたユーザーは共有相手一覧の取得・追加・削除はできません。
+
+### 共有相手一覧
+
+```text
+GET /api/maps/areas/<area_id>/shares/
+```
+
+レスポンス:
+
+```json
+{
+  "area": {
+    "id": 1,
+    "name": "大阪駅周辺調査"
+  },
+  "shares": [
+    {
+      "id": 1,
+      "area": 1,
+      "user": {
+        "id": 2,
+        "username": "otheruser"
+      },
+      "created_at": "2026-06-15T11:00:00+09:00"
+    }
+  ]
+}
+```
+
+### 共有相手追加
+
+```text
+POST /api/maps/areas/<area_id>/shares/
+```
+
+共有相手は `username` で指定します。
+
+リクエスト:
 
 ```json
 {
@@ -443,11 +580,7 @@ POST /api/maps/areas/{area_id}/shares/
 }
 ```
 
-| 項目 | 必須 | 内容 |
-| --- | --- | --- |
-| `username` | 必須 | 共有相手に追加するユーザー名 |
-
-##### レスポンス
+レスポンス:
 
 ```json
 {
@@ -455,1489 +588,46 @@ POST /api/maps/areas/{area_id}/shares/
     "id": 1,
     "area": 1,
     "user": {
-      "id": 4,
+      "id": 2,
       "username": "otheruser"
     },
-    "created_at": "2026-05-22T10:00:00+09:00"
+    "created_at": "2026-06-15T11:00:00+09:00"
   }
 }
 ```
 
-##### ステータスコード
+追加できない例:
 
-| 状況 | ステータス |
-| --- | --- |
-| 追加成功 | `201 Created` |
-| 未ログイン | `401 Unauthorized` |
-| `area_id` が存在しない | `404 Not Found` |
-| 作成者以外が追加しようとした | `404 Not Found` |
-| `created_by=None` の `MapArea` を指定した | `404 Not Found` |
-| `username` がない | `400 Bad Request` |
-| `username` が文字列ではない | `400 Bad Request` |
-| 存在しないユーザーを指定した | `400 Bad Request` |
-| 作成者自身を指定した | `400 Bad Request` |
-| 既に共有済みのユーザーを指定した | `400 Bad Request` |
+- 存在しない username
+- 作成者自身
+- 既に共有済みのユーザー
 
-既に共有済みのユーザーを指定した場合は、新しい `MapAreaShare` は作成しません。
-今回は分かりやすさを優先し、`200 OK` で冪等に扱うのではなく、入力エラーとして `400 Bad Request` を返します。
-
-初心者向け補足:
-
-- 冪等とは、同じ操作を何度実行しても結果が変わらない性質です。
-- 今回は「重複して共有しようとした」ことを利用者に知らせるため、重複共有をエラーにします。
-
-#### 共有相手削除 API
+### 共有解除
 
 ```text
-DELETE /api/maps/areas/{area_id}/shares/{share_id}/
+DELETE /api/maps/areas/<area_id>/shares/<share_id>/
 ```
 
-指定した `MapArea` から共有相手を削除します。
+指定した共有レコードを削除します。
+成功時は `204 No Content` です。
 
-##### URL パラメータ
+## エラー・権限レスポンス
 
-| 名前 | 型 | 内容 |
+| 状況 | 主なステータス | 補足 |
 | --- | --- | --- |
-| `area_id` | integer | 共有相手を削除する `MapArea` ID |
-| `share_id` | integer | 削除する `MapAreaShare` ID |
-
-##### リクエスト
-
-リクエストボディはありません。
-
-##### レスポンス
-
-削除成功時は本文を返さず、`204 No Content` を返します。
-
-##### ステータスコード
-
-| 状況 | ステータス |
-| --- | --- |
-| 削除成功 | `204 No Content` |
-| 未ログイン | `401 Unauthorized` |
-| `area_id` が存在しない | `404 Not Found` |
-| 作成者以外が削除しようとした | `404 Not Found` |
-| `created_by=None` の `MapArea` を指定した | `404 Not Found` |
-| `share_id` が存在しない | `404 Not Found` |
-| `share_id` が指定 `area_id` に属していない | `404 Not Found` |
-
-削除対象がない場合や、別の `MapArea` の共有関係を指定した場合も `404 Not Found` にします。
-これは、他ユーザーの共有関係を推測しにくくするためです。
-
-#### テスト観点
-
-共有相手一覧 API:
-
-- 作成者は共有相手一覧を取得できる
-- 共有相手が 0 件なら `shares: []` を返す
-- 共有されたユーザーは共有相手一覧を取得できない
-- 共有されていない他ユーザーは取得できない
-- 未ログインは拒否される
-- 存在しない `area_id` は拒否される
-- `created_by=None` の `MapArea` は通常ユーザーが管理できない
-
-共有相手追加 API:
-
-- 作成者は共有相手を追加できる
-- 追加後、そのユーザーは MapArea 一覧・詳細・GridCell 一覧・採点 API を使える
-- 存在しないユーザーは追加できない
-- 既に共有済みのユーザーは重複追加できない
-- 作成者自身は共有相手に追加できない
-- 共有されたユーザーは追加できない
-- 共有されていない他ユーザーは追加できない
-- 未ログインは拒否される
-- `created_by=None` の `MapArea` は通常ユーザーが管理できない
-
-共有相手削除 API:
-
-- 作成者は共有相手を削除できる
-- 削除後、そのユーザーは MapArea 一覧・詳細・GridCell 一覧・採点 API を使えなくなる
-- 存在しない共有関係は削除できない
-- 指定 `area_id` に属さない `share_id` は削除できない
-- 共有されたユーザーは削除できない
-- 共有されていない他ユーザーは削除できない
-- 未ログインは拒否される
-- `created_by=None` の `MapArea` は通常ユーザーが管理できない
-
-MapArea 一覧 API では、共有メモグリッドも判別できる形で返します。
-一覧には少なくとも次のような表示用情報を含める想定です。
-
-```json
-{
-  "areas": [
-    {
-      "id": 1,
-      "name": "自分のメモ",
-      "visibility": "private",
-      "display_type": "メモグリッド",
-      "is_owner": true,
-      "created_by": 3
-    },
-    {
-      "id": 2,
-      "name": "友人から共有されたメモ",
-      "visibility": "shared",
-      "display_type": "共有メモグリッド",
-      "is_owner": false,
-      "created_by": 4
-    }
-  ]
-}
-```
-
-`visibility` の想定値:
-
-| 値 | 意味 |
-| --- | --- |
-| `private` | 自分が作成した個人用メモグリッド |
-| `shared` | 他ユーザーから共有された共有メモグリッド |
-| `world` | ログインユーザー全体用のワールドグリッド |
-
-`display_type` は UI 表示用の呼称です。
-API の内部名は引き続き `MapArea` のままにします。
-
-一覧 API の取得対象は、将来的に次の合算にします。
-
-```text
-自分が作成した MapArea
-+ MapAreaShare で自分に共有された MapArea
-+ ワールドグリッドとして公開された MapArea
-```
-
-同じ `MapArea` が複数条件に当てはまる場合は重複させず、1 件だけ返します。
-
-### 想定する model 変更
-
-将来的に `MapArea` に次のようなフィールドを追加する想定です。
-
-```python
-is_public = models.BooleanField(default=False)
-```
-
-`is_public` は、その `MapArea` を他ユーザーにも共有するかどうかを表します。
-
-### 権限方針
-
-| 状況 | 閲覧 | 採点 |
-| --- | --- | --- |
-| `is_public=False` | 作成者本人だけ可 | 作成者本人だけ可 |
-| `is_public=True` | ログインユーザー全員可 | ログインユーザー全員可 |
-
-`is_public=False` は、現在の仕様と同じく `created_by == request.user` の場合だけ閲覧・採点できます。
-`is_public=True` は、ログインユーザー全員が閲覧・採点できます。
-
-### API ごとの方針
-
-MapArea 一覧 API:
-
-- 自分が作成した `MapArea` を返します。
-- `is_public=True` の `MapArea` も返します。
-- つまり、一覧 API は「自分の `MapArea` + public `MapArea`」を返します。
-
-MapArea 詳細 API:
-
-- 自分が作成した `MapArea` は取得できます。
-- `is_public=True` の `MapArea` も取得できます。
-- どちらにも当てはまらない `MapArea` は `404 Not Found` として扱います。
-
-点数付きグリッド一覧 API:
-
-- 自分が作成した `MapArea` の `GridCell` は取得できます。
-- `is_public=True` の `MapArea` の `GridCell` も取得できます。
-
-単体採点 API / 一括採点 API:
-
-- 自分が作成した `MapArea` に属する `GridCell` は採点できます。
-- `is_public=True` の `MapArea` に属する `GridCell` もログインユーザー全員が採点できます。
-- `GridRating` は現在どおり、1 ユーザーにつき 1 `GridCell` 1 採点の制約を使います。
-
-GridCell 自動生成 API:
-
-- `is_public` の値に関係なく、作成者本人だけ実行できます。
-- 共有 MapArea であっても、他ユーザーは GridCell 自動生成を実行できません。
-- 理由は、GridCell 自動生成は既存のグリッド構成や採点結果に影響し得る操作だからです。
-
-### `created_by=None` の扱い
-
-`created_by=None` の `MapArea` は public 扱いしません。
-
-理由:
-
-- 管理画面や古いデータで作成者なしの `MapArea` ができる可能性があるため。
-- `created_by=None` を共有扱いにすると、意図せず全ユーザーに公開される危険があるため。
-
-そのため、`created_by=None` かつ `is_public=False` の `MapArea` は、通常ユーザーからは見えない扱いにします。
-
-## 用語
-
-| 用語 | 意味 |
-| --- | --- |
-| MapArea | 地図として扱う対象範囲 |
-| GridCell | 地図を一定距離幅で分割した 1 マス |
-| GridRating | ユーザーが 1 つのグリッドに付けた採点 |
-| Initial Score | 地形情報などからシステムが最初に付ける点数 |
-| Average User Score | ユーザー採点の平均点 |
-| Rating Count | そのグリッドに付いた採点数 |
-| Calculated Score | 地図表示に使う最終的な点数 |
-
-## 実装済み API
-
-### 単体採点 API
-
-```text
-POST /api/maps/grids/{grid_id}/ratings/
-```
-
-ログイン中ユーザーが 1 つの `GridCell` に点数を付ける API です。
-
-初回採点なら `GridRating` を作成します。
-同じユーザーが同じグリッドを再採点した場合は、新しい行を作らず既存の `GridRating` を更新します。
-採点後は `GridCell` の集計済み点数を再計算します。
-
-#### 認証
-
-ログイン必須です。
-
-#### URL パラメータ
-
-| 名前 | 型 | 内容 |
-| --- | --- | --- |
-| `grid_id` | integer | 採点対象の `GridCell` ID |
-
-#### リクエスト
-
-```json
-{
-  "score": 8,
-  "comment": "水辺が近くて良さそう"
-}
-```
-
-| 項目 | 必須 | 内容 |
-| --- | --- | --- |
-| `score` | 必須 | 1 から 10 の整数 |
-| `comment` | 任意 | 採点理由やメモ。空文字も可 |
-
-`grid` と `user` はリクエストボディでは受け取りません。
-`grid` は URL の `grid_id` から、`user` はログイン中ユーザーからサーバー側で決めます。
-
-#### 権限
-
-採点できるのは、自分が作成した `MapArea` に属する `GridCell`、または自分に共有された `MapArea` に属する `GridCell` です。
-
-採点者は常にログイン中ユーザーです。
-共有メモグリッドを採点した場合も、作成者の採点ではなく、共有されたユーザー自身の `GridRating` として保存します。
-
-他ユーザーが作成し、自分に共有されていない `MapArea` に属する `GridCell` や、`created_by` が `null` かつ自分に共有されていない `MapArea` に属する `GridCell` は、存在しないものとして扱い `404 Not Found` を返します。
-
-#### レスポンス
-
-```json
-{
-  "rating": {
-    "id": 1,
-    "grid": 10,
-    "user": 3,
-    "score": 8,
-    "comment": "水辺が近くて良さそう",
-    "created_at": "2026-05-15T10:00:00+09:00",
-    "updated_at": "2026-05-15T10:00:00+09:00"
-  },
-  "grid": {
-    "id": 10,
-    "area": 1,
-    "row_index": 0,
-    "col_index": 0,
-    "north": 35.7,
-    "south": 35.69,
-    "east": 139.8,
-    "west": 139.79,
-    "initial_score": 3.0,
-    "auto_score_breakdown": {
-      "base_score": 0.57,
-      "diversity_bonus": 0.48,
-      "context_bonus": 1.5,
-      "penalty": 0.0,
-      "raw_score": 2.55,
-      "clamped_score": 2.55,
-      "bonuses": {
-        "landmark_context_bonus": 0.35
-      },
-      "flags": {
-        "has_landmark_context": true,
-        "has_park_waterfront_combo_context": true
-      },
-      "counts": {
-        "context_candidate_count": 3
-      }
-    },
-    "average_user_score": 8.0,
-    "rating_count": 1,
-    "calculated_score": 5.5,
-    "score_updated_at": "2026-05-15T10:00:00+09:00"
-  }
-}
-```
-
-#### ステータスコード
-
-| 状況 | ステータス |
-| --- | --- |
-| 初回採点を作成した | `201 Created` |
-| 既存採点を更新した | `200 OK` |
-| 未ログイン | `401 Unauthorized` |
-| `grid_id` が存在しない | `404 Not Found` |
-| 自分に共有されていない他ユーザーの `GridCell` を指定した | `404 Not Found` |
-| `created_by` が `null` かつ自分に共有されていない `MapArea` に属する `GridCell` を指定した | `404 Not Found` |
-| `score` が範囲外 | `400 Bad Request` |
-| `score` がない | `400 Bad Request` |
-
-### 一括採点 API
-
-```text
-POST /api/maps/grids/bulk-ratings/
-```
-
-ログイン中ユーザーが複数の `GridCell` に同じ点数をまとめて付ける API です。
-
-各グリッドについて、初回採点なら `GridRating` を作成します。
-既存採点がある場合は更新します。
-各 `GridCell` の集計済み点数を再計算し、更新後のグリッド一覧を返します。
-
-#### 認証
-
-ログイン必須です。
-
-#### リクエスト
-
-```json
-{
-  "grid_ids": [10, 11],
-  "score": 5,
-  "comment": "まとめて採点"
-}
-```
-
-| 項目 | 必須 | 内容 |
-| --- | --- | --- |
-| `grid_ids` | 必須 | 採点対象の `GridCell` ID 配列 |
-| `score` | 必須 | 1 から 10 の整数 |
-| `comment` | 任意 | 採点理由やメモ。空文字も可 |
-
-`grid_ids` に重複がある場合、重複は取り除いて 1 回だけ処理します。
-`grid_ids` に存在しない ID が 1 つでも含まれる場合は、全体を `400 Bad Request` にします。
-
-#### 権限
-
-採点できるのは、自分が作成した `MapArea` に属する `GridCell`、または自分に共有された `MapArea` に属する `GridCell` です。
-
-`grid_ids` に自分に共有されていない他ユーザーの `GridCell` や、`created_by` が `null` かつ自分に共有されていない `MapArea` に属する `GridCell` が 1 件でも含まれる場合は、全体を `400 Bad Request` にします。
-
-一括採点 API では、一部だけ採点して成功にはしません。
-すべての `grid_ids` が採点可能な場合だけ、`GridRating` の作成または更新と `GridCell` の点数再集計を実行します。
-
-#### レスポンス
-
-```json
-{
-  "grids": [
-    {
-      "id": 10,
-      "area": 1,
-      "row_index": 0,
-      "col_index": 0,
-      "north": 35.7,
-      "south": 35.69,
-      "east": 139.8,
-      "west": 139.79,
-      "initial_score": 3.0,
-      "average_user_score": 5.0,
-      "rating_count": 1,
-      "calculated_score": 4.0,
-      "score_updated_at": "2026-05-15T10:00:00+09:00"
-    },
-    {
-      "id": 11,
-      "area": 1,
-      "row_index": 0,
-      "col_index": 1,
-      "north": 35.7,
-      "south": 35.69,
-      "east": 139.79,
-      "west": 139.78,
-      "initial_score": 7.0,
-      "average_user_score": 5.0,
-      "rating_count": 1,
-      "calculated_score": 6.0,
-      "score_updated_at": "2026-05-15T10:00:00+09:00"
-    }
-  ]
-}
-```
-
-#### ステータスコード
-
-| 状況 | ステータス |
-| --- | --- |
-| 全件新規採点を作成した | `201 Created` |
-| 既存採点を 1 件以上更新した | `200 OK` |
-| 未ログイン | `401 Unauthorized` |
-| `grid_ids` が空 | `400 Bad Request` |
-| `grid_ids` に存在しない ID がある | `400 Bad Request` |
-| `grid_ids` に自分に共有されていない他ユーザーの `GridCell` がある | `400 Bad Request` |
-| `grid_ids` に `created_by` が `null` かつ自分に共有されていない `MapArea` に属する `GridCell` がある | `400 Bad Request` |
-| `score` が範囲外 | `400 Bad Request` |
-| `score` がない | `400 Bad Request` |
-
-### 点数付きグリッド一覧 API
-
-```text
-GET /api/maps/areas/{area_id}/grids/
-```
-
-指定した `MapArea` に属する `GridCell` 一覧を、点数付きで取得する API です。
-地図画面でグリッドを表示し、`calculated_score` をもとに色分けするための元データを返します。
-
-この API では集計値を再計算しません。
-保存済みの `GridCell` の集計値を読み取って返します。
-自分に共有された共有メモグリッドの `GridCell` 一覧も取得できます。
-共有メモグリッドの `GridCell` は、共有されたユーザーも採点できます。
-
-#### 認証
-
-ログイン必須です。
-
-#### URL パラメータ
-
-| 名前 | 型 | 内容 |
-| --- | --- | --- |
-| `area_id` | integer | 取得対象の `MapArea` ID |
-
-#### リクエスト
-
-リクエストボディはありません。
-
-#### レスポンス
-
-```json
-{
-  "area": {
-    "id": 1,
-    "name": "Manual Test Area"
-  },
-  "grids": [
-    {
-      "id": 10,
-      "area": 1,
-      "row_index": 0,
-      "col_index": 0,
-      "north": 35.7,
-      "south": 35.69,
-      "east": 139.8,
-      "west": 139.79,
-      "initial_score": 3.0,
-      "auto_score_breakdown": {
-        "base_score": 0.57,
-        "diversity_bonus": 0.48,
-        "context_bonus": 1.5,
-        "penalty": 0.0,
-        "raw_score": 2.55,
-        "clamped_score": 2.55,
-        "bonuses": {
-          "landmark_context_bonus": 0.35
-        },
-        "flags": {
-          "has_landmark_context": true,
-          "has_park_waterfront_combo_context": true
-        },
-        "counts": {
-          "context_candidate_count": 3
-        }
-      },
-      "average_user_score": 8.0,
-      "rating_count": 1,
-      "calculated_score": 5.5,
-      "score_updated_at": "2026-05-15T10:00:00+09:00",
-      "current_user_comment": "水辺が近くて良さそう",
-      "current_user_has_rating": true
-    }
-  ]
-}
-```
-
-対象 `MapArea` に `GridCell` が 0 件の場合:
-
-```json
-{
-  "area": {
-    "id": 1,
-    "name": "Manual Test Area"
-  },
-  "grids": []
-}
-```
-
-#### 並び順
-
-`grids` は次の順に並びます。
-
-1. `row_index`
-2. `col_index`
-
-#### ステータスコード
-
-| 状況 | ステータス |
-| --- | --- |
-| 一覧を取得できた | `200 OK` |
-| 未ログイン | `401 Unauthorized` |
-| `area_id` が存在しない | `404 Not Found` |
-| `area_id` が自分に共有されていない | `404 Not Found` |
-
-#### 注意点
-
-- 採点数が 0 件のグリッドも返します。
-- 別の `MapArea` に属する `GridCell` は含めません。
-- ページネーションはまだ入れていません。
-- 地図表示範囲による絞り込みはまだ入れていません。
-
-#### 表示方針メモ
-
-- demo ページの Map Preview では、`calculated_score` を GridCell の色分けに使います。
-- GridCell のクリック選択と Shift + ドラッグ範囲選択は、Map Preview 上で行います。
-- demo ページでは、MapArea の `north`, `south`, `east`, `west` を使って Leaflet 地図上に範囲と GridCell 境界を表示します。
-- 背景地図は Leaflet と OpenStreetMap タイルを使います。
-- この表示改善では API レスポンス形式は変更しません。
-
-### GridCell 自動生成 API
-
-```text
-POST /api/maps/areas/{area_id}/grids/
-```
-
-指定した `MapArea` から `GridCell` を自動生成する API です。
-`MapArea.north`, `south`, `east`, `west`, `grid_size_meters`, `region_feature_level` をもとに、`generate_grid_cells_for_area(area)` service を呼び出します。
-
-#### 認証
-
-ログイン必須です。
-
-#### 権限
-
-対象 `MapArea` の作成者本人だけが GridCell を生成できます。
-具体的には、`MapArea.created_by` とログイン中ユーザー `request.user` が同じ場合だけ生成を許可します。
-
-| 状況 | 結果 |
-| --- | --- |
-| `MapArea.created_by == request.user` | 生成許可 |
-| `MapArea.created_by != request.user` | `403 Forbidden` |
-| `MapArea.created_by is None` | `403 Forbidden` |
-
-初心者向け補足:
-
-- 認証は「誰が使っているか」を確認する仕組みです。
-- 権限は「その人が何をしてよいか」を確認する仕組みです。
-- `created_by` は、その `MapArea` を作成したユーザーです。
-- `request.user` は、今 API を使っているログイン中ユーザーです。
-
-#### URL パラメータ
-
-| 名前 | 型 | 内容 |
-| --- | --- | --- |
-| `area_id` | integer | グリッドを生成する対象の `MapArea` ID |
-
-#### リクエスト
-
-リクエストボディはありません。
-
-#### レスポンス
-
-生成に成功した場合は、対象エリアと生成されたグリッド一覧を返します。
-次の例は、対象 `MapArea.region_feature_level` が `2` の場合です。
-
-```json
-{
-  "area": {
-    "id": 1,
-    "name": "東京駅周辺"
-  },
-  "grids": [
-    {
-      "id": 10,
-      "area": 1,
-      "row_index": 0,
-      "col_index": 0,
-      "north": 35.7,
-      "south": 35.6954954954955,
-      "east": 139.7045045045045,
-      "west": 139.7,
-      "initial_score": 2.0,
-      "auto_score_breakdown": null,
-      "average_user_score": 0.0,
-      "rating_count": 0,
-      "calculated_score": 2.0,
-      "score_updated_at": null
-    }
-  ]
-}
-```
-
-`grids` は次の順に並びます。
-
-1. `row_index`
-2. `col_index`
-
-#### エラーレスポンス
-
-既に対象 `MapArea` に `GridCell` がある場合など、service が `ValueError` を返した場合は `detail` に理由を入れます。
-
-```json
-{
-  "detail": "この MapArea には既に GridCell があります。"
-}
-```
-
-作成者本人ではない場合や、`created_by` が `null` の場合も `detail` に理由を入れます。
-
-```json
-{
-  "detail": "この MapArea の GridCell を生成する権限がありません。"
-}
-```
-
-#### ステータスコード
-
-| 状況 | ステータス |
-| --- | --- |
-| 生成成功 | `201 Created` |
-| 未ログイン | `401 Unauthorized` |
-| `area_id` が存在しない | `404 Not Found` |
-| `MapArea.created_by != request.user` | `403 Forbidden` |
-| `MapArea.created_by is None` | `403 Forbidden` |
-| 既に `GridCell` がある | `400 Bad Request` |
-| service の入力チェックで不正値 | `400 Bad Request` |
-
-#### 注意点
-
-- 作成者本人ではないユーザーは `GridCell` を生成できません。
-- `created_by` が `null` の `MapArea` でも `GridCell` を生成できません。
-- 既に `GridCell` がある `MapArea` では、新しい `GridCell` を追加しません。
-- 重複生成を防ぎ、既存の採点や集計値を壊さないためです。
-- この API では外部地図 API は使いません。
-- `initial_score` は対象 `MapArea.region_feature_level` を使って生成します。
-- 正確な地球測地計算はまだ行いません。
-
-### MapArea 作成 API
-
-```text
-POST /api/maps/areas/
-```
-
-ログイン中ユーザーが、新しい `MapArea` を作成する API です。
-
-この API では、中心座標・グリッドサイズ・行数・列数から地図範囲を計算し、`MapArea` と `GridCell` を同じリクエスト処理内で作成します。
-`north / south / east / west` は保存値・レスポンス値として返しますが、作成リクエストでは直接指定できません。
-
-#### 認証
-
-ログイン必須です。
-
-`created_by` はリクエストボディでは受け取りません。
-ログイン中ユーザーをサーバー側で `created_by` に設定します。
-
-#### リクエスト
-
-```json
-{
-  "name": "Center API Area",
-  "description": "center based api",
-  "center_lat": 35.695,
-  "center_lng": 139.795,
-  "grid_size_meters": 500,
-  "region_feature_level": 2,
-  "initial_score_mode": "manual",
-  "rows": 6,
-  "cols": 8,
-  "source": "manual"
-}
-```
-
-| 項目 | 必須 | 内容 |
-| --- | --- | --- |
-| `name` | 必須 | 地図範囲の名前 |
-| `description` | 任意 | 地図範囲の説明やメモ。空文字も可 |
-| `center_lat` | 必須 | 作成する地図範囲の中心緯度 |
-| `center_lng` | 必須 | 作成する地図範囲の中心経度 |
-| `grid_size_meters` | 必須 | グリッド 1 マスの大きさ。0 より大きい整数 |
-| `region_feature_level` | 任意 | 地域特徴レベル。0〜3 の整数。未指定時は `0` |
-| `initial_score_mode` | 任意 | 初期点数の決め方。`manual` / `auto`。未指定時は `manual` |
-| `rows` | 必須 | 縦方向のマス数。0 より大きい整数 |
-| `cols` | 必須 | 横方向のマス数。0 より大きい整数 |
-| `source` | 任意 | 地図データの取得元。手動作成なら `manual` など |
-
-`region_feature_level` の意味:
-
-| 値 | 意味 |
-| --- | --- |
-| `0` | 初期値。未判定で、特徴をまだ上げない状態 |
-| `1` | ありふれた地域。住宅地だけなど、特徴が少なめの地域 |
-| `2` | 普通の地域。建物、道路、公園、川などがある程度ある地域 |
-| `3` | 特徴的な地域。自然や市街地など複数の特徴が集まる地域 |
-
-`initial_score_mode` の意味:
-
-| 値 | 意味 | 現在の動作 |
-| --- | --- | --- |
-| `manual` | `region_feature_level` を使って初期点数を決める | 実装済み |
-| `auto` | OSM / Overpass の地物情報から初期点数を自動判定する | 取得や判定に失敗した場合は `region_feature_level` を fallback として使う |
-
-demo ページでは「自動設定」を選ぶと、API へ `initial_score_mode: "auto"` と `region_feature_level: 0` を送信します。
-`auto` では OSM / Overpass 取得に成功した GridCell に自動採点内訳を保存します。
-
-クライアントから受け取らない項目:
-
-| 項目 | 理由 |
-| --- | --- |
-| `north` | 中心座標方式からサーバー側で計算するため |
-| `south` | 中心座標方式からサーバー側で計算するため |
-| `east` | 中心座標方式からサーバー側で計算するため |
-| `west` | 中心座標方式からサーバー側で計算するため |
-| `created_by` | ログイン中ユーザーからサーバー側で決めるため |
-| `created_at` | 作成日時は Django が自動で保存するため |
-| `updated_at` | 更新日時は Django が自動で保存するため |
-
-#### バリデーション
-
-| 条件 | エラー |
-| --- | --- |
-| `name` が空 | `400 Bad Request` |
-| `center_lat / center_lng / rows / cols` のいずれかがない | `400 Bad Request` |
-| `north / south / east / west` を作成入力で指定した | `400 Bad Request` |
-| `grid_size_meters` が 0 以下 | `400 Bad Request` |
-| `region_feature_level` が 0〜3 以外 | `400 Bad Request` |
-| `initial_score_mode` が `manual` / `auto` 以外 | `400 Bad Request` |
-| `rows` または `cols` が 0 以下 | `400 Bad Request` |
-| 一般ユーザーがセル数・南北距離・東西距離の制限を超えた | `400 Bad Request` |
-| 必須項目がない | `400 Bad Request` |
-
-#### 作成可能範囲の制限
-
-一般ユーザーは、中心座標方式で作成する `MapArea` について次の制限を受けます。
-
-```text
-rows * cols <= 500
-grid_size_meters * rows <= 30000
-grid_size_meters * cols <= 30000
-```
-
-| ユーザー | 条件 | 結果 |
-| --- | --- | --- |
-| 一般ユーザー | セル数・南北距離・東西距離がすべて上限以内 | 作成許可 |
-| 一般ユーザー | いずれかの上限を超える | `400 Bad Request` |
-| 管理者 | セル数・南北距離・東西距離の一般ユーザー制限を超える | 作成許可 |
-
-管理者判定は、Django 標準の `request.user.is_staff` を使う方針です。
-この制限は、巨大な `MapArea` 作成によって `GridCell` が大量生成されることを防ぐために入れます。
-従来の緯度差・経度差 20 分制限は、MapArea 作成 API の仕様から削除します。
-
-エラーレスポンス例:
-
-```json
-{
-  "detail": "一般ユーザーは rows * cols が 500 を超える MapArea を作成できません。"
-}
-```
-
-初心者向け補足:
-
-- バリデーションは、変なデータを DB に保存しないためのチェックです。
-- `north / south / east / west` は、入力された中心座標・グリッドサイズ・行数・列数からサーバー側で計算します。
-- `grid_size_meters` が 0 以下だと、グリッドの大きさとして使えないためエラーにします。
-- `region_feature_level` は、将来自動判定する予定の地域特徴を、現段階では手入力で渡すための暫定フィールドです。
-- `initial_score_mode` は、初期点数を手動値で決めるか、将来の自動判定に任せるかを表すフィールドです。
-- `is_staff` は Django のユーザーにある管理者向けフラグで、管理画面を使える運用担当者かどうかの判断に使えます。
-
-#### レスポンス
-
-作成に成功した場合は、作成された `MapArea` を返します。
-生成された GridCell はレスポンスに含めず、点数付きグリッド一覧 API で取得します。
-
-```json
-{
-  "id": 1,
-  "name": "Center API Area",
-  "description": "center based api",
-  "north": 35.7085135135,
-  "south": 35.6814864864,
-  "east": 139.8171,
-  "west": 139.7729,
-  "grid_size_meters": 500,
-  "region_feature_level": 2,
-  "initial_score_mode": "manual",
-  "source": "manual",
-  "created_by": 3,
-  "created_at": "2026-05-18T10:00:00+09:00",
-  "updated_at": "2026-05-18T10:00:00+09:00"
-}
-```
-
-#### ステータスコード
-
-| 状況 | ステータス |
-| --- | --- |
-| 作成成功 | `201 Created` |
-| 未ログイン | `401 Unauthorized` |
-| 入力不正 | `400 Bad Request` |
-| GridCell 生成に失敗した | `400 Bad Request` |
-
-#### GridCell 自動生成の扱い
-
-- `MapArea.created_by` はログイン中ユーザーをサーバー側で設定します。
-- GridCell は、作成された `MapArea` に紐づけて `rows * cols` 個を自動生成します。
-- `initial_score_mode=manual` の場合、生成直後の `GridCell.initial_score` と `GridCell.calculated_score` は、`MapArea.region_feature_level` と同じ値になります。
-- `initial_score_mode=auto` の場合、地物情報から自動判定します。取得や判定に失敗した場合は、`region_feature_level` を fallback として初期点数に使います。
-- MapArea 作成と GridCell 生成は 1 つの transaction でまとめます。
-- GridCell 生成に失敗した場合、MapArea だけが保存される状態にはしません。
-- 作成後の GridCell は `GET /api/maps/areas/{area_id}/grids/` で確認できます。
-- 既存の `POST /api/maps/areas/{area_id}/grids/` は残します。
-- 既に GridCell がある MapArea に対して自動生成 API を実行した場合は `400 Bad Request` を返します。
-
-初心者向け補足:
-
-- transaction は、複数の DB 操作をひとまとまりとして扱う仕組みです。
-- 今回は「MapArea は作れたが GridCell は作れなかった」という中途半端な状態を避けるために使います。
-
-#### 今回は実装しないこと
-
-- 同じ名前の `MapArea` を許可するかどうか
-- 外部地図 API から座標を自動取得するかどうか
-- `source` の選択肢を固定するかどうか
-
-### MapArea 一覧 API
-
-```text
-GET /api/maps/areas/
-```
-
-ログイン中ユーザーが、閲覧できる `MapArea` 一覧を取得する API です。
-ユーザー向けには、個人用の `MapArea` を `メモグリッド`、共有された `MapArea` を `共有メモグリッド` と表示します。
-
-この時点では、一覧 API だけが共有メモグリッドを含みます。
-詳細 API、GridCell 一覧 API、採点 API はまだ共有メモグリッド対応していません。
-
-#### 認証
-
-ログイン必須です。
-
-#### リクエスト
-
-リクエストボディはありません。
-
-#### レスポンス
-
-```json
-{
-  "areas": [
-    {
-      "id": 1,
-      "name": "東京駅周辺",
-      "description": "手動作成した確認用エリア",
-      "north": 35.7,
-      "south": 35.6,
-      "east": 139.8,
-      "west": 139.7,
-      "grid_size_meters": 500,
-      "map_grid_rows": 10,
-      "map_grid_cols": 10,
-      "region_feature_level": 2,
-      "initial_score_mode": "manual",
-      "source": "manual",
-      "created_by": 3,
-      "visibility": "private",
-      "display_type": "メモグリッド",
-      "is_owner": true,
-      "created_at": "2026-05-18T10:00:00+09:00",
-      "updated_at": "2026-05-18T10:00:00+09:00"
-    }
-  ]
-}
-```
-
-`MapArea` が 0 件の場合:
-
-```json
-{
-  "areas": []
-}
-```
-
-`map_grid_rows` と `map_grid_cols` は、関連する `GridCell` の最大 `row_index` / `col_index` に 1 を足した表示用の縦横数です。
-GridCell がまだ無い場合は `null` になります。
-
-#### 並び順
-
-`MapArea` model の ordering に従い、`name`, `id` の順に並びます。
-
-#### 取得対象
-
-一覧 API は、次の `MapArea` を返します。
-
-- 自分が作成した `MapArea`
-- `MapAreaShare` によって自分に共有された `MapArea`
-
-この時点では、ワールドグリッドはまだ含めません。
-同じ `MapArea` が自分の作成分と共有分の両方に該当する場合は、重複させず 1 件だけ返します。
-
-#### 表示用フィールド
-
-| フィールド | 型 | 内容 |
-| --- | --- | --- |
-| `visibility` | string | `private` または `shared` |
-| `display_type` | string | `メモグリッド` または `共有メモグリッド` |
-| `is_owner` | boolean | ログイン中ユーザーが作成者なら `true` |
-
-判定ルール:
-
-| 状況 | `visibility` | `display_type` | `is_owner` |
-| --- | --- | --- | --- |
-| `created_by == request.user` | `private` | `メモグリッド` | `true` |
-| `MapAreaShare.user == request.user` | `shared` | `共有メモグリッド` | `false` |
-
-自分が作成した `MapArea` が自分に共有されている場合は、`private` を優先します。
-
-#### ステータスコード
-
-| 状況 | ステータス |
-| --- | --- |
-| 一覧を取得できた | `200 OK` |
-| 未ログイン | `401 Unauthorized` |
-
-### MapArea 詳細 API
-
-```text
-GET /api/maps/areas/{area_id}/
-```
-
-指定した `MapArea` 1 件の詳細を取得する API です。
-自分が作成したメモグリッドだけでなく、自分に共有された共有メモグリッドも取得できます。
-共有されていない `MapArea` は、存在しないものとして `404 Not Found` を返します。
-
-#### 認証
-
-ログイン必須です。
-
-#### URL パラメータ
-
-| 名前 | 型 | 内容 |
-| --- | --- | --- |
-| `area_id` | integer | 取得対象の `MapArea` ID |
-
-#### リクエスト
-
-リクエストボディはありません。
-
-#### レスポンス
-
-```json
-{
-  "id": 1,
-  "name": "東京駅周辺",
-  "description": "手動作成した確認用エリア",
-  "north": 35.7,
-  "south": 35.6,
-  "east": 139.8,
-  "west": 139.7,
-  "grid_size_meters": 500,
-  "region_feature_level": 2,
-  "initial_score_mode": "manual",
-  "source": "manual",
-  "created_by": 3,
-  "created_at": "2026-05-18T10:00:00+09:00",
-  "updated_at": "2026-05-18T10:00:00+09:00"
-}
-```
-
-#### ステータスコード
-
-| 状況 | ステータス |
-| --- | --- |
-| 詳細を取得できた | `200 OK` |
-| 未ログイン | `401 Unauthorized` |
-| `area_id` が存在しない | `404 Not Found` |
-| `area_id` が自分に共有されていない | `404 Not Found` |
-
-### MapArea 削除 API
-
-```text
-DELETE /api/maps/areas/{area_id}/
-```
-
-指定した `MapArea` を削除する API です。
-ユーザー向けには、メモグリッド削除として扱います。
-
-削除できるのは、その `MapArea` の作成者本人だけです。
-共有されたユーザーは閲覧・採点はできますが、MapArea 本体は削除できません。
-
-#### 認証
-
-ログイン必須です。
-
-#### URL パラメータ
-
-| 名前 | 型 | 内容 |
-| --- | --- | --- |
-| `area_id` | integer | 削除対象の `MapArea` ID |
-
-#### リクエスト
-
-リクエストボディはありません。
-
-#### レスポンス
-
-削除成功時はレスポンスボディを返しません。
-
-#### ステータスコード
-
-| 状況 | ステータス |
-| --- | --- |
-| 削除成功 | `204 No Content` |
-| 未ログイン | `401 Unauthorized` |
-| `area_id` が存在しない | `404 Not Found` |
-| 作成者以外が削除しようとした | `404 Not Found` |
-| 共有されたユーザーが削除しようとした | `404 Not Found` |
-| `created_by=None` の `MapArea` を削除しようとした | `404 Not Found` |
-
-#### 削除される関連データ
-
-`MapArea` を削除すると、関連する `GridCell`、`GridRating`、`MapAreaShare` も cascade により削除されます。
-
-初心者向け補足:
-
-- cascade は、親データを削除したときに、それに紐づく子データも一緒に削除する DB の扱いです。
-- 今回は model の `on_delete=models.CASCADE` を使うため、削除用の migration は不要です。
-
-## 現在のモデル
-
-model は DB のテーブル設計に対応します。
-現在は `MapArea`、`GridCell`、`GridRating` の 3 つの model を実装済みです。
-
-### MapArea
-
-地図全体の対象範囲を表します。
-たとえば「東京駅周辺」や「京都市中心部」のように、グリッド分割する元の範囲です。
-
-| フィールド | 必須 | 役割 |
-| --- | --- | --- |
-| `name` | 必須 | 地図範囲の名前 |
-| `description` | 任意 | 地図範囲の説明やメモ |
-| `north` | 必須 | 北端の緯度 |
-| `south` | 必須 | 南端の緯度 |
-| `east` | 必須 | 東端の経度 |
-| `west` | 必須 | 西端の経度 |
-| `grid_size_meters` | 必須 | グリッド 1 マスの大きさ |
-| `region_feature_level` | 必須 | 地域特徴レベル。0〜3 の整数 |
-| `initial_score_mode` | 必須 | 初期点数の決め方。`manual` / `auto` |
-| `source` | 任意 | 地図データの取得元 |
-| `created_by` | 任意 | この地図範囲を作成したユーザー |
-| `created_at` | 必須 | 作成日時 |
-| `updated_at` | 必須 | 更新日時 |
-
-制約:
-
-- `north` は `south` より大きい必要があります。
-- `east` は `west` より大きい必要があります。
-- `grid_size_meters` は 0 より大きい必要があります。
-- `region_feature_level` は 0 から 3 の範囲である必要があります。
-- `initial_score_mode` は `manual` または `auto` である必要があります。
-
-### GridCell
-
-`MapArea` を分割した 1 マスを表します。
-複数ユーザーの採点結果そのものは `GridRating` に保存し、`GridCell` には集計済みの表示用スコアを保存します。
-
-| フィールド | 必須 | 役割 |
-| --- | --- | --- |
-| `area` | 必須 | どの地図範囲に属するか |
-| `row_index` | 必須 | 上から何行目のグリッドか |
-| `col_index` | 必須 | 左から何列目のグリッドか |
-| `north` | 必須 | グリッド北端の緯度 |
-| `south` | 必須 | グリッド南端の緯度 |
-| `east` | 必須 | グリッド東端の経度 |
-| `west` | 必須 | グリッド西端の経度 |
-| `initial_score` | 必須 | 地形情報などから付ける初期点数 |
-| `auto_score_breakdown` | 任意 | 自動初期スコアの内訳。`manual` 生成や fallback では `null` |
-| `average_user_score` | 必須 | ユーザー採点の平均点 |
-| `rating_count` | 必須 | 採点数 |
-| `calculated_score` | 必須 | 表示用の最終点数 |
-| `score_updated_at` | 任意 | 集計点を最後に更新した日時 |
-| `created_at` | 必須 | 作成日時 |
-| `updated_at` | 必須 | 更新日時 |
-
-制約:
-
-- 同じ `MapArea` の中で、`row_index` と `col_index` の組み合わせは重複できません。
-
-### GridRating
-
-ユーザー 1 人分の採点を表します。
-複数ユーザーが同じ `GridCell` を採点できるように、採点データは `GridCell` とは別 model にしています。
-
-| フィールド | 必須 | 役割 |
-| --- | --- | --- |
-| `grid` | 必須 | どのグリッドへの採点か |
-| `user` | 必須 | 誰が採点したか |
-| `score` | 必須 | ユーザーが付けた点数 |
-| `comment` | 任意 | 採点理由やメモ |
-| `created_at` | 必須 | 作成日時 |
-| `updated_at` | 必須 | 更新日時 |
-
-制約:
-
-- `score` は 1 から 10 の整数です。
-- 同じ `grid` と `user` の組み合わせは重複できません。
-
-## 実装済み service: GridCell 自動生成
-
-### 目的
-
-`MapArea` の緯度経度範囲と `grid_size_meters` をもとに、`GridCell` を自動生成するための service です。
-`POST /api/maps/areas/` と `POST /api/maps/areas/{area_id}/grids/` から呼び出します。
-
-初心者向け補足:
-
-- service は、view から切り出した共通処理を置く場所です。
-- view はリクエストを受け取りレスポンスを返す処理です。
-- グリッドは、地図を一定の大きさに区切った 1 マスです。
-
-### service 名
-
-```python
-generate_grid_cells_for_area(map_area)
-```
-
-### 入力
-
-| 項目 | 内容 |
-| --- | --- |
-| `map_area` | `MapArea` instance |
-
-`map_area` の存在確認は、基本的には API 側で行います。
-たとえば `area_id` が存在しない場合は、view 側で `404 Not Found` にする想定です。
-
-### 出力
-
-生成して DB に保存した `GridCell` の一覧を返します。
-
-例:
-
-```python
-[grid_cell_1, grid_cell_2, grid_cell_3]
-```
-
-GridCell 自動生成 API では、この一覧を serializer で JSON に変換して返します。
-serializer は、Python のデータと JSON の変換を担当する部品です。
-
-### 使用する MapArea の値
-
-| フィールド | 内容 |
-| --- | --- |
-| `north` | 地図範囲の北端 |
-| `south` | 地図範囲の南端 |
-| `east` | 地図範囲の東端 |
-| `west` | 地図範囲の西端 |
-| `grid_size_meters` | 1 マスの大きさ |
-| `region_feature_level` | `manual` 時の初期評価、または `auto` 失敗時の fallback に使う地域特徴レベル |
-| `initial_score_mode` | 初期点数の決め方。`manual` / `auto` |
-
-### 生成する GridCell の項目
-
-| フィールド | 方針 |
-| --- | --- |
-| `area` | 対象の `MapArea` |
-| `row_index` | 上から何行目か。0 始まり |
-| `col_index` | 左から何列目か。0 始まり |
-| `north` | そのマスの北端 |
-| `south` | そのマスの南端 |
-| `east` | そのマスの東端 |
-| `west` | そのマスの西端 |
-| `initial_score` | `manual` では対象 `MapArea.region_feature_level` と同じ値。`auto` では地物情報から計算した値、失敗時は fallback 値 |
-| `average_user_score` | 初期値 `0` |
-| `rating_count` | 初期値 `0` |
-| `calculated_score` | 生成直後は `initial_score` と同じ値 |
-| `score_updated_at` | `null` |
-
-`GridCell` には集計済みの表示用スコアを保存します。
-採点データそのものは `GridRating` に保存するため、自動生成時点では採点数は 0 件です。
-`initial_score_mode=manual` では `MapArea.region_feature_level` を全 GridCell の初期評価に使います。
-`initial_score_mode=auto` では、地物情報から自動判定します。
-demoページの「自動設定」は `initial_score_mode=auto` と `region_feature_level=0` を送信し、取得や判定に失敗した場合は fallback として `0` を初期評価に使います。
-
-### 緯度経度の簡易計算方針
-
-最初の学習用実装では、厳密な地球測地計算ではなく簡易計算を使います。
-
-```text
-1 度の緯度は約 111,000m として扱う
-緯度方向の 1 マス = grid_size_meters / 111000
-経度方向も最初は同じ近似値を使う
-```
-
-計算例:
-
-```python
-lat_step = map_area.grid_size_meters / 111000
-lng_step = map_area.grid_size_meters / 111000
-```
-
-注意点:
-
-- 緯度は北南方向の位置です。
-- 経度は東西方向の位置です。
-- 経度 1 度あたりの距離は、本来は緯度によって変わります。
-- そのため、この計算は学習用の簡易実装です。
-- より正確な計算は、別タスクで扱います。
-
-### 行数・列数の計算方針
-
-`MapArea` 全体を覆えるように、行数と列数は切り上げで計算します。
-
-```python
-row_count = ceil((map_area.north - map_area.south) / lat_step)
-col_count = ceil((map_area.east - map_area.west) / lng_step)
-```
-
-`ceil` は、小数を切り上げる処理です。
-たとえば `2.1` は `3` になります。
-範囲が 2.1 マス分ある場合に 2 マスだけ作ると端が足りなくなるため、切り上げます。
-
-### 端のグリッドの扱い
-
-範囲ぴったりに割り切れない場合、最後の行や列は `MapArea` の境界に合わせて小さめのグリッドにします。
-これにより、生成した `GridCell` が `MapArea` の範囲外にはみ出さないようにします。
-
-```python
-cell_north = map_area.north - row_index * lat_step
-cell_south = max(map_area.south, cell_north - lat_step)
-
-cell_west = map_area.west + col_index * lng_step
-cell_east = min(map_area.east, cell_west + lng_step)
-```
-
-行と列の考え方:
-
-- `row_index` は上から下へ増えます。
-- `col_index` は左から右へ増えます。
-- 北端から南へ進むため、緯度は `north` から引き算します。
-- 西端から東へ進むため、経度は `west` に足し算します。
-
-### 既存 GridCell がある場合の扱い
-
-安全のため、対象の `MapArea` に `GridCell` が 1 件以上ある場合は新規生成しません。
-service 側でエラーにする方針です。
-
-理由:
-
-- 重複生成を防ぐため
-- 既存の採点や集計値を壊さないため
-- 削除して再生成する処理は影響が大きいため、別タスクで扱うため
-
-想定する確認:
-
-```python
-if map_area.grid_cells.exists():
-    raise ValueError("この MapArea には既に GridCell があります。")
-```
-
-API 側では、この `ValueError` を `400 Bad Request` として扱います。
-
-### 想定エラー
-
-| 状況 | 方針 |
-| --- | --- |
-| `map_area` が存在しない | API 側で `404 Not Found` にする |
-| 対象 `MapArea` に既に `GridCell` がある | service でエラーにする |
-| `grid_size_meters <= 0` | model 制約上は保存できない想定だが、service 側でも念のためエラー候補 |
-| `north <= south` | model 制約上は保存できない想定 |
-| `east <= west` | model 制約上は保存できない想定 |
-
-model は DB のテーブル設計に対応します。
-現在の `MapArea` model には `north > south`、`east > west`、`grid_size_meters > 0`、`region_feature_level` が 0〜3 の範囲であることの制約があります。
-ただし service を安全に使うため、実装時には service 側でも入力チェックを検討します。
-
-### この service ではやらないこと
-
-- `models.py` の変更
-- migration の作成
-- 外部地図 API の利用
-- 正確な地球測地計算
-- 地形情報や観光情報からの `initial_score` 計算
-- 認証方式の変更
-- 依存関係の追加
-
-migration は、model の変更を DB に反映するための履歴です。
-この service では model を変えないため、migration も作りません。
-
-## 現在の serializer
-
-serializer は、Python のデータと JSON を変換する部品です。
-また、不正な入力を防ぐバリデーションも担当します。
-
-| serializer | 用途 |
-| --- | --- |
-| `MapAreaSerializer` | 地図範囲の入力チェックと出力 |
-| `GridRatingCreateSerializer` | 単体採点 API の入力チェック |
-| `GridRatingResponseSerializer` | 採点結果の出力 |
-| `GridCellScoreSerializer` | 点数付きグリッド情報の出力 |
-| `BulkGridRatingSerializer` | 一括採点 API の入力チェック |
-
-### MapAreaSerializer
-
-入力・出力項目:
-
-| 項目 |
-| --- |
-| `id` |
-| `name` |
-| `description` |
-| `north` |
-| `south` |
-| `east` |
-| `west` |
-| `grid_size_meters` |
-| `region_feature_level` |
-| `initial_score_mode` |
-| `source` |
-| `created_by` |
-| `created_at` |
-| `updated_at` |
-
-`id`, `created_by`, `created_at`, `updated_at` は読み取り専用です。
-`created_by` はログイン中ユーザーからサーバー側で設定します。
-`region_feature_level` は 0〜3 の整数です。未指定時は `0` として扱います。
-`initial_score_mode` は `manual` / `auto` の文字列です。未指定時は `manual` として扱います。
-`manual` の場合は `region_feature_level` を使い、`auto` の場合は地物情報から自動判定します。
-demo ページからは `region_feature_level=0` を fallback として送信します。
-
-### GridRatingCreateSerializer
-
-入力項目:
-
-| 項目 | 必須 | 内容 |
-| --- | --- | --- |
-| `score` | 必須 | 1 から 10 の整数 |
-| `comment` | 任意 | 空文字も可 |
-
-### GridRatingResponseSerializer
-
-出力項目:
-
-| 項目 |
-| --- |
-| `id` |
-| `grid` |
-| `user` |
-| `score` |
-| `comment` |
-| `created_at` |
-| `updated_at` |
-
-### GridCellScoreSerializer
-
-出力項目:
-
-| 項目 |
-| --- |
-| `id` |
-| `area` |
-| `row_index` |
-| `col_index` |
-| `north` |
-| `south` |
-| `east` |
-| `west` |
-| `initial_score` |
-| `average_user_score` |
-| `rating_count` |
-| `calculated_score` |
-| `score_updated_at` |
-| `current_user_comment` |
-| `current_user_has_rating` |
-
-### BulkGridRatingSerializer
-
-入力項目:
-
-| 項目 | 必須 | 内容 |
-| --- | --- | --- |
-| `grid_ids` | 必須 | 空ではない `GridCell` ID 配列 |
-| `score` | 必須 | 1 から 10 の整数 |
-| `comment` | 任意 | 空文字も可 |
-
-バリデーション:
-
-- `grid_ids` は空配列にできません。
-- `grid_ids` に存在しない ID が含まれる場合はエラーにします。
-- `grid_ids` に重複がある場合は、重複を取り除きます。
-- `score` は 1 から 10 の範囲です。
-
-## 集計処理
-
-採点 API は、`GridRating` の作成または更新後に `update_grid_cell_score(grid_cell)` を呼び出します。
-
-`update_grid_cell_score(grid_cell)` は `maps/services.py` に実装済みです。
-
-採点が 1 件以上ある場合:
-
-```text
-average_user_score = 対象 GridCell に紐づく GridRating.score の平均
-rating_count = 対象 GridCell に紐づく GridRating の件数
-calculated_score = (initial_score + average_user_score) / 2
-score_updated_at = 現在時刻
-```
-
-採点が 0 件の場合:
-
-```text
-average_user_score = 0
-rating_count = 0
-calculated_score = initial_score
-score_updated_at = null
-```
-
-初心者向け補足:
-
-- 集計は、複数の点数から表示用の点数を計算する処理です。
-- `average_user_score` はユーザーが付けた点数の平均です。
-- `rating_count` は、そのグリッドに何件の採点があるかです。
-- `calculated_score` は、地図上で色分け表示するときに使う最終点数です。
-- 採点後に再計算しないと、地図上に古い点数が表示される可能性があります。
-
-## 未実装・未定のこと
-
-現在未実装:
-
-- 地図範囲からグリッドを自動生成する API
-- 周辺の高得点グリッドを検索する API
-- 外部地図 API から地図情報を取得する処理
-- フロントエンド向けの表示範囲絞り込み
-- ページネーション
-
-現在未定:
-
-- 地図データの取得元
-- グリッド幅の最終仕様
-- 初期点数の計算方法
-- 平均値以外の集計方法を使うか
-- 匿名採点を許可するか
-- 採点履歴を保存するか
-- Token 認証や JWT 認証を導入するか
-- ユーザーごとの `MapArea` や `GridCell` の閲覧・採点権限をどう制限するか
-- 位置情報や行動履歴を保存するか
-- フロントエンドでどの地図ライブラリを使うか
-
-## 次に設計するとよい候補
-
-次に進めるなら、次のどれか 1 つに絞ると学習しやすいです。
-
-1. 地図範囲から `GridCell` を自動生成する service の仕様を決める
-2. グリッド数が多くなった場合のページネーション方針を決める
-3. 認証方式を Basic / Session のまま進めるか、Token 系にするかを検討する
+| 未認証 | `401 Unauthorized` | 認証情報がない |
+| 入力不正 | `400 Bad Request` | serializer validation error など |
+| 閲覧権限なし | `404 Not Found` | 対象の存在を推測しにくくする |
+| 採点権限なし | `404 Not Found` または `400 Bad Request` | 単体採点は `404`、一括採点は `400` |
+| 共有管理の権限なし | `404 Not Found` | 作成者だけが操作可能 |
+| GridCell 生成権限なし | `403 Forbidden` | `POST /areas/<area_id>/grids/` の作成者以外 |
+| 削除権限なし | `404 Not Found` | 作成者だけが削除可能 |
+| Overpass 取得失敗 | 作成自体は継続 | fallback で GridCell を生成する場合がある |
+
+## 実装しない・変更しない方針
+
+- `north` / `south` / `east` / `west` の直接指定を作成 API の基本入力にはしない。
+- 作成画面では `source` を主要入力として扱わない。
+- 共有されたユーザーに共有管理や削除は許可しない。
+- 自動設定時の画面側 2km 制限と、API 側の一般ユーザー制限を混同しない。
+- model / migration の変更はこの仕様更新には含めない。
