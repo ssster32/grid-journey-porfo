@@ -1,11 +1,14 @@
 import base64
+from io import StringIO
 from math import cos, radians
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
+from django.core.management import call_command
+from django.core.management.base import CommandError
 from django.contrib.staticfiles import finders
 from django.db import IntegrityError, transaction
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.authtoken.models import Token
@@ -26,6 +29,7 @@ from .services import (
     calculate_initial_score_from_feature_summary,
     calculate_bounds_from_center,
     generate_grid_cells_for_area,
+    run_grid_generation_for_area,
     update_grid_cell_score,
     validate_center_grid_limits,
 )
@@ -256,6 +260,41 @@ class MapAreaModelTests(TestCase):
 
         self.assertEqual(area.initial_score_mode, MapArea.InitialScoreMode.MANUAL)
 
+    def test_grid_generation_fields_have_safe_defaults(self):
+        area = MapArea.objects.create(
+            name="Default Grid Generation Status Area",
+            north=35.7,
+            south=35.6,
+            east=139.8,
+            west=139.7,
+            grid_size_meters=500,
+        )
+
+        self.assertEqual(
+            area.grid_generation_status,
+            MapArea.GridGenerationStatus.COMPLETED,
+        )
+        self.assertIsNone(area.grid_generation_started_at)
+        self.assertIsNone(area.grid_generation_finished_at)
+        self.assertEqual(area.grid_generation_error_message, "")
+        self.assertEqual(area.grid_generation_attempt_count, 0)
+
+    def test_grid_generation_status_choices_include_expected_states(self):
+        choice_values = {
+            choice.value for choice in MapArea.GridGenerationStatus
+        }
+
+        self.assertEqual(
+            choice_values,
+            {
+                "pending",
+                "running",
+                "completed",
+                "fallback_completed",
+                "failed",
+            },
+        )
+
 
 class MapAreaSerializerTests(TestCase):
     def center_payload(self):
@@ -321,6 +360,21 @@ class MapAreaSerializerTests(TestCase):
         self.assertNotIn("cols", serializer.data)
         self.assertIn("region_feature_level", serializer.data)
         self.assertIn("initial_score_mode", serializer.data)
+
+    def test_grid_generation_fields_are_read_only(self):
+        serializer = MapAreaSerializer(
+            data={
+                **self.center_payload(),
+                "grid_generation_status": "failed",
+                "grid_generation_error_message": "client supplied error",
+                "grid_generation_attempt_count": 9,
+            }
+        )
+
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        self.assertNotIn("grid_generation_status", serializer.validated_data)
+        self.assertNotIn("grid_generation_error_message", serializer.validated_data)
+        self.assertNotIn("grid_generation_attempt_count", serializer.validated_data)
 
     def test_region_feature_level_defaults_to_zero(self):
         serializer = MapAreaSerializer(data=self.center_payload())
@@ -848,6 +902,121 @@ class GenerateGridCellsForAreaTests(TestCase):
         self.assertEqual(len(grid_cells), 4)
         self.assertEqual(GridCell.objects.filter(area=self.area).count(), 4)
 
+    def test_run_grid_generation_for_area_generates_manual_grid_cells(self):
+        self.area.region_feature_level = 2
+        self.area.save(update_fields=["region_feature_level"])
+
+        grid_cells = run_grid_generation_for_area(self.area)
+
+        self.assertEqual(len(grid_cells), 4)
+        self.assertEqual(GridCell.objects.filter(area=self.area).count(), 4)
+        self.assertEqual(
+            GridCell.objects.filter(area=self.area).exclude(initial_score=2).count(),
+            0,
+        )
+        self.area.refresh_from_db()
+        self.assertEqual(
+            self.area.grid_generation_status,
+            MapArea.GridGenerationStatus.COMPLETED,
+        )
+        self.assertIsNotNone(self.area.grid_generation_started_at)
+        self.assertIsNotNone(self.area.grid_generation_finished_at)
+        self.assertEqual(self.area.grid_generation_error_message, "")
+        self.assertEqual(self.area.grid_generation_attempt_count, 1)
+
+    @patch("maps.services.build_feature_summaries_for_map_area_from_overpass")
+    def test_run_grid_generation_for_area_uses_auto_feature_summaries(
+        self,
+        mock_overpass,
+    ):
+        self.area.initial_score_mode = MapArea.InitialScoreMode.AUTO
+        self.area.region_feature_level = 2
+        self.area.save(update_fields=["initial_score_mode", "region_feature_level"])
+        feature_summary = {"building_count": 20, "has_park": True}
+        mock_overpass.return_value = {(0, 0): feature_summary}
+        expected_score = calculate_initial_score_from_feature_summary(
+            feature_summary,
+            grid_size_meters=self.area.grid_size_meters,
+        )
+
+        grid_cells = run_grid_generation_for_area(self.area)
+        auto_grid = GridCell.objects.get(area=self.area, row_index=0, col_index=0)
+        fallback_grid = GridCell.objects.get(area=self.area, row_index=0, col_index=1)
+
+        self.assertEqual(len(grid_cells), 4)
+        mock_overpass.assert_called_once()
+        self.assertEqual(auto_grid.initial_score, expected_score)
+        self.assertIsNotNone(auto_grid.auto_score_breakdown)
+        self.assertEqual(fallback_grid.initial_score, 2)
+        self.area.refresh_from_db()
+        self.assertEqual(
+            self.area.grid_generation_status,
+            MapArea.GridGenerationStatus.COMPLETED,
+        )
+        self.assertIsNotNone(self.area.grid_generation_started_at)
+        self.assertIsNotNone(self.area.grid_generation_finished_at)
+        self.assertEqual(self.area.grid_generation_error_message, "")
+        self.assertEqual(self.area.grid_generation_attempt_count, 1)
+
+    @patch("maps.services.build_feature_summaries_for_map_area_from_overpass")
+    def test_run_grid_generation_for_area_falls_back_when_overpass_fails(
+        self,
+        mock_overpass,
+    ):
+        self.area.initial_score_mode = MapArea.InitialScoreMode.AUTO
+        self.area.region_feature_level = 2
+        self.area.save(update_fields=["initial_score_mode", "region_feature_level"])
+        mock_overpass.side_effect = ValueError("Overpass取得に失敗しました。")
+
+        grid_cells = run_grid_generation_for_area(self.area)
+
+        self.assertEqual(len(grid_cells), 4)
+        self.assertEqual(GridCell.objects.filter(area=self.area).count(), 4)
+        self.assertEqual(
+            GridCell.objects.filter(area=self.area).exclude(initial_score=2).count(),
+            0,
+        )
+        self.area.refresh_from_db()
+        self.assertEqual(
+            self.area.grid_generation_status,
+            MapArea.GridGenerationStatus.FALLBACK_COMPLETED,
+        )
+        self.assertIsNotNone(self.area.grid_generation_started_at)
+        self.assertIsNotNone(self.area.grid_generation_finished_at)
+        self.assertIn(
+            "Overpass取得に失敗しました。",
+            self.area.grid_generation_error_message,
+        )
+        self.assertEqual(self.area.grid_generation_attempt_count, 1)
+
+    def test_run_grid_generation_for_area_keeps_existing_double_generation_error(self):
+        GridCell.objects.create(
+            area=self.area,
+            row_index=0,
+            col_index=0,
+            north=1.0,
+            south=0.9,
+            east=0.95,
+            west=0.85,
+        )
+
+        with self.assertRaises(ValueError):
+            run_grid_generation_for_area(self.area)
+
+        self.area.refresh_from_db()
+        self.assertEqual(GridCell.objects.filter(area=self.area).count(), 1)
+        self.assertEqual(
+            self.area.grid_generation_status,
+            MapArea.GridGenerationStatus.FAILED,
+        )
+        self.assertIsNotNone(self.area.grid_generation_started_at)
+        self.assertIsNotNone(self.area.grid_generation_finished_at)
+        self.assertIn(
+            "この MapArea には既に GridCell があります。",
+            self.area.grid_generation_error_message,
+        )
+        self.assertEqual(self.area.grid_generation_attempt_count, 1)
+
     def test_build_grid_cell_contexts_returns_expected_count(self):
         contexts = build_grid_cell_contexts_for_area(self.area)
 
@@ -1196,6 +1365,126 @@ class GenerateGridCellsForAreaTests(TestCase):
             generate_grid_cells_for_area(self.area)
 
         self.assertEqual(GridCell.objects.filter(area=self.area).count(), 0)
+
+
+class ProcessPendingGridAreasCommandTests(TestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            username="testuser",
+            password="test-password",
+        )
+
+    def create_area(self, name, status=MapArea.GridGenerationStatus.PENDING):
+        return MapArea.objects.create(
+            name=name,
+            north=35.7,
+            south=35.6,
+            east=139.8,
+            west=139.7,
+            grid_size_meters=500,
+            grid_generation_status=status,
+            created_by=self.user,
+        )
+
+    def mark_completed(self, area):
+        area.grid_generation_status = MapArea.GridGenerationStatus.COMPLETED
+        area.save(update_fields=["grid_generation_status"])
+        return []
+
+    def mark_failed_and_raise(self, area):
+        area.grid_generation_status = MapArea.GridGenerationStatus.FAILED
+        area.grid_generation_error_message = "GridCell 生成に失敗しました。"
+        area.save(
+            update_fields=[
+                "grid_generation_status",
+                "grid_generation_error_message",
+            ]
+        )
+        raise ValueError("GridCell 生成に失敗しました。")
+
+    @patch(
+        "maps.management.commands.process_pending_grid_areas."
+        "run_grid_generation_for_area"
+    )
+    def test_command_processes_pending_only(self, mock_run_generation):
+        pending_area = self.create_area("Pending Area")
+        completed_area = self.create_area(
+            "Completed Area",
+            status=MapArea.GridGenerationStatus.COMPLETED,
+        )
+        mock_run_generation.side_effect = self.mark_completed
+        output = StringIO()
+
+        call_command("process_pending_grid_areas", stdout=output)
+
+        mock_run_generation.assert_called_once_with(pending_area)
+        self.assertIn("Found 1 pending MapArea(s).", output.getvalue())
+        self.assertIn(f"Processing MapArea id={pending_area.id}", output.getvalue())
+        self.assertNotIn(f"Processing MapArea id={completed_area.id}", output.getvalue())
+
+    @patch(
+        "maps.management.commands.process_pending_grid_areas."
+        "run_grid_generation_for_area"
+    )
+    def test_command_dry_run_does_not_process(self, mock_run_generation):
+        pending_area = self.create_area("Pending Area")
+        output = StringIO()
+
+        call_command("process_pending_grid_areas", "--dry-run", stdout=output)
+
+        mock_run_generation.assert_not_called()
+        self.assertIn("Found 1 pending MapArea(s).", output.getvalue())
+        self.assertIn("Dry run: no changes will be made.", output.getvalue())
+        self.assertIn(f"Target MapArea id={pending_area.id}", output.getvalue())
+
+    @patch(
+        "maps.management.commands.process_pending_grid_areas."
+        "run_grid_generation_for_area"
+    )
+    def test_command_limit_restricts_processed_count(self, mock_run_generation):
+        first_area = self.create_area("First Area")
+        second_area = self.create_area("Second Area")
+        mock_run_generation.side_effect = self.mark_completed
+        output = StringIO()
+
+        call_command("process_pending_grid_areas", "--limit", "1", stdout=output)
+
+        mock_run_generation.assert_called_once_with(first_area)
+        self.assertIn("Found 1 pending MapArea(s).", output.getvalue())
+        self.assertIn(f"Processing MapArea id={first_area.id}", output.getvalue())
+        self.assertNotIn(f"Processing MapArea id={second_area.id}", output.getvalue())
+
+    def test_command_limit_zero_raises_command_error(self):
+        with self.assertRaises(CommandError):
+            call_command("process_pending_grid_areas", "--limit", "0")
+
+    @patch(
+        "maps.management.commands.process_pending_grid_areas."
+        "run_grid_generation_for_area"
+    )
+    def test_command_continues_after_one_area_fails(self, mock_run_generation):
+        first_area = self.create_area("First Area")
+        second_area = self.create_area("Second Area")
+
+        def run_generation(area):
+            if area.id == first_area.id:
+                return self.mark_failed_and_raise(area)
+            return self.mark_completed(area)
+
+        mock_run_generation.side_effect = run_generation
+        output = StringIO()
+
+        call_command("process_pending_grid_areas", stdout=output)
+
+        self.assertEqual(mock_run_generation.call_count, 2)
+        self.assertEqual(mock_run_generation.call_args_list[0].args[0], first_area)
+        self.assertEqual(mock_run_generation.call_args_list[1].args[0], second_area)
+        self.assertIn(f"Failed MapArea id={first_area.id}", output.getvalue())
+        self.assertIn(f"Completed MapArea id={second_area.id}", output.getvalue())
+        self.assertIn(
+            "Done. processed=2 completed=1 fallback_completed=0 failed=1",
+            output.getvalue(),
+        )
 
 
 class MapDemoViewTests(TestCase):
@@ -1571,6 +1860,12 @@ class MapAreaCreateViewTests(TestCase):
         self.assertEqual(response.data["grid_size_meters"], 500)
         self.assertEqual(response.data["region_feature_level"], 0)
         self.assertEqual(response.data["initial_score_mode"], "manual")
+        self.assertEqual(response.data["grid_generation_status"], "completed")
+        self.assertEqual(response.data["grid_generation_status_display"], "作成完了")
+        self.assertIsNotNone(response.data["grid_generation_started_at"])
+        self.assertIsNotNone(response.data["grid_generation_finished_at"])
+        self.assertEqual(response.data["grid_generation_error_message"], "")
+        self.assertEqual(response.data["grid_generation_attempt_count"], 1)
         self.assertEqual(response.data["source"], "manual")
         self.assertEqual(response.data["created_by"], self.user.id)
         self.assertIn("created_at", response.data)
@@ -1579,6 +1874,29 @@ class MapAreaCreateViewTests(TestCase):
         self.assertEqual(area.region_feature_level, 0)
         self.assertEqual(area.initial_score_mode, MapArea.InitialScoreMode.MANUAL)
         self.assertEqual(GridCell.objects.filter(area=area).count(), 48)
+
+    def test_grid_generation_status_input_is_ignored_on_create(self):
+        self.client.force_authenticate(user=self.user)
+        payload = {
+            **self.center_payload(),
+            "grid_generation_status": "failed",
+            "grid_generation_error_message": "client supplied error",
+            "grid_generation_attempt_count": 9,
+        }
+
+        response = self.client.post(self.url, payload, format="json")
+        area = MapArea.objects.get(id=response.data["id"])
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["grid_generation_status"], "completed")
+        self.assertEqual(response.data["grid_generation_error_message"], "")
+        self.assertEqual(response.data["grid_generation_attempt_count"], 1)
+        self.assertEqual(
+            area.grid_generation_status,
+            MapArea.GridGenerationStatus.COMPLETED,
+        )
+        self.assertEqual(area.grid_generation_error_message, "")
+        self.assertEqual(area.grid_generation_attempt_count, 1)
 
     def test_authenticated_user_can_create_center_based_map_area(self):
         self.client.force_authenticate(user=self.user)
@@ -1622,7 +1940,7 @@ class MapAreaCreateViewTests(TestCase):
         self.assertEqual(grids.exclude(initial_score=3).count(), 0)
         self.assertEqual(grids.exclude(calculated_score=3).count(), 0)
 
-    @patch("maps.views.build_feature_summaries_for_map_area_from_overpass")
+    @patch("maps.services.build_feature_summaries_for_map_area_from_overpass")
     def test_create_map_area_with_manual_initial_score_mode(self, mock_overpass):
         self.client.force_authenticate(user=self.user)
         payload = {
@@ -1642,337 +1960,44 @@ class MapAreaCreateViewTests(TestCase):
         self.assertEqual(grids.exclude(initial_score=2).count(), 0)
         self.assertEqual(grids.exclude(calculated_score=2).count(), 0)
 
-    @patch("maps.views.build_feature_summaries_for_map_area_from_overpass")
-    def test_create_map_area_with_auto_initial_score_mode_uses_overpass_summary(
+    @patch("maps.views.run_grid_generation_for_area")
+    def test_create_map_area_with_auto_initial_score_mode_returns_pending_without_grid_cells(
         self,
-        mock_overpass,
+        mock_run_generation,
     ):
         self.client.force_authenticate(user=self.user)
-        feature_summary = {
-            "building_count": 20,
-            "road_count": 10,
-            "has_park": True,
-            "has_river": True,
-            "is_coastal": True,
-            "water_coverage_ratio": 0.1,
-            "park_coverage_ratio": 0.3,
-            "river_coverage_ratio": 0.2,
-            "surface_railway_count": 1,
-            "railway_station_count": 1,
-        }
-        second_feature_summary = {
-            "road_count": 5,
-            "forest_coverage_ratio": 0.5,
-            "underground_railway_count": 1,
-            "unknown_station_count": 1,
-            "motorway_count": 1,
-        }
-        expected_score = calculate_initial_score_from_feature_summary(
-            feature_summary,
-            grid_size_meters=self.valid_payload["grid_size_meters"],
-        )
-        second_expected_score = calculate_initial_score_from_feature_summary(
-            second_feature_summary,
-            grid_size_meters=self.valid_payload["grid_size_meters"],
-        )
-        expected_scores = [expected_score, second_expected_score]
-        mock_overpass.return_value = {
-            (0, 0): feature_summary,
-            (1, 0): second_feature_summary,
-        }
         payload = {
             **self.center_payload(),
             "region_feature_level": 2,
             "initial_score_mode": "auto",
         }
 
-        with self.assertLogs("maps.views", level="INFO") as logs:
-            response = self.client.post(self.url, payload, format="json")
+        response = self.client.post(self.url, payload, format="json")
         area = MapArea.objects.get(id=response.data["id"])
-        auto_grid = GridCell.objects.get(area=area, row_index=0, col_index=0)
-        fallback_grid = GridCell.objects.get(area=area, row_index=0, col_index=1)
-        call_args = mock_overpass.call_args
-        log_output = "\n".join(logs.output)
+        grids = GridCell.objects.filter(area=area)
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertEqual(response.data["initial_score_mode"], "auto")
+        self.assertEqual(response.data["grid_generation_status"], "pending")
+        self.assertEqual(response.data["grid_generation_status_display"], "作成待ち")
+        self.assertIsNone(response.data["grid_generation_started_at"])
+        self.assertIsNone(response.data["grid_generation_finished_at"])
+        self.assertEqual(response.data["grid_generation_error_message"], "")
+        self.assertEqual(response.data["grid_generation_attempt_count"], 0)
         self.assertEqual(area.initial_score_mode, MapArea.InitialScoreMode.AUTO)
-        mock_overpass.assert_called_once()
-        self.assertEqual(call_args.args[0], area)
-        self.assertEqual(call_args.kwargs["rows"], 6)
-        self.assertEqual(call_args.kwargs["cols"], 8)
-        self.assertGreater(call_args.kwargs["lat_step"], 0)
-        self.assertGreater(call_args.kwargs["lng_step"], 0)
-        self.assertEqual(auto_grid.initial_score, expected_score)
-        self.assertEqual(auto_grid.calculated_score, expected_score)
-        self.assertEqual(fallback_grid.initial_score, 2)
-        self.assertEqual(fallback_grid.calculated_score, 2)
-        self.assertIn("Overpass auto initial score succeeded", log_output)
-        self.assertIn(f"area_id={area.id}", log_output)
-        self.assertIn(f"user_id={self.user.id}", log_output)
-        self.assertIn("initial_score_mode=auto", log_output)
-        self.assertIn("Overpass auto feature summary", log_output)
-        self.assertIn("summary_count=2", log_output)
-        self.assertIn("building_cells=1", log_output)
-        self.assertIn("road_cells=2", log_output)
-        self.assertIn("park_cells=1", log_output)
-        self.assertIn("river_cells=1", log_output)
-        self.assertIn("coastal_cells=1", log_output)
-        self.assertIn("water_cells=1", log_output)
-        self.assertIn("forest_cells=1", log_output)
-        self.assertIn(f"score_min={min(expected_scores):.2f}", log_output)
-        self.assertIn(f"score_max={max(expected_scores):.2f}", log_output)
-        self.assertIn(
-            f"score_avg={sum(expected_scores) / len(expected_scores):.2f}",
-            log_output,
+        self.assertEqual(
+            area.grid_generation_status,
+            MapArea.GridGenerationStatus.PENDING,
         )
-        self.assertIn("Overpass auto score breakdown summary", log_output)
-        self.assertIn("base_score_avg=", log_output)
-        self.assertIn("base_score_max=", log_output)
-        self.assertIn("diversity_bonus_avg=", log_output)
-        self.assertIn("diversity_bonus_max=", log_output)
-        self.assertIn("context_bonus_avg=", log_output)
-        self.assertIn("context_bonus_max=", log_output)
-        self.assertIn("penalty_avg=", log_output)
-        self.assertIn("penalty_max=", log_output)
-        self.assertIn("raw_score_avg=", log_output)
-        self.assertIn("raw_score_max=", log_output)
-        self.assertIn("clamped_score_avg=", log_output)
-        self.assertIn("clamped_score_max=", log_output)
-        self.assertIn(
-            f"max_score_cells={sum(score >= 3.0 for score in expected_scores)}",
-            log_output,
-        )
-        self.assertIn("building_base_cells=1", log_output)
-        self.assertIn("road_base_cells=0", log_output)
-        self.assertIn("road_scored_cells=0", log_output)
-        self.assertIn("park_context_cells=1", log_output)
-        self.assertIn("river_context_cells=1", log_output)
-        self.assertIn("forest_context_cells=0", log_output)
-        self.assertIn("coastal_context_cells=1", log_output)
-        self.assertIn("water_penalty_cells=0", log_output)
-        self.assertIn("unreachable_water_penalty_cells=0", log_output)
-        self.assertIn("waterfront_context_cells=1", log_output)
-        self.assertIn("forest_penalty_cells=0", log_output)
-        self.assertIn("empty_cell_penalty_cells=0", log_output)
-        self.assertIn("surface_railway_context_cells=1", log_output)
-        self.assertIn("surface_railway_context_bonus_avg=", log_output)
-        self.assertIn("surface_railway_context_bonus_max=", log_output)
-        self.assertIn("surface_station_context_cells=1", log_output)
-        self.assertIn("surface_station_context_bonus_avg=", log_output)
-        self.assertIn("surface_station_context_bonus_max=", log_output)
-        self.assertIn("subway_station_context_cells=0", log_output)
-        self.assertIn("subway_station_context_bonus_avg=", log_output)
-        self.assertIn("subway_station_context_bonus_max=", log_output)
-        self.assertIn("public_transport_station_context_cells=0", log_output)
-        self.assertIn("public_transport_station_context_bonus_avg=", log_output)
-        self.assertIn("public_transport_station_context_bonus_max=", log_output)
-        self.assertIn("station_count_avg=0.50", log_output)
-        self.assertIn("station_count_max=1.00", log_output)
-        self.assertIn("station_density_cluster_count_avg=", log_output)
-        self.assertIn("station_density_cluster_count_max=", log_output)
-        self.assertIn("dense_station_density_cluster_count_max=", log_output)
-        self.assertIn("dense_station_cluster_context_cells=0", log_output)
-        self.assertIn("major_station_cluster_context_cells=0", log_output)
-        self.assertIn("station_density_bonus_avg=", log_output)
-        self.assertIn("station_density_bonus_max=", log_output)
-        self.assertIn("landmark_context_cells=0", log_output)
-        self.assertIn("landmark_context_bonus_avg=", log_output)
-        self.assertIn("landmark_context_bonus_max=", log_output)
-        self.assertIn("castle_proximity_context_cells=0", log_output)
-        self.assertIn("castle_near_context_cells=0", log_output)
-        self.assertIn("castle_mid_context_cells=0", log_output)
-        self.assertIn("castle_far_context_cells=0", log_output)
-        self.assertIn("castle_proximity_bonus_avg=", log_output)
-        self.assertIn("castle_proximity_bonus_max=", log_output)
-        self.assertIn("castle_proximity_skipped_castle_cells=0", log_output)
-        self.assertIn("station_proximity_context_cells=0", log_output)
-        self.assertIn("station_proximity_near_context_cells=0", log_output)
-        self.assertIn("station_proximity_mid_context_cells=0", log_output)
-        self.assertIn("station_proximity_bonus_avg=", log_output)
-        self.assertIn("station_proximity_bonus_max=", log_output)
-        self.assertIn("park_waterfront_combo_context_cells=", log_output)
-        self.assertIn("park_waterfront_combo_bonus_avg=", log_output)
-        self.assertIn("park_waterfront_combo_bonus_max=", log_output)
-        self.assertIn("high_context_3_context_cells=", log_output)
-        self.assertIn("high_context_4_context_cells=", log_output)
-        self.assertIn("high_context_5_context_cells=", log_output)
-        self.assertIn("high_context_bonus_avg=", log_output)
-        self.assertIn("high_context_bonus_max=", log_output)
-        self.assertIn("motorway_context_cells=1", log_output)
-        self.assertIn("motorway_context_bonus_avg=", log_output)
-        self.assertIn("motorway_context_bonus_max=", log_output)
-        self.assertIn("trunk_context_cells=0", log_output)
-        self.assertIn("trunk_context_bonus_avg=", log_output)
-        self.assertIn("trunk_context_bonus_max=", log_output)
-        self.assertIn("Overpass auto context candidate summary", log_output)
-        self.assertIn("park_waterfront_combo_cells=", log_output)
-        self.assertIn("high_context_3_cells=", log_output)
-        self.assertIn("high_context_5_cells=", log_output)
-        self.assertIn("context_candidate_count_avg=", log_output)
-        self.assertIn("context_candidate_count_max=", log_output)
-        self.assertIn("station_proximity_features=0", log_output)
-        self.assertIn("station_proximity_near_cells=0", log_output)
-        self.assertIn("station_proximity_mid_cells=0", log_output)
-        self.assertIn("station_proximity_cells=0", log_output)
-        self.assertIn("station_proximity_station_cells=0", log_output)
-        self.assertIn("station_proximity_non_station_cells=0", log_output)
-        self.assertIn("station_proximity_min_distance_m=0.00", log_output)
-        self.assertIn("station_proximity_avg_distance_m=0.00", log_output)
-        self.assertIn("station_proximity_max_distance_m=0.00", log_output)
-        self.assertIn("Overpass auto scored river summary", log_output)
-        self.assertIn("scored_river_cells=1", log_output)
-        self.assertIn("river_coverage_cells=1", log_output)
-        self.assertIn("river_coverage_avg=0.2000", log_output)
-        self.assertIn("river_coverage_max=0.2000", log_output)
-        self.assertIn("Overpass auto scored natural coverage summary", log_output)
-        self.assertIn("park_cells=1", log_output)
-        self.assertIn("park_coverage_cells=1", log_output)
-        self.assertIn("park_coverage_avg=0.3000", log_output)
-        self.assertIn("park_coverage_max=0.3000", log_output)
-        self.assertIn("water_coverage_cells=1", log_output)
-        self.assertIn("water_coverage_avg=0.1000", log_output)
-        self.assertIn("water_coverage_max=0.1000", log_output)
-        self.assertIn("forest_coverage_cells=1", log_output)
-        self.assertIn("scored_forest_cells=1", log_output)
-        self.assertIn("forest_coverage_avg=0.5000", log_output)
-        self.assertIn("forest_coverage_max=0.5000", log_output)
-        self.assertIn("Overpass auto waterway summary", log_output)
-        self.assertIn("waterway_river_features=0", log_output)
-        self.assertIn("waterway_stream_features=0", log_output)
-        self.assertIn("waterway_canal_features=0", log_output)
-        self.assertIn("waterway_unknown_features=0", log_output)
-        self.assertIn("waterway_river_cells=0", log_output)
-        self.assertIn("waterway_stream_cells=0", log_output)
-        self.assertIn("waterway_canal_cells=0", log_output)
-        self.assertIn("waterway_unknown_cells=0", log_output)
-        self.assertIn("Overpass auto railway summary", log_output)
-        self.assertIn("railway_features=0", log_output)
-        self.assertIn("surface_railway_features=0", log_output)
-        self.assertIn("underground_railway_features=0", log_output)
-        self.assertIn("unknown_railway_features=0", log_output)
-        self.assertIn("railway_cells=0", log_output)
-        self.assertIn("surface_railway_cells=0", log_output)
-        self.assertIn("underground_railway_cells=0", log_output)
-        self.assertIn("unknown_railway_cells=0", log_output)
-        self.assertIn("Overpass auto station summary", log_output)
-        self.assertIn("station_features=0", log_output)
-        self.assertIn("railway_station_features=0", log_output)
-        self.assertIn("railway_halt_features=0", log_output)
-        self.assertIn("subway_station_features=0", log_output)
-        self.assertIn("bus_station_features=0", log_output)
-        self.assertIn("public_transport_station_features=0", log_output)
-        self.assertIn("unknown_station_features=0", log_output)
-        self.assertIn("station_cells=0", log_output)
-        self.assertIn("railway_station_cells=0", log_output)
-        self.assertIn("railway_halt_cells=0", log_output)
-        self.assertIn("subway_station_cells=0", log_output)
-        self.assertIn("bus_station_cells=0", log_output)
-        self.assertIn("public_transport_station_cells=0", log_output)
-        self.assertIn("station_cluster_cells=0", log_output)
-        self.assertIn("dense_station_cluster_cells=0", log_output)
-        self.assertIn("major_station_cluster_cells=0", log_output)
-        self.assertIn("station_cluster_count_avg=0.00", log_output)
-        self.assertIn("station_cluster_count_max=0", log_output)
-        self.assertIn("dense_station_cluster_count_max=0", log_output)
-        self.assertIn("major_station_cluster_count_max=0", log_output)
-        self.assertIn("unknown_station_cells=0", log_output)
-        self.assertIn("Overpass auto landmark summary", log_output)
-        self.assertIn("landmark_features=0", log_output)
-        self.assertIn("landmark_cells=0", log_output)
-        self.assertIn("tourism_attraction_features=0", log_output)
-        self.assertIn("tourism_attraction_cells=0", log_output)
-        self.assertIn("tourism_museum_features=0", log_output)
-        self.assertIn("tourism_museum_cells=0", log_output)
-        self.assertIn("tourism_gallery_features=0", log_output)
-        self.assertIn("tourism_gallery_cells=0", log_output)
-        self.assertIn("tourism_viewpoint_features=0", log_output)
-        self.assertIn("tourism_viewpoint_cells=0", log_output)
-        self.assertIn("historic_castle_features=0", log_output)
-        self.assertIn("historic_castle_cells=0", log_output)
-        self.assertIn("historic_monument_features=0", log_output)
-        self.assertIn("historic_monument_cells=0", log_output)
-        self.assertIn("historic_memorial_features=0", log_output)
-        self.assertIn("historic_memorial_cells=0", log_output)
-        self.assertIn("historic_ruins_features=0", log_output)
-        self.assertIn("historic_ruins_cells=0", log_output)
-        self.assertIn("historic_archaeological_site_features=0", log_output)
-        self.assertIn("historic_archaeological_site_cells=0", log_output)
-        self.assertIn("unknown_landmark_features=0", log_output)
-        self.assertIn("unknown_landmark_cells=0", log_output)
-        self.assertIn("Overpass auto castle proximity summary", log_output)
-        self.assertIn("castle_features=0", log_output)
-        self.assertIn("castle_near_cells=0", log_output)
-        self.assertIn("castle_mid_cells=0", log_output)
-        self.assertIn("castle_far_cells=0", log_output)
-        self.assertIn("castle_proximity_cells=0", log_output)
-        self.assertIn("castle_min_distance_m=0.00", log_output)
-        self.assertIn("castle_avg_distance_m=0.00", log_output)
-        self.assertIn("castle_max_distance_m=0.00", log_output)
-        self.assertIn("Overpass auto expressway summary", log_output)
-        self.assertIn("expressway_features=0", log_output)
-        self.assertIn("motorway_features=0", log_output)
-        self.assertIn("motorway_link_features=0", log_output)
-        self.assertIn("trunk_features=0", log_output)
-        self.assertIn("trunk_link_features=0", log_output)
-        self.assertIn("unknown_expressway_features=0", log_output)
-        self.assertIn("expressway_cells=0", log_output)
-        self.assertIn("motorway_cells=0", log_output)
-        self.assertIn("motorway_link_cells=0", log_output)
-        self.assertIn("trunk_cells=0", log_output)
-        self.assertIn("trunk_link_cells=0", log_output)
-        self.assertIn("unknown_expressway_cells=0", log_output)
-        self.assertIn("Overpass auto expressway bounds summary", log_output)
-        self.assertIn("expressway_avg_overlap=0.0000", log_output)
-        self.assertIn("expressway_max_overlap=0.0000", log_output)
-        self.assertIn("expressway_large_bounds_features=0", log_output)
-        self.assertIn("expressway_large_bounds_cells=0", log_output)
-        self.assertIn("motorway_avg_overlap=0.0000", log_output)
-        self.assertIn("motorway_max_overlap=0.0000", log_output)
-        self.assertIn("motorway_link_avg_overlap=0.0000", log_output)
-        self.assertIn("motorway_link_max_overlap=0.0000", log_output)
-        self.assertIn("trunk_avg_overlap=0.0000", log_output)
-        self.assertIn("trunk_max_overlap=0.0000", log_output)
-        self.assertIn("trunk_link_avg_overlap=0.0000", log_output)
-        self.assertIn("trunk_link_max_overlap=0.0000", log_output)
-        self.assertIn("unknown_expressway_avg_overlap=0.0000", log_output)
-        self.assertIn("unknown_expressway_max_overlap=0.0000", log_output)
-        self.assertIn("Overpass auto effective expressway summary", log_output)
-        self.assertIn("effective_expressway_features=0", log_output)
-        self.assertIn("effective_expressway_cells=0", log_output)
-        self.assertIn("effective_expressway_avg_overlap=0.0000", log_output)
-        self.assertIn("effective_expressway_max_overlap=0.0000", log_output)
-        self.assertIn("effective_motorway_features=0", log_output)
-        self.assertIn("effective_motorway_cells=0", log_output)
-        self.assertIn("effective_motorway_avg_overlap=0.0000", log_output)
-        self.assertIn("effective_trunk_features=0", log_output)
-        self.assertIn("effective_trunk_cells=0", log_output)
-        self.assertIn("effective_trunk_avg_overlap=0.0000", log_output)
-        self.assertIn("filtered_expressway_large_bounds_features=0", log_output)
-        self.assertIn("filtered_expressway_large_bounds_cells=0", log_output)
-        self.assertIn("Overpass auto waterway river bounds summary", log_output)
-        self.assertIn("waterway_river_bounds_features=0", log_output)
-        self.assertIn("waterway_river_bounds_intersecting_map_features=0", log_output)
-        self.assertIn("waterway_river_bounds_covering_map_features=0", log_output)
-        self.assertIn("waterway_river_bounds_large_area_features=0", log_output)
-        self.assertIn("waterway_river_bounds_filtered_features=0", log_output)
-        self.assertIn("waterway_river_bounds_filtered_cells=0", log_output)
-        self.assertIn(
-            "waterway_river_bounds_max_area_ratio_to_map=0.0000",
-            log_output,
-        )
-        self.assertIn(
-            "waterway_river_bounds_max_height_ratio_to_map=0.0000",
-            log_output,
-        )
-        self.assertIn(
-            "waterway_river_bounds_max_width_ratio_to_map=0.0000",
-            log_output,
-        )
-        self.assertNotIn("using fallback", log_output)
+        self.assertIsNone(area.grid_generation_started_at)
+        self.assertIsNone(area.grid_generation_finished_at)
+        self.assertEqual(area.grid_generation_error_message, "")
+        self.assertEqual(area.grid_generation_attempt_count, 0)
+        mock_run_generation.assert_not_called()
+        self.assertEqual(grids.count(), 0)
 
-    @patch("maps.views.build_feature_summaries_for_map_area_from_overpass")
-    def test_create_map_area_with_auto_initial_score_mode_falls_back_when_overpass_fails(
+    @patch("maps.services.build_feature_summaries_for_map_area_from_overpass")
+    def test_create_map_area_with_auto_initial_score_mode_does_not_call_overpass_immediately(
         self,
         mock_overpass,
     ):
@@ -1984,23 +2009,56 @@ class MapAreaCreateViewTests(TestCase):
             "initial_score_mode": "auto",
         }
 
-        with self.assertLogs("maps.views", level="WARNING") as logs:
-            response = self.client.post(self.url, payload, format="json")
+        response = self.client.post(self.url, payload, format="json")
         area = MapArea.objects.get(id=response.data["id"])
-        grids = GridCell.objects.filter(area=area)
-        log_output = "\n".join(logs.output)
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
-        self.assertEqual(response.data["initial_score_mode"], "auto")
-        self.assertEqual(area.initial_score_mode, MapArea.InitialScoreMode.AUTO)
+        self.assertEqual(response.data["grid_generation_status"], "pending")
+        self.assertEqual(
+            area.grid_generation_status,
+            MapArea.GridGenerationStatus.PENDING,
+        )
+        mock_overpass.assert_not_called()
+        self.assertEqual(GridCell.objects.filter(area=area).count(), 0)
+
+    @patch("maps.services.build_feature_summaries_for_map_area_from_overpass")
+    def test_pending_auto_map_area_can_be_processed_by_command(self, mock_overpass):
+        self.client.force_authenticate(user=self.user)
+        mock_overpass.return_value = {
+            (0, 0): {"building_count": 20},
+            (1, 0): {"has_park": True},
+        }
+        payload = {
+            **self.center_payload(),
+            "region_feature_level": 2,
+            "initial_score_mode": "auto",
+        }
+        response = self.client.post(self.url, payload, format="json")
+        area = MapArea.objects.get(id=response.data["id"])
+        output = StringIO()
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["grid_generation_status"], "pending")
+        self.assertEqual(
+            area.grid_generation_status,
+            MapArea.GridGenerationStatus.PENDING,
+        )
+
+        call_command("process_pending_grid_areas", "--limit", "1", stdout=output)
+        area.refresh_from_db()
+
+        self.assertEqual(
+            area.grid_generation_status,
+            MapArea.GridGenerationStatus.COMPLETED,
+        )
+        self.assertEqual(area.grid_generation_error_message, "")
+        self.assertEqual(area.grid_generation_attempt_count, 1)
+        self.assertGreater(GridCell.objects.filter(area=area).count(), 0)
         mock_overpass.assert_called_once()
-        self.assertEqual(grids.count(), 48)
-        self.assertEqual(grids.exclude(initial_score=2).count(), 0)
-        self.assertEqual(grids.exclude(calculated_score=2).count(), 0)
-        self.assertIn("Overpass auto initial score failed; using fallback", log_output)
-        self.assertIn(f"area_id={area.id}", log_output)
-        self.assertIn(f"user_id={self.user.id}", log_output)
-        self.assertIn("Overpass取得に失敗しました。", log_output)
+        self.assertIn(
+            "Done. processed=1 completed=1 fallback_completed=0 failed=0",
+            output.getvalue(),
+        )
 
     def test_create_map_area_without_region_feature_level_uses_zero(self):
         self.client.force_authenticate(user=self.user)
@@ -2252,7 +2310,7 @@ class MapAreaCreateViewTests(TestCase):
         self.client.force_authenticate(user=self.user)
 
         with patch(
-            "maps.views.generate_grid_cells_for_area",
+            "maps.services.generate_grid_cells_for_area",
             side_effect=ValueError("GridCell 生成に失敗しました。"),
         ):
             response = self.client.post(self.url, self.valid_payload, format="json")
@@ -2365,11 +2423,69 @@ class MapAreaListViewTests(TestCase):
         self.assertEqual(response.data["areas"][0]["created_by"], self.user.id)
         self.assertEqual(response.data["areas"][0]["created_by_username"], self.user.username)
         self.assertEqual(response.data["areas"][0]["initial_score_mode"], "manual")
+        self.assertEqual(response.data["areas"][0]["grid_generation_status"], "completed")
+        self.assertEqual(response.data["areas"][0]["grid_generation_status_display"], "作成完了")
+        self.assertIsNone(response.data["areas"][0]["grid_generation_started_at"])
+        self.assertIsNone(response.data["areas"][0]["grid_generation_finished_at"])
+        self.assertEqual(response.data["areas"][0]["grid_generation_error_message"], "")
+        self.assertEqual(response.data["areas"][0]["grid_generation_attempt_count"], 0)
         self.assertEqual(response.data["areas"][0]["visibility"], "private")
         self.assertEqual(response.data["areas"][0]["display_type"], "メモグリッド")
         self.assertIs(response.data["areas"][0]["is_owner"], True)
         self.assertIn("created_at", response.data["areas"][0])
         self.assertIn("updated_at", response.data["areas"][0])
+
+    def test_list_response_includes_grid_generation_status_for_badges(self):
+        statuses = [
+            (MapArea.GridGenerationStatus.PENDING, "Pending Area", "作成待ち"),
+            (MapArea.GridGenerationStatus.RUNNING, "Running Area", "作成中"),
+            (MapArea.GridGenerationStatus.COMPLETED, "Completed Area", "作成完了"),
+            (
+                MapArea.GridGenerationStatus.FALLBACK_COMPLETED,
+                "Fallback Area",
+                "標準値で作成完了",
+            ),
+            (MapArea.GridGenerationStatus.FAILED, "Failed Area", "作成失敗"),
+        ]
+        for generation_status, name, _display in statuses:
+            MapArea.objects.create(
+                name=name,
+                north=35.7,
+                south=35.6,
+                east=139.8,
+                west=139.7,
+                grid_size_meters=500,
+                grid_generation_status=generation_status,
+                created_by=self.user,
+            )
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.get(self.url)
+        areas_by_name = {area["name"]: area for area in response.data["areas"]}
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        for generation_status, name, display in statuses:
+            self.assertEqual(
+                areas_by_name[name]["grid_generation_status"],
+                generation_status,
+            )
+            self.assertEqual(
+                areas_by_name[name]["grid_generation_status_display"],
+                display,
+            )
+
+    def test_grid_list_javascript_renders_grid_generation_status_badge(self):
+        grid_list_js_path = finders.find("maps/js/grid-list.js")
+
+        with open(grid_list_js_path, encoding="utf-8") as grid_list_js:
+            script = grid_list_js.read()
+
+        self.assertIn("createGridGenerationStatus", script)
+        self.assertIn("status-badge--${statusValue}", script)
+        self.assertIn("自動設定の処理待ちです。", script)
+        self.assertIn("地図データを取得中です。", script)
+        self.assertIn("自動設定に失敗したため標準値で作成しました。", script)
+        self.assertIn("メモグリッドの作成に失敗しました。", script)
 
     def test_shared_map_area_is_included_in_list(self):
         owner = get_user_model().objects.create_user(
@@ -2560,6 +2676,129 @@ class MapAreaListViewTests(TestCase):
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
 
+@override_settings(
+    STORAGES={
+        "default": {
+            "BACKEND": "django.core.files.storage.FileSystemStorage",
+        },
+        "staticfiles": {
+            "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
+        },
+    }
+)
+class MapAreaPageDetailViewTests(TestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            username="testuser",
+            password="test-password",
+        )
+        self.area = MapArea.objects.create(
+            name="HTML Detail Area",
+            description="html detail",
+            north=35.7,
+            south=35.6,
+            east=139.8,
+            west=139.7,
+            grid_size_meters=500,
+            created_by=self.user,
+        )
+        self.url = reverse(
+            "map-area-page-detail",
+            kwargs={"area_id": self.area.id},
+        )
+
+    def login(self):
+        self.client.force_login(self.user)
+
+    def set_grid_generation_status(self, generation_status):
+        self.area.grid_generation_status = generation_status
+        self.area.save(update_fields=["grid_generation_status"])
+
+    def test_pending_area_shows_creation_message_and_hides_grid_tools(self):
+        self.set_grid_generation_status(MapArea.GridGenerationStatus.PENDING)
+        self.login()
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertContains(response, "HTML Detail Area")
+        self.assertContains(response, "メモグリッドを作成中です")
+        self.assertContains(response, "自動設定の処理待ちです")
+        self.assertContains(response, "作成待ち")
+        self.assertContains(response, "再読み込み")
+        self.assertNotContains(response, "地図プレビュー")
+        self.assertNotContains(response, "選択中のマスを採点")
+        self.assertNotContains(response, "共有と削除")
+        self.assertNotContains(response, "grid-detail.js")
+        self.assertIs(response.context["is_grid_generation_waiting"], True)
+        self.assertIs(response.context["show_grid_detail_tools"], False)
+
+    def test_running_area_shows_creation_message_and_hides_grid_tools(self):
+        self.set_grid_generation_status(MapArea.GridGenerationStatus.RUNNING)
+        self.login()
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertContains(response, "メモグリッドを作成中です")
+        self.assertContains(response, "地図データを取得してGridCellを生成しています")
+        self.assertContains(response, "作成中")
+        self.assertContains(response, "再読み込み")
+        self.assertNotContains(response, "地図プレビュー")
+        self.assertNotContains(response, "選択中のマスを採点")
+        self.assertIs(response.context["is_grid_generation_waiting"], True)
+        self.assertIs(response.context["show_grid_detail_tools"], False)
+
+    def test_failed_area_shows_failure_message_and_hides_grid_tools(self):
+        self.set_grid_generation_status(MapArea.GridGenerationStatus.FAILED)
+        self.login()
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertContains(response, "メモグリッドの作成に失敗しました")
+        self.assertContains(response, "作成失敗")
+        self.assertContains(response, "再読み込み")
+        self.assertNotContains(response, "地図プレビュー")
+        self.assertNotContains(response, "選択中のマスを採点")
+        self.assertNotContains(response, "grid-detail.js")
+        self.assertIs(response.context["is_grid_generation_failed"], True)
+        self.assertIs(response.context["show_grid_detail_tools"], False)
+
+    def test_fallback_completed_area_shows_notice_and_keeps_grid_tools(self):
+        self.set_grid_generation_status(
+            MapArea.GridGenerationStatus.FALLBACK_COMPLETED
+        )
+        GridCell.objects.create(
+            area=self.area,
+            row_index=0,
+            col_index=0,
+            north=35.7,
+            south=35.69,
+            east=139.8,
+            west=139.79,
+            initial_score=2,
+            calculated_score=2,
+        )
+        self.login()
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertContains(
+            response,
+            "自動設定に失敗したため、標準値でメモグリッドを作成しました。",
+        )
+        self.assertContains(response, "地図プレビュー")
+        self.assertContains(response, "選択中のマスを採点")
+        self.assertContains(response, "grid-detail.js")
+        self.assertIs(
+            response.context["is_grid_generation_fallback_completed"],
+            True,
+        )
+        self.assertIs(response.context["show_grid_detail_tools"], True)
+
+
 class MapAreaDetailViewTests(TestCase):
     def setUp(self):
         self.user = get_user_model().objects.create_user(
@@ -2595,6 +2834,12 @@ class MapAreaDetailViewTests(TestCase):
         self.assertEqual(response.data["west"], 139.7)
         self.assertEqual(response.data["grid_size_meters"], 500)
         self.assertEqual(response.data["initial_score_mode"], "manual")
+        self.assertEqual(response.data["grid_generation_status"], "completed")
+        self.assertEqual(response.data["grid_generation_status_display"], "作成完了")
+        self.assertIsNone(response.data["grid_generation_started_at"])
+        self.assertIsNone(response.data["grid_generation_finished_at"])
+        self.assertEqual(response.data["grid_generation_error_message"], "")
+        self.assertEqual(response.data["grid_generation_attempt_count"], 0)
         self.assertEqual(response.data["source"], "manual")
         self.assertEqual(response.data["created_by"], self.user.id)
         self.assertIn("created_at", response.data)

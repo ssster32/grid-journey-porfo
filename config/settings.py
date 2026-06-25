@@ -169,5 +169,10 @@ LOGGING = {
             "level": "INFO",
             "propagate": False,
         },
+        "maps.services": {
+            "handlers": ["console"],
+            "level": "INFO",
+            "propagate": False,
+        },
     },
 }

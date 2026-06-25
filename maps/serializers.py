@@ -10,6 +10,10 @@ class MapAreaSerializer(serializers.ModelSerializer):
     south = serializers.FloatField(read_only=True)
     east = serializers.FloatField(read_only=True)
     west = serializers.FloatField(read_only=True)
+    grid_generation_status_display = serializers.CharField(
+        source="get_grid_generation_status_display",
+        read_only=True,
+    )
     region_feature_level = serializers.IntegerField(
         min_value=0,
         max_value=3,
@@ -41,6 +45,12 @@ class MapAreaSerializer(serializers.ModelSerializer):
             "grid_size_meters",
             "region_feature_level",
             "initial_score_mode",
+            "grid_generation_status",
+            "grid_generation_status_display",
+            "grid_generation_started_at",
+            "grid_generation_finished_at",
+            "grid_generation_error_message",
+            "grid_generation_attempt_count",
             "rows",
             "cols",
             "source",
@@ -51,6 +61,12 @@ class MapAreaSerializer(serializers.ModelSerializer):
         read_only_fields = [
             "id",
             "created_by",
+            "grid_generation_status",
+            "grid_generation_status_display",
+            "grid_generation_started_at",
+            "grid_generation_finished_at",
+            "grid_generation_error_message",
+            "grid_generation_attempt_count",
             "created_at",
             "updated_at",
         ]

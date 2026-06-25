@@ -1,399 +1,380 @@
-# TASK: API_SPEC.md に現在のAPI仕様を反映・更新する
+# TASK: 非同期化試験実装の現在仕様を memo.md と API_SPEC.md に整理する
 
 ## 目的
 
-提出前に、`API_SPEC.md` を現在の実装内容に合わせて更新する。
+メモグリッド自動設定作成の非同期化に向けた試験実装が進み、現在の仕様が大きく変わった。
 
-`README.md` は作品全体の説明として整理済みなので、`API_SPEC.md` では **API仕様・レスポンス項目・認証・権限制御・注意点** を中心に整理する。
+これまでの変更で、以下が実装済み。
 
-ただし提出直前のため、**API_SPEC.md の更新のみ** にする。
-コード・設定・画面実装・README・memo.md は変更しない。
+```text
+- MapArea に GridCell生成状態管理フィールドを追加
+- MapArea API レスポンスに grid_generation_status 系フィールドを read-only で追加
+- GridCell生成処理を run_grid_generation_for_area(area) に切り出し
+- run_grid_generation_for_area() 内で running / completed / fallback_completed / failed を更新
+- pending 状態の MapArea を処理する management command を追加
+- initial_score_mode=auto の MapArea 作成時は GridCell を即時生成せず pending で返却
+- manual 作成時は従来通り即時 GridCell 生成
+- 詳細画面で pending / running / failed / fallback_completed に応じた表示を追加
+- 一覧画面で GridCell生成状態バッジを表示
+```
+
+今回は、これらの現在仕様を `memo.md` と `API_SPEC.md` に整理して反映する。
+
+## 今回のタスク範囲
+
+実装する:
+
+```text
+- memo.md に非同期化試験実装の現在仕様を整理して追記・更新する
+- API_SPEC.md に auto 作成時 pending 返却、状態フィールド、management command による生成フローを整理して追記・更新する
+- 既存記述と矛盾している箇所があれば修正する
+```
+
+実装しない:
+
+```text
+- Pythonコード変更
+- model変更
+- migration作成
+- serializer変更
+- views変更
+- JavaScript変更
+- CSS変更
+- テスト変更
+- Overpass処理変更
+- スコア計算変更
+- 2km制限変更
+```
 
 ## 対象ファイル
 
 変更対象:
 
+* `memo.md`
 * `API_SPEC.md`
 
-参考にしてよいファイル:
+確認対象:
 
-* `README.md`
-* `memo.md`
-* `maps/urls.py`
-* `maps/page_urls.py`
-* `maps/views.py`
-* `maps/serializers.py`
 * `maps/models.py`
+* `maps/serializers.py`
+* `maps/views.py`
 * `maps/services.py`
-* `maps/static/maps/js/grid-create.js`
-* `maps/static/maps/js/grid-detail.js`
-* `maps/static/maps/js/grid-detail-api.js`
+* `maps/management/commands/process_pending_grid_areas.py`
+* `maps/templates/maps/grid_detail.html`
 * `maps/static/maps/js/grid-list.js`
 
-## 更新方針
+今回は変更しない:
 
-* 既存の `API_SPEC.md` の構成を確認し、現在の実装に合わせて更新する
-* 古い仕様が残っている場合は、現在の仕様に合わせて修正する
-* API仕様書として読みやすいように、エンドポイントごとに整理する
-* 画面UIの詳細説明は書きすぎず、APIに関係する内容を中心にする
-* READMEと重複しすぎないようにする
-* 未実装の内容を実装済みとして書かない
-* 変更対象は `API_SPEC.md` のみ
+* Pythonコード
+* migration
+* JavaScript
+* CSS
+* README.md
+* tests
 
-## 反映したい主な内容
+## memo.md に整理する内容
 
-### 1. 認証方式
+既存の非同期化設計・負荷対策・現在仕様の記述に合わせて、以下を自然に追記・更新する。
 
-現在の仕様に合わせて整理する。
+### 1. 現在の作成フロー
 
-含めたい内容:
-
-* APIは認証が必要
-* 本サイト画面ではDjangoログイン + Session + CSRFを使う
-* API手動確認用として Token認証にも対応している
-* Basic認証も既存テスト上は利用可能
-* POST / DELETE ではCSRFが必要になる場面がある
-* 作成者本人または共有されたユーザーだけが対象メモグリッドにアクセスできる
-* 共有相手管理と削除は作成者のみ
-
-### 2. APIエンドポイント一覧
-
-`maps/urls.py` の現在の内容に合わせて整理する。
-
-代表例:
+以下を整理する。
 
 ```text
-POST /api-token-auth/
-GET  /api/maps/areas/
-POST /api/maps/areas/
-GET  /api/maps/areas/<area_id>/
-DELETE /api/maps/areas/<area_id>/
-GET  /api/maps/areas/<area_id>/shares/
-POST /api/maps/areas/<area_id>/shares/
-DELETE /api/maps/areas/<area_id>/shares/<share_id>/
-GET  /api/maps/areas/<area_id>/grids/
-POST /api/maps/grids/<grid_id>/ratings/
-POST /api/maps/grids/bulk-ratings/
+manual作成:
+MapArea作成
+→ run_grid_generation_for_area(area)
+→ GridCell即時生成
+→ grid_generation_status=completed
+→ レスポンス返却
+
+auto作成:
+MapArea作成
+→ GridCellは即時生成しない
+→ grid_generation_status=pending
+→ レスポンス返却
+→ process_pending_grid_areas で後からGridCell生成
+→ completed / fallback_completed / failed
 ```
 
-注意:
+### 2. 状態値の意味
 
-* 実装に存在しないエンドポイントは書かない
-* URL文字列・HTTP method・nameは変更しない
-* `areas/<area_id>/grids/` に `grid-cell-list` と `grid-cell-generate` の両方のnameがある場合でも、実際の利用仕様としてはGridCell取得APIとして整理する
-* ページURL `/maps/` などは、API仕様の主役ではないため、必要なら「画面URL」欄に簡単に書く程度にする
-
-### 3. MapArea 作成API
-
-`POST /api/maps/areas/` を現在の仕様に合わせる。
-
-現在の作成入力:
-
-* `name`
-* `description`
-* `center_lat`
-* `center_lng`
-* `grid_size_meters`
-* `rows`
-* `cols`
-* `initial_score_mode`
-* `region_feature_level`
-
-注意:
-
-* `source` は現在作成画面の主要入力欄から削除済み
-* APIとして残っている可能性がある場合は、現在のserializer仕様に合わせて「任意」または「内部的に残る項目」として整理する
-* 旧仕様の `north` / `south` / `east` / `west` 直接指定は現在の作成APIでは使わない
-* 中心座標方式を基本として書く
-* `rows` / `cols` で縦横マス数を指定する
-* 作成時にGridCellも生成される
-
-### 4. initial_score_mode / region_feature_level
-
-現在の仕様に合わせて明記する。
-
-含めたい内容:
+以下の状態を整理する。
 
 ```text
-initial_score_mode:
-- manual
-- auto
+pending:
+MapAreaは作成済みだが、GridCell生成はまだ開始されていない
 
-region_feature_level:
-- 0: 初期値
-- 1: ありふれた地域
-- 2: 普通の地域
-- 3: 特徴的な地域
+running:
+GridCell生成処理中
+
+completed:
+GridCell生成完了
+
+fallback_completed:
+自動設定に失敗したが、標準値でGridCell生成完了
+
+failed:
+GridCell生成失敗
+```
+
+### 3. MapAreaの状態管理フィールド
+
+以下のフィールドを記録する。
+
+```text
+grid_generation_status
+grid_generation_started_at
+grid_generation_finished_at
+grid_generation_error_message
+grid_generation_attempt_count
 ```
 
 補足:
 
-* 手動設定では `region_feature_level` が初期スコアとして使われる
-* 自動設定ではOSM/Overpassから特徴を取得し、自動初期スコアを計算する
-* 画面上では「自動設定」を選ぶと `initial_score_mode="auto"`、`region_feature_level=0` として送信する
-* 自動設定時の地域特徴レベル表示は画面では `-` と表示しているが、API値としては `region_feature_level` を持つ
-
-### 5. 自動設定時の注意・制限
-
-API_SPEC.md にも簡潔に反映する。
-
-含めたい内容:
-
-* 自動設定はOSM/Overpass API取得を伴う
-* 都市部や広範囲では処理が重くなりやすい
-* 画面側では自動設定時のみ、1辺が `2000m以上` の作成をAPI送信前に制限している
-* 手動設定ではこの画面側制限はかけていない
-* API側に同じ制限があるかどうかは、実装に合わせて正確に書く
-* READMEと同じく、都市部の自動設定は1辺1.5km以内が安定しやすい目安として書いてよい
-
-### 6. MapArea レスポンス
-
-現在のレスポンスに含まれる項目を整理する。
-
-含めたい候補:
-
-* `id`
-* `name`
-* `description`
-* `north`
-* `south`
-* `east`
-* `west`
-* `grid_size_meters`
-* `region_feature_level`
-* `initial_score_mode`
-* `source`
-* `created_by`
-* `created_at`
-* `updated_at`
-* 一覧用の追加情報がある場合:
-
-  * 作成者情報
-  * 共有メモグリッド判定
-  * `map_grid_rows`
-  * `map_grid_cols`
-
-実装に合わせて正確に書くこと。
-
-### 7. GridCell 一覧API
-
-`GET /api/maps/areas/<area_id>/grids/` を現在仕様に合わせる。
-
-レスポンスに含める項目候補:
-
-* `id`
-* `area`
-* `row_index`
-* `col_index`
-* `north`
-* `south`
-* `east`
-* `west`
-* `initial_score`
-* `auto_score_breakdown`
-* `average_user_score`
-* `rating_count`
-* `calculated_score`
-* `score_updated_at`
-* `current_user_has_rating`
-* `current_user_comment`
-* `created_at`
-* `updated_at`
-
-補足:
-
-* `calculated_score` が画面上の表示スコアとして使われる
-* `average_user_score` はユーザー採点だけの平均
-* `rating_count` はユーザー採点数
-* `current_user_has_rating` はログインユーザーがそのGridCellを採点済みかどうか
-* `current_user_comment` はログインユーザーのコメント表示に使う
-
-### 8. auto_score_breakdown
-
-現在の自動採点理由表示に合わせて整理する。
-
-含めたい内容:
-
-* 自動設定時に、GridCellごとの自動採点内訳として保存される
-* 詳細画面の「自動採点理由」に使う
-* 主な項目:
-
-  * `base_score`
-  * `diversity_bonus`
-  * `context_bonus`
-  * `penalty`
-  * `raw_score`
-  * `clamped_score`
-  * `grid_size_multiplier`
-  * `flags`
-  * `bonuses`
-  * `counts`
-* `grid_size_multiplier` はマスサイズ補正係数
-* 自動採点では最終的に0.0〜3.0へclampする
-* 自動設定でない場合や自動特徴がない場合は `null` になる可能性がある
-
-### 9. 表示スコア計算
-
-API_SPEC.md に現在の計算仕様を反映する。
-
 ```text
-calculated_score = (initial_score + 全ユーザー採点の合計) / (1 + rating_count)
+- status は API レスポンスにも read-only で返す
+- started_at / finished_at は生成開始・完了時刻
+- error_message は fallback / failed 時の短い内部エラー
+- attempt_count は生成処理の試行回数
+```
+
+### 4. management command
+
+以下を記録する。
+
+```bash
+python manage.py process_pending_grid_areas
+python manage.py process_pending_grid_areas --dry-run
+python manage.py process_pending_grid_areas --limit 1
 ```
 
 説明:
 
-* `initial_score` を最初の1票として扱う
-* ユーザー採点が増えるほど初期スコアの影響が自然に薄まる
-* `average_user_score` はユーザー採点だけの平均
-* `rating_count` はユーザー採点数
-* 採点がない場合は `calculated_score = initial_score`
+```text
+- pending の MapArea を created_at, id 順に取得
+- run_grid_generation_for_area(area) を呼ぶ
+- 1件失敗しても残りを続行
+- dry-run は対象表示のみ
+- limit は処理件数制限
+```
 
-### 10. 採点API
+### 5. 画面表示
 
-`POST /api/maps/grids/<grid_id>/ratings/`
+一覧画面:
 
-整理する内容:
+```text
+- GridCell生成状態バッジを表示
+- pending / running / completed / fallback_completed / failed を区別
+- pending / running / fallback_completed / failed は短い補足文も表示
+```
 
-* 対象GridCellに対して、ログインユーザーの採点を作成または更新する
-* `score` は 1〜10
-* `comment` は任意
-* 同じユーザーが同じGridCellへ複数回採点した場合は、既存採点を更新する仕様ならそのように書く
-* 採点後に対象GridCellのスコア集計が更新される
+詳細画面:
 
-リクエスト例:
+```text
+- pending / running / failed では基本情報と状態メッセージ、再読み込みリンクを表示
+- pending / running / failed では地図・採点フォーム・共有/削除UI・詳細JSを表示しない
+- fallback_completed は通常表示しつつ、標準値で作成した注意表示を出す
+- completed は通常表示
+```
+
+### 6. 現時点で未実装のこと
+
+以下を明確に書く。
+
+```text
+- Celery / RQ / Redis は未導入
+- 自動でmanagement commandを起動する仕組みは未実装
+- 自動ポーリングは未実装
+- 本番スケジューラ設定は未実装
+- 再試行ボタンは未実装
+```
+
+### 7. 注意点
+
+以下も必要に応じて記録する。
+
+```text
+- auto作成直後はGridCellが存在しない
+- pendingのままでは詳細画面に地図は出ない
+- GridCell生成には management command の実行が必要
+- 現状は「完全な非同期ジョブキュー」ではなく、management command を使った試験的な遅延実行
+```
+
+## API_SPEC.md に整理する内容
+
+API仕様として、以下を追記・更新する。
+
+### 1. MapArea作成APIの挙動
+
+`POST /api/maps/areas/` の説明に、manual / auto の違いを明記する。
+
+```text
+initial_score_mode=manual:
+- 作成リクエスト内でGridCellを即時生成する
+- レスポンス時点で grid_generation_status=completed
+- GridCell一覧APIでGridCellを取得できる
+
+initial_score_mode=auto:
+- 作成リクエスト内ではGridCellを生成しない
+- レスポンス時点で grid_generation_status=pending
+- GridCell生成は management command / 将来のジョブ処理で行う
+- pending中はGridCell一覧APIが空になる場合がある
+```
+
+### 2. MapAreaレスポンス項目
+
+既に追加済みの以下の項目を、説明とともに整理する。
+
+```text
+grid_generation_status
+grid_generation_status_display
+grid_generation_started_at
+grid_generation_finished_at
+grid_generation_error_message
+grid_generation_attempt_count
+```
+
+説明例:
+
+```text
+grid_generation_status:
+GridCell生成状態。pending / running / completed / fallback_completed / failed のいずれか。
+
+grid_generation_status_display:
+grid_generation_status の表示名。
+
+grid_generation_started_at:
+GridCell生成開始日時。未開始の場合は null。
+
+grid_generation_finished_at:
+GridCell生成完了日時。未完了の場合は null。
+
+grid_generation_error_message:
+GridCell生成失敗または fallback 時の短い内部エラーメッセージ。通常は空文字。
+
+grid_generation_attempt_count:
+GridCell生成処理の試行回数。
+```
+
+### 3. GridCell一覧APIのpending時挙動
+
+`GET /api/maps/areas/<area_id>/grids/` について、pending中はGridCellが未生成のため空になる可能性があることを明記する。
+
+```text
+- grid_generation_status=pending/running の場合、GridCellがまだ存在しない場合がある
+- その場合、レスポンスは空配列になる可能性がある
+- GridCell生成完了後に再取得する
+```
+
+### 4. management command はAPIではないことを明記
+
+API_SPEC.md に書く場合は、「運用・開発用コマンド」として整理する。
+
+```bash
+python manage.py process_pending_grid_areas
+python manage.py process_pending_grid_areas --dry-run
+python manage.py process_pending_grid_areas --limit 1
+```
+
+注意:
+
+```text
+- これはHTTP APIではない
+- pendingのMapAreaを処理するためのDjango management command
+- 現状は手動実行または将来のスケジューラ想定
+```
+
+### 5. 例レスポンスの更新
+
+MapArea作成レスポンス例に、状態フィールドを含める。
+
+manual例:
 
 ```json
 {
-  "score": 8,
-  "comment": "駅が近くて使いやすそう"
+  "id": 1,
+  "name": "手動作成サンプル",
+  "initial_score_mode": "manual",
+  "grid_generation_status": "completed",
+  "grid_generation_status_display": "作成完了",
+  "grid_generation_started_at": "2026-06-25T12:00:00+09:00",
+  "grid_generation_finished_at": "2026-06-25T12:00:01+09:00",
+  "grid_generation_error_message": "",
+  "grid_generation_attempt_count": 1
 }
 ```
 
-レスポンス項目は現在のserializerに合わせて書く。
-
-### 11. 一括採点API
-
-`POST /api/maps/grids/bulk-ratings/`
-
-整理する内容:
-
-* 複数GridCellに同じスコア・コメントをまとめて登録する
-* `grid_ids`
-* `score`
-* `comment`
-* `score` は 1〜10
-* `grid_ids` は空不可
-* 重複IDはserializer側で整理される場合、その仕様を正確に書く
-* 権限のないGridCellには採点できない
-
-リクエスト例:
+auto例:
 
 ```json
 {
-  "grid_ids": [1, 2, 3],
-  "score": 7,
-  "comment": "まとめて評価"
+  "id": 2,
+  "name": "自動作成サンプル",
+  "initial_score_mode": "auto",
+  "grid_generation_status": "pending",
+  "grid_generation_status_display": "作成待ち",
+  "grid_generation_started_at": null,
+  "grid_generation_finished_at": null,
+  "grid_generation_error_message": "",
+  "grid_generation_attempt_count": 0
 }
 ```
 
-### 12. 共有API
+実際の既存レスポンス項目に合わせ、必要に応じて既存項目を省略せず更新する。
 
-対象:
+## 書き方の注意
 
-```text
-GET /api/maps/areas/<area_id>/shares/
-POST /api/maps/areas/<area_id>/shares/
-DELETE /api/maps/areas/<area_id>/shares/<share_id>/
+* 「完全な非同期化が完了した」と書かない
+* 「Celeryを導入済み」と書かない
+* 「自動でバックグラウンド実行される」と断定しない
+* 「auto作成後すぐGridCellがある」と書かない
+* 「2km制限を解除した」と書かない
+* 「GridCell生成は management command / 将来のジョブ処理で行う」と書く
+* 現状は「management command を使った試験的な遅延実行」として整理する
+
+## やってよい変更
+
+* `memo.md` の現在仕様追記・整理
+* `API_SPEC.md` の作成API・レスポンス例・GridCell一覧API説明の更新
+* 既存記述との矛盾修正
+* 表現の軽微な整理
+
+## やってはいけない変更
+
+* Pythonコードを変更する
+* JavaScriptを変更する
+* CSSを変更する
+* migrationを作る
+* README.mdを変更する
+* testsを変更する
+* Overpass処理を変更する
+* スコア計算を変更する
+* 2km制限を変更する
+* management commandの挙動を変更する
+
+## 確認
+
+確認コマンドやテストコマンドは実行しない。
+
+文書更新のみなので、作業後は以下のような差分確認だけでよい。
+
+```bash
+git diff -- memo.md API_SPEC.md
+rg -n "grid_generation_status|process_pending_grid_areas|pending|fallback_completed" memo.md API_SPEC.md
+git diff --name-only
 ```
-
-整理する内容:
-
-* 作成者のみ共有相手一覧を取得・追加・削除できる
-* 共有相手は username で追加する仕様なら、そのように書く
-* 同じユーザーへの重複共有はできない
-* 共有されたユーザーは対象メモグリッドを閲覧・採点できる
-* 共有されたユーザーは共有相手管理やメモグリッド削除はできない
-
-### 13. 削除API
-
-`DELETE /api/maps/areas/<area_id>/`
-
-整理する内容:
-
-* 作成者のみ削除可能
-* 削除すると関連するGridCell、採点、共有設定も削除される
-* 共有されたユーザーは削除できない
-
-### 14. エラー・権限
-
-必要に応じて整理する。
-
-含めたい内容:
-
-* 未認証時
-* 権限なし
-* 存在しないMapArea/GridCell
-* validation error
-* Overpass取得失敗時の扱い
-
-  * 自動設定時にOverpass取得失敗した場合、フォールバックする仕様があるなら正確に書く
-* 400 / 401 / 403 / 404 など、実装に合わせて書く
-
-### 15. 画面URLとの関係
-
-必要なら短く書く。
-
-```text
-画面URL:
-- /login/
-- /signup/
-- /maps/
-- /maps/new/
-- /maps/<area_id>/
-```
-
-API仕様書なので、画面URLは補足程度でよい。
-
-## 書き方の方針
-
-* API仕様書として、エンドポイントごとに整理する
-* リクエスト例・レスポンス例を必要な範囲で載せる
-* 既存の内容がある場合は、現在の仕様に合わせて更新する
-* 古い仕様やdemo中心の説明は、現在の本サイト/API仕様に合わせて整理する
-* READMEと同じ説明を長く繰り返さない
-* 不明な項目は実装ファイルを確認してから書く
-* 推測で書かない
-
-## やらないこと
-
-* `API_SPEC.md` 以外の変更
-* コード変更
-* `README.md` の変更
-* `memo.md` の変更
-* model / migration の変更
-* UI調整
-* テスト修正
-* demo.js / demo.css の変更
-* デプロイ設定変更
-
-## 注意
-
-* 今回は `API_SPEC.md` のみ更新する
-* コードや設定ファイルには触らない
-* API URL・serializer・viewは変更しない
-* 古い仕様が残っている場合は、現在の実装に合わせて文書だけ更新する
-* `source` 入力欄は現在作成画面の主要入力ではないため、画面入力として強調しない
-* 旧仕様の `north` / `south` / `east` / `west` 直接指定は現在の作成APIの基本仕様として書かない
-* `center_lat` / `center_lng` / `rows` / `cols` を中心に書く
-* 自動設定の範囲制限は、画面側制限かAPI側制限かを混同しない
-* migrationに触らない
-* 確認コマンドやテストコマンドは実行しないこと
 
 ## 作業後に報告してほしいこと
 
 * 変更したファイル
-* API_SPEC.md に追記・更新した主な内容
-* 古い仕様を現在の仕様に合わせて直した箇所
-* `API_SPEC.md` 以外を変更していないこと
-* コード・README.md・memo.md・model・migration・demo.js / demo.css を変更していないこと
-* 確認コマンドやテストコマンドを実行していないこと
+* memo.md に追記・整理した内容
+* API_SPEC.md に追記・整理した内容
+* manual / auto の作成フローを明記したこと
+* pending中はGridCellが未生成の場合があることを明記したこと
+* management command がHTTP APIではないことを明記したこと
+* 現状は完全な非同期ジョブキューではないことを明記したこと
+* Pythonコード / JS / CSS / tests / README.md を変更していないこと
+* 確認コマンドやテストコマンドを実行したかどうか
+
+  * 実行していない場合は「実行していない」と明記する

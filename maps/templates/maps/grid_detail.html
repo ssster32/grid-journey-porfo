@@ -71,6 +71,9 @@
             {% endif %}
           </dd>
 
+          <dt>作成状態</dt>
+          <dd>{{ area.get_grid_generation_status_display }}</dd>
+
           <dt>地域特徴レベル</dt>
           <dd>
             {% if area.initial_score_mode == "auto" %}
@@ -97,7 +100,44 @@
 
     </section>
 
-    <div class="grid-detail-main-layout">
+    {% if is_grid_generation_waiting %}
+      <section class="content-section grid-generation-state-section" aria-labelledby="grid-generation-waiting-heading">
+        <p class="section-kicker">作成状態</p>
+        <h2 id="grid-generation-waiting-heading">メモグリッドを作成中です</h2>
+        {% if area.grid_generation_status == "pending" %}
+          <p>自動設定の処理待ちです。しばらくしてから再読み込みしてください。</p>
+        {% else %}
+          <p>現在、地図データを取得してGridCellを生成しています。しばらくしてから再読み込みしてください。</p>
+        {% endif %}
+        <dl class="definition-list grid-generation-state-list">
+          <dt>現在の状態</dt>
+          <dd>{{ area.get_grid_generation_status_display }}</dd>
+        </dl>
+        <div class="section-actions">
+          <a class="secondary-button" href="{% url 'map-area-page-detail' area.id %}">再読み込み</a>
+        </div>
+      </section>
+    {% elif is_grid_generation_failed %}
+      <section class="content-section grid-generation-state-section" aria-labelledby="grid-generation-failed-heading">
+        <p class="section-kicker">作成状態</p>
+        <h2 id="grid-generation-failed-heading">メモグリッドの作成に失敗しました</h2>
+        <p>時間をおいて再作成するか、管理者に確認してください。</p>
+        <dl class="definition-list grid-generation-state-list">
+          <dt>現在の状態</dt>
+          <dd>{{ area.get_grid_generation_status_display }}</dd>
+        </dl>
+        <div class="section-actions">
+          <a class="secondary-button" href="{% url 'map-area-page-detail' area.id %}">再読み込み</a>
+        </div>
+      </section>
+    {% elif is_grid_generation_fallback_completed %}
+      <div class="message grid-generation-notice" data-message-type="warning" role="status">
+        自動設定に失敗したため、標準値でメモグリッドを作成しました。
+      </div>
+    {% endif %}
+
+    {% if show_grid_detail_tools %}
+      <div class="grid-detail-main-layout">
       <section class="content-section map-preview-section" aria-labelledby="map-preview-heading">
         <p class="section-kicker">地図から選択</p>
         <div class="map-preview-heading-row">
@@ -253,9 +293,9 @@
           </div>
         </section>
       </div>
-    </div>
+      </div>
 
-    {% if is_owner %}
+      {% if is_owner %}
       <section class="content-section management-section" aria-labelledby="management-heading">
         <p class="section-kicker">管理</p>
         <h2 id="management-heading">共有と削除</h2>
@@ -301,76 +341,81 @@
           <p id="area-delete-status" class="rating-form-status" aria-live="polite"></p>
         </section>
       </section>
+      {% endif %}
     {% endif %}
 
   </div>
 
-  <div
-    id="expanded-map-modal"
-    class="expanded-map-modal"
-    role="dialog"
-    aria-modal="true"
-    aria-labelledby="expanded-map-heading"
-    hidden
-  >
-    <div class="expanded-map-backdrop" data-expanded-map-close></div>
-    <div class="expanded-map-panel">
-      <div class="expanded-map-header">
-        <div>
-          <p class="section-kicker">拡大表示</p>
-          <h2 id="expanded-map-heading">地図プレビュー</h2>
-        </div>
-        <div class="expanded-map-header-actions">
-          <div class="expanded-map-zoom-controls" aria-label="拡大地図のズーム操作">
+  {% if show_grid_detail_tools %}
+    <div
+      id="expanded-map-modal"
+      class="expanded-map-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="expanded-map-heading"
+      hidden
+    >
+      <div class="expanded-map-backdrop" data-expanded-map-close></div>
+      <div class="expanded-map-panel">
+        <div class="expanded-map-header">
+          <div>
+            <p class="section-kicker">拡大表示</p>
+            <h2 id="expanded-map-heading">地図プレビュー</h2>
+          </div>
+          <div class="expanded-map-header-actions">
+            <div class="expanded-map-zoom-controls" aria-label="拡大地図のズーム操作">
+              <button
+                type="button"
+                id="expanded-map-zoom-out"
+                class="secondary-button expanded-map-tool-button"
+                aria-label="拡大地図をズームアウト"
+              >
+                −
+              </button>
+              <button
+                type="button"
+                id="expanded-map-zoom-in"
+                class="secondary-button expanded-map-tool-button"
+                aria-label="拡大地図をズームイン"
+              >
+                ＋
+              </button>
+              <button
+                type="button"
+                id="expanded-map-fit-bounds"
+                class="secondary-button expanded-map-fit-button"
+              >
+                範囲に戻す
+              </button>
+            </div>
             <button
               type="button"
-              id="expanded-map-zoom-out"
-              class="secondary-button expanded-map-tool-button"
-              aria-label="拡大地図をズームアウト"
+              id="close-expanded-map"
+              class="secondary-button expanded-map-close-button"
             >
-              −
-            </button>
-            <button
-              type="button"
-              id="expanded-map-zoom-in"
-              class="secondary-button expanded-map-tool-button"
-              aria-label="拡大地図をズームイン"
-            >
-              ＋
-            </button>
-            <button
-              type="button"
-              id="expanded-map-fit-bounds"
-              class="secondary-button expanded-map-fit-button"
-            >
-              範囲に戻す
+              閉じる
             </button>
           </div>
-          <button
-            type="button"
-            id="close-expanded-map"
-            class="secondary-button expanded-map-close-button"
-          >
-            閉じる
-          </button>
         </div>
+        <div
+          id="expanded-map-preview"
+          class="map-preview expanded-map-preview"
+          aria-label="拡大したメモグリッド範囲の地図表示"
+        ></div>
       </div>
-      <div
-        id="expanded-map-preview"
-        class="map-preview expanded-map-preview"
-        aria-label="拡大したメモグリッド範囲の地図表示"
-      ></div>
     </div>
-  </div>
+  {% endif %}
 {% endblock %}
 
 {% block extra_js %}
-  <script
-    src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
-    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
-    crossorigin=""
-  ></script>
-  <script src="{% static 'maps/js/grid-detail-utils.js' %}"></script>
-  <script src="{% static 'maps/js/grid-detail-api.js' %}"></script>
-  <script src="{% static 'maps/js/grid-detail.js' %}"></script>
+  {% if show_grid_detail_tools %}
+    <script
+      src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+      integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+      crossorigin=""
+    ></script>
+    <script src="{% static 'maps/js/grid-detail-utils.js' %}"></script>
+    <script src="{% static 'maps/js/grid-detail-api.js' %}"></script>
+    <script src="{% static 'maps/js/grid-detail.js' %}"></script>
+  {% endif %}
 {% endblock %}

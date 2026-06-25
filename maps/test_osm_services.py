@@ -7,6 +7,12 @@ from django.test import TestCase
 from .models import GridCell, MapArea
 from .services import (
     BASE_INITIAL_SCORE,
+    AUTO_SCORE_BUILDING_MODE_CENTER,
+    AUTO_SCORE_BUILDING_MODE_GEOMETRY,
+    AUTO_SCORE_BUILDING_SKIP_LONG_SIDE_METERS,
+    AUTO_SCORE_LIGHTWEIGHT_OVERPASS_OUTPUT,
+    AUTO_SCORE_OVERPASS_SPLIT_COLS,
+    AUTO_SCORE_OVERPASS_SPLIT_ROWS,
     BUILDING_BASE_SCORE_MAX_BONUS,
     BUILDING_COUNT_FOR_MAX_BASE_SCORE,
     METERS_PER_DEGREE,
@@ -27,6 +33,7 @@ from .services import (
     TRUNK_CONTEXT_BONUS,
     WATERFRONT_CONTEXT_BONUS,
     build_bounds_from_osm_element,
+    build_center_from_osm_element,
     build_auto_score_breakdown_from_feature_summary,
     build_feature_summaries_for_map_area_from_overpass,
     build_feature_summaries_for_grid_cell_contexts,
@@ -46,7 +53,10 @@ from .services import (
     classify_railway_feature_surface_type,
     classify_station_feature_type,
     determine_initial_score_for_grid_cell,
+    determine_auto_score_building_fetch_options,
+    dedupe_map_features,
     fetch_osm_features_from_overpass,
+    fetch_osm_features_from_overpass_split,
     feature_intersects_grid_cell,
     generate_grid_cells_for_area,
     is_large_waterway_river_bounds_for_map_area,
@@ -63,6 +73,7 @@ from .services import (
     summarize_waterway_feature_matches_for_grid_cell_contexts,
     summarize_waterway_river_bounds_for_map_area,
     should_use_river_feature_for_grid_cell,
+    split_bounds,
 )
 
 
@@ -162,7 +173,6 @@ class DetermineInitialScoreForGridCellTests(TestCase):
         query = build_overpass_query(self.grid_bounds())
         expected_filters = (
             'nwr["building"]',
-            'nwr["highway"]',
             'nwr["natural"="water"]',
             'nwr["water"]',
             'nwr["waterway"="riverbank"]',
@@ -200,9 +210,131 @@ class DetermineInitialScoreForGridCellTests(TestCase):
 
         self.assertIn("[out:json][timeout:25];", query)
         self.assertIn("out body geom;", query)
+        self.assertNotIn('nwr["highway"]', query)
         for expected_filter in expected_filters:
             with self.subTest(expected_filter=expected_filter):
                 self.assertIn(expected_filter, query)
+
+    def test_build_overpass_query_can_skip_buildings(self):
+        query = build_overpass_query(self.grid_bounds(), include_buildings=False)
+
+        self.assertNotIn('nwr["building"]', query)
+        self.assertNotIn('nwr["highway"]', query)
+        self.assertIn('nwr["highway"="motorway"]', query)
+        self.assertIn('nwr["highway"="trunk"]', query)
+        self.assertIn('nwr["natural"="water"]', query)
+
+    def test_build_overpass_query_can_fetch_building_centers(self):
+        query = build_overpass_query(
+            self.grid_bounds(),
+            building_mode=AUTO_SCORE_BUILDING_MODE_CENTER,
+        )
+
+        self.assertIn('nwr["building"]', query)
+        self.assertIn("out body center;", query)
+        self.assertIn("out body geom;", query)
+        self.assertNotIn('nwr["highway"]', query)
+        self.assertIn('nwr["highway"="motorway"]', query)
+        self.assertLess(
+            query.index('nwr["building"]'),
+            query.index("out body center;"),
+        )
+        self.assertLess(
+            query.index("out body center;"),
+            query.index('nwr["natural"="water"]'),
+        )
+
+    def test_lightweight_overpass_output_is_disabled_by_default(self):
+        self.assertFalse(AUTO_SCORE_LIGHTWEIGHT_OVERPASS_OUTPUT)
+
+    def test_build_overpass_query_can_use_lightweight_output_for_station_and_landmark(self):
+        query = build_overpass_query(
+            self.grid_bounds(),
+            lightweight_output=True,
+        )
+
+        self.assertIn("out body center;", query)
+        self.assertIn("out body geom;", query)
+        self.assertIn('nwr["railway"="station"]', query)
+        self.assertIn('nwr["tourism"="museum"]', query)
+        self.assertIn('nwr["natural"="water"]', query)
+        self.assertIn('nwr["waterway"="river"]', query)
+        self.assertIn('nwr["landuse"="forest"]', query)
+        self.assertIn('nwr["natural"="coastline"]', query)
+        self.assertIn('nwr["railway"="rail"]', query)
+        self.assertIn('nwr["highway"="motorway"]', query)
+        self.assertNotIn('nwr["highway"]', query)
+        self.assertLess(
+            query.index('nwr["railway"="station"]'),
+            query.index('nwr["natural"="water"]'),
+        )
+        self.assertLess(
+            query.index('nwr["tourism"="museum"]'),
+            query.index('nwr["natural"="water"]'),
+        )
+
+    def test_build_overpass_query_invalid_lightweight_output_raises_value_error(self):
+        with self.assertRaises(ValueError):
+            build_overpass_query(self.grid_bounds(), lightweight_output="true")
+
+    def test_build_overpass_query_invalid_include_buildings_raises_value_error(self):
+        with self.assertRaises(ValueError):
+            build_overpass_query(self.grid_bounds(), include_buildings="false")
+
+    def test_build_overpass_query_invalid_building_mode_raises_value_error(self):
+        with self.assertRaises(ValueError):
+            build_overpass_query(self.grid_bounds(), building_mode="invalid")
+
+    def test_auto_score_building_fetch_options_keep_buildings_for_small_area(self):
+        options = determine_auto_score_building_fetch_options(
+            grid_size_meters=200,
+            rows=7,
+            cols=7,
+        )
+
+        self.assertTrue(options["include_buildings"])
+        self.assertEqual(options["building_mode"], AUTO_SCORE_BUILDING_MODE_CENTER)
+        self.assertEqual(options["long_side_meters"], 1400)
+        self.assertEqual(options["building_skip_reason"], "none")
+
+    def test_auto_score_building_fetch_options_keep_buildings_for_large_area_by_default(self):
+        options = determine_auto_score_building_fetch_options(
+            grid_size_meters=300,
+            rows=5,
+            cols=6,
+        )
+
+        self.assertTrue(options["include_buildings"])
+        self.assertEqual(options["building_mode"], AUTO_SCORE_BUILDING_MODE_CENTER)
+        self.assertEqual(options["long_side_meters"], 1800)
+        self.assertEqual(options["building_skip_reason"], "none")
+        self.assertEqual(AUTO_SCORE_BUILDING_SKIP_LONG_SIDE_METERS, 1500)
+
+    @patch("maps.services.AUTO_SCORE_SKIP_BUILDINGS_WHEN_LARGE", True)
+    def test_auto_score_building_fetch_options_skip_buildings_when_flag_enabled(self):
+        options = determine_auto_score_building_fetch_options(
+            grid_size_meters=300,
+            rows=5,
+            cols=6,
+        )
+
+        self.assertFalse(options["include_buildings"])
+        self.assertEqual(options["building_mode"], AUTO_SCORE_BUILDING_MODE_CENTER)
+        self.assertEqual(options["long_side_meters"], 1800)
+        self.assertEqual(options["building_skip_reason"], "large_area")
+
+    def test_auto_score_building_fetch_options_invalid_args_raise_value_error(self):
+        invalid_args = (
+            {"grid_size_meters": 0, "rows": 1, "cols": 1},
+            {"grid_size_meters": 100, "rows": 0, "cols": 1},
+            {"grid_size_meters": 100, "rows": 1, "cols": 0},
+            {"grid_size_meters": True, "rows": 1, "cols": 1},
+        )
+
+        for kwargs in invalid_args:
+            with self.subTest(kwargs=kwargs):
+                with self.assertRaises(ValueError):
+                    determine_auto_score_building_fetch_options(**kwargs)
 
     def test_build_overpass_query_invalid_bounds_raises_value_error(self):
         invalid_bounds_list = (
@@ -217,6 +349,161 @@ class DetermineInitialScoreForGridCellTests(TestCase):
             with self.subTest(bounds=bounds):
                 with self.assertRaises(ValueError):
                     build_overpass_query(bounds)
+
+    def test_split_bounds_returns_four_bounds_for_two_by_two(self):
+        split_bbox_list = split_bounds(
+            {
+                "north": 10.0,
+                "south": 8.0,
+                "east": 24.0,
+                "west": 20.0,
+            },
+            rows=2,
+            cols=2,
+        )
+
+        self.assertEqual(
+            split_bbox_list,
+            [
+                {"north": 10.0, "south": 9.0, "east": 22.0, "west": 20.0},
+                {"north": 10.0, "south": 9.0, "east": 24.0, "west": 22.0},
+                {"north": 9.0, "south": 8.0, "east": 22.0, "west": 20.0},
+                {"north": 9.0, "south": 8.0, "east": 24.0, "west": 22.0},
+            ],
+        )
+
+    def test_split_bounds_invalid_args_raise_value_error(self):
+        invalid_cases = (
+            (
+                {"north": 9.0, "south": 10.0, "east": 21.0, "west": 19.0},
+                2,
+                2,
+            ),
+            (self.grid_bounds(), 0, 2),
+            (self.grid_bounds(), 2, 0),
+            (self.grid_bounds(), True, 2),
+            (self.grid_bounds(), 2, "abc"),
+        )
+
+        for bounds, rows, cols in invalid_cases:
+            with self.subTest(bounds=bounds, rows=rows, cols=cols):
+                with self.assertRaises(ValueError):
+                    split_bounds(bounds, rows=rows, cols=cols)
+
+    def test_dedupe_map_features_uses_source_type_and_source_id(self):
+        way_feature = {
+            "kind": "building",
+            "source_type": "way",
+            "source_id": 1,
+        }
+        duplicate_way_feature = {
+            "kind": "building",
+            "source_type": "way",
+            "source_id": 1,
+        }
+        node_feature_with_same_id = {
+            "kind": "station",
+            "source_type": "node",
+            "source_id": 1,
+        }
+
+        deduped_features, duplicate_count = dedupe_map_features(
+            [way_feature, duplicate_way_feature, node_feature_with_same_id]
+        )
+
+        self.assertEqual(deduped_features, [way_feature, node_feature_with_same_id])
+        self.assertEqual(duplicate_count, 1)
+
+    def test_dedupe_map_features_keeps_features_without_source_identity(self):
+        first_feature = {"kind": "building", "source_type": None, "source_id": 1}
+        second_feature = {"kind": "building", "source_id": None}
+
+        deduped_features, duplicate_count = dedupe_map_features(
+            [first_feature, second_feature]
+        )
+
+        self.assertEqual(deduped_features, [first_feature, second_feature])
+        self.assertEqual(duplicate_count, 0)
+
+    @patch("maps.services.fetch_osm_features_from_overpass")
+    def test_fetch_osm_features_from_overpass_split_fetches_each_part_and_dedupes(
+        self,
+        mock_fetch,
+    ):
+        first_feature = {
+            "kind": "building",
+            "source_type": "way",
+            "source_id": 1,
+            "bounds": self.grid_bounds(),
+        }
+        duplicate_feature = {
+            "kind": "building",
+            "source_type": "way",
+            "source_id": 1,
+            "bounds": self.grid_bounds(),
+        }
+        node_feature_with_same_id = {
+            "kind": "station",
+            "source_type": "node",
+            "source_id": 1,
+            "bounds": self.grid_bounds(),
+        }
+        no_id_feature = {
+            "kind": "park",
+            "bounds": self.grid_bounds(),
+        }
+        mock_fetch.side_effect = [
+            [first_feature],
+            [duplicate_feature],
+            [node_feature_with_same_id],
+            [no_id_feature],
+        ]
+
+        map_features = fetch_osm_features_from_overpass_split(
+            self.grid_bounds(),
+            endpoint="https://example.test/overpass",
+            timeout=10,
+            include_buildings=True,
+            building_mode=AUTO_SCORE_BUILDING_MODE_CENTER,
+            split_rows=2,
+            split_cols=2,
+            area_id=123,
+        )
+
+        self.assertEqual(
+            map_features,
+            [first_feature, node_feature_with_same_id, no_id_feature],
+        )
+        self.assertEqual(mock_fetch.call_count, 4)
+        first_call = mock_fetch.call_args_list[0]
+        self.assertEqual(
+            first_call.args[0],
+            {"north": 10.0, "south": 9.5, "east": 19.5, "west": 19.0},
+        )
+        self.assertEqual(first_call.kwargs["endpoint"], "https://example.test/overpass")
+        self.assertEqual(first_call.kwargs["timeout"], 10)
+        self.assertEqual(first_call.kwargs["include_buildings"], True)
+        self.assertEqual(
+            first_call.kwargs["building_mode"],
+            AUTO_SCORE_BUILDING_MODE_CENTER,
+        )
+        self.assertIsNone(first_call.kwargs["lightweight_output"])
+
+    @patch("maps.services.fetch_osm_features_from_overpass")
+    def test_fetch_osm_features_from_overpass_split_fails_when_one_part_fails(
+        self,
+        mock_fetch,
+    ):
+        mock_fetch.side_effect = [[], ValueError("overpass error")]
+
+        with self.assertRaises(ValueError):
+            fetch_osm_features_from_overpass_split(
+                self.grid_bounds(),
+                split_rows=2,
+                split_cols=2,
+            )
+
+        self.assertEqual(mock_fetch.call_count, 2)
 
     @patch("maps.services.requests.post")
     def test_fetch_osm_features_from_overpass_posts_query_and_returns_features(
@@ -274,6 +561,10 @@ class DetermineInitialScoreForGridCellTests(TestCase):
                     "source": "osm",
                     "source_type": "way",
                     "source_id": 123,
+                    "center": {
+                        "lat": 9.5,
+                        "lon": 19.5,
+                    },
                 },
             ],
         )
@@ -507,8 +798,80 @@ class DetermineInitialScoreForGridCellTests(TestCase):
                 "south": 9.0,
                 "east": 21.0,
                 "west": 19.0,
-            }
+            },
+            include_buildings=True,
+            building_mode=AUTO_SCORE_BUILDING_MODE_CENTER,
+            lightweight_output=AUTO_SCORE_LIGHTWEIGHT_OVERPASS_OUTPUT,
         )
+
+    @patch("maps.services.fetch_osm_features_from_overpass")
+    def test_build_feature_summaries_for_large_map_area_keeps_building_fetch_by_default(
+        self,
+        mock_fetch,
+    ):
+        mock_fetch.return_value = []
+
+        build_feature_summaries_for_map_area_from_overpass(
+            self.area,
+            rows=4,
+            cols=4,
+            lat_step=0.25,
+            lng_step=0.5,
+        )
+
+        self.assertEqual(mock_fetch.call_args.kwargs["include_buildings"], True)
+
+    @patch("maps.services.AUTO_SCORE_SPLIT_OVERPASS_FETCH", True)
+    @patch("maps.services.fetch_osm_features_from_overpass_split")
+    @patch("maps.services.fetch_osm_features_from_overpass")
+    def test_build_feature_summaries_uses_split_fetch_when_flag_enabled(
+        self,
+        mock_fetch,
+        mock_split_fetch,
+    ):
+        mock_split_fetch.return_value = []
+
+        build_feature_summaries_for_map_area_from_overpass(
+            self.area,
+            rows=1,
+            cols=2,
+            lat_step=1.0,
+            lng_step=1.0,
+        )
+
+        mock_fetch.assert_not_called()
+        mock_split_fetch.assert_called_once_with(
+            {
+                "north": 10.0,
+                "south": 9.0,
+                "east": 21.0,
+                "west": 19.0,
+            },
+            include_buildings=True,
+            building_mode=AUTO_SCORE_BUILDING_MODE_CENTER,
+            lightweight_output=AUTO_SCORE_LIGHTWEIGHT_OVERPASS_OUTPUT,
+            split_rows=AUTO_SCORE_OVERPASS_SPLIT_ROWS,
+            split_cols=AUTO_SCORE_OVERPASS_SPLIT_COLS,
+            area_id=self.area.id,
+        )
+
+    @patch("maps.services.AUTO_SCORE_SKIP_BUILDINGS_WHEN_LARGE", True)
+    @patch("maps.services.fetch_osm_features_from_overpass")
+    def test_build_feature_summaries_for_large_map_area_skips_building_fetch_when_flag_enabled(
+        self,
+        mock_fetch,
+    ):
+        mock_fetch.return_value = []
+
+        build_feature_summaries_for_map_area_from_overpass(
+            self.area,
+            rows=4,
+            cols=4,
+            lat_step=0.25,
+            lng_step=0.5,
+        )
+
+        self.assertEqual(mock_fetch.call_args.kwargs["include_buildings"], False)
 
     @patch("maps.services.fetch_osm_features_from_overpass")
     def test_build_feature_summaries_for_map_area_from_overpass_skips_large_waterway_river(
@@ -889,6 +1252,43 @@ class DetermineInitialScoreForGridCellTests(TestCase):
                 with self.assertRaises(ValueError):
                     build_bounds_from_osm_element(element)
 
+    def test_build_center_from_osm_element_uses_overpass_center(self):
+        center = build_center_from_osm_element(
+            {
+                "center": {
+                    "lat": "9.5",
+                    "lon": "19.5",
+                },
+            }
+        )
+
+        self.assertEqual(center, {"lat": 9.5, "lon": 19.5})
+
+    def test_build_center_from_osm_element_uses_node_lat_lon(self):
+        center = build_center_from_osm_element(
+            {
+                "type": "node",
+                "lat": "9.5",
+                "lon": "19.5",
+            }
+        )
+
+        self.assertEqual(center, {"lat": 9.5, "lon": 19.5})
+
+    def test_build_center_from_osm_element_falls_back_to_bounds_center(self):
+        center = build_center_from_osm_element(
+            {
+                "bounds": {
+                    "north": "10.0",
+                    "south": "9.0",
+                    "east": "20.0",
+                    "west": "19.0",
+                },
+            }
+        )
+
+        self.assertEqual(center, {"lat": 9.5, "lon": 19.5})
+
     def test_build_map_feature_from_osm_element_with_building_bounds(self):
         map_feature = build_map_feature_from_osm_element(
             {
@@ -917,6 +1317,91 @@ class DetermineInitialScoreForGridCellTests(TestCase):
                 "source": "osm",
                 "source_type": "way",
                 "source_id": 123,
+                "center": {
+                    "lat": 9.5,
+                    "lon": 19.5,
+                },
+            },
+        )
+
+    def test_build_map_feature_from_osm_element_with_building_center(self):
+        map_feature = build_map_feature_from_osm_element(
+            {
+                "type": "way",
+                "id": 123,
+                "tags": {"building": "yes"},
+                "center": {
+                    "lat": "9.5",
+                    "lon": "19.5",
+                },
+            }
+        )
+
+        self.assertEqual(
+            map_feature,
+            {
+                "kind": "building",
+                "source": "osm",
+                "source_type": "way",
+                "source_id": 123,
+                "center": {
+                    "lat": 9.5,
+                    "lon": 19.5,
+                },
+            },
+        )
+
+    def test_build_map_feature_from_osm_element_with_station_center(self):
+        map_feature = build_map_feature_from_osm_element(
+            {
+                "type": "node",
+                "id": 123,
+                "tags": {"railway": "station"},
+                "lat": "9.5",
+                "lon": "19.5",
+            }
+        )
+
+        self.assertEqual(
+            map_feature,
+            {
+                "kind": "station",
+                "source": "osm",
+                "source_type": "node",
+                "source_id": 123,
+                "center": {
+                    "lat": 9.5,
+                    "lon": 19.5,
+                },
+                "source_railway": "station",
+            },
+        )
+
+    def test_build_map_feature_from_osm_element_with_landmark_center(self):
+        map_feature = build_map_feature_from_osm_element(
+            {
+                "type": "way",
+                "id": 123,
+                "tags": {"tourism": "museum"},
+                "center": {
+                    "lat": "9.5",
+                    "lon": "19.5",
+                },
+            }
+        )
+
+        self.assertEqual(
+            map_feature,
+            {
+                "kind": "landmark",
+                "source": "osm",
+                "source_type": "way",
+                "source_id": 123,
+                "center": {
+                    "lat": 9.5,
+                    "lon": 19.5,
+                },
+                "source_tourism": "museum",
             },
         )
 
@@ -1688,6 +2173,43 @@ class DetermineInitialScoreForGridCellTests(TestCase):
         self.assertEqual(summary["railway_station_count"], 0)
         self.assertEqual(summary["railway_halt_count"], 0)
         self.assertEqual(summary["subway_station_count"], 0)
+
+    @patch("maps.services.AUTO_SCORE_BUILDING_MODE", AUTO_SCORE_BUILDING_MODE_CENTER)
+    def test_build_feature_summary_counts_building_centers_in_center_mode(self):
+        summary = build_feature_summary_for_grid_cell(
+            self.grid_bounds(),
+            [
+                {
+                    "kind": "building",
+                    "center": {"lat": 9.5, "lon": 19.5},
+                },
+                {
+                    "kind": "building",
+                    "center": {"lat": 8.5, "lon": 19.5},
+                    "bounds": {
+                        "north": 9.9,
+                        "south": 9.8,
+                        "east": 19.2,
+                        "west": 19.1,
+                    },
+                },
+                {
+                    "kind": "building",
+                    "bounds": {
+                        "north": 9.7,
+                        "south": 9.6,
+                        "east": 19.4,
+                        "west": 19.3,
+                    },
+                },
+            ],
+        )
+
+        self.assertEqual(summary["building_count"], 2)
+        self.assertEqual(
+            calculate_initial_score_from_feature_summary(summary),
+            calculate_initial_score_from_feature_summary({"building_count": 2}),
+        )
         self.assertEqual(summary["bus_station_count"], 0)
         self.assertEqual(summary["public_transport_station_count"], 0)
         self.assertEqual(summary["unknown_station_count"], 0)
@@ -1696,6 +2218,71 @@ class DetermineInitialScoreForGridCellTests(TestCase):
         self.assertEqual(summary["trunk_count"], 0)
         self.assertEqual(summary["trunk_link_count"], 0)
         self.assertEqual(summary["unknown_expressway_count"], 0)
+
+    def test_build_feature_summary_counts_station_and_landmark_centers(self):
+        summary = build_feature_summary_for_grid_cell(
+            self.grid_bounds(),
+            [
+                {
+                    "kind": "station",
+                    "source_railway": "station",
+                    "center": {"lat": 9.5, "lon": 19.5},
+                },
+                {
+                    "kind": "station",
+                    "source_railway": "station",
+                    "center": {"lat": 8.5, "lon": 19.5},
+                },
+                {
+                    "kind": "landmark",
+                    "source_tourism": "museum",
+                    "center": {"lat": 9.5, "lon": 19.5},
+                },
+            ],
+        )
+
+        self.assertEqual(summary["railway_station_count"], 1)
+        self.assertEqual(summary["tourism_museum_count"], 1)
+
+    def test_build_feature_summary_uses_building_center_when_bounds_are_missing(self):
+        summary = build_feature_summary_for_grid_cell(
+            self.grid_bounds(),
+            [
+                {
+                    "kind": "building",
+                    "center": {"lat": 9.5, "lon": 19.5},
+                },
+                {
+                    "kind": "building",
+                    "center": {"lat": 8.5, "lon": 19.5},
+                },
+            ],
+        )
+
+        self.assertEqual(summary["building_count"], 1)
+
+    def test_build_feature_summary_skips_building_without_position(self):
+        summary = build_feature_summary_for_grid_cell(
+            self.grid_bounds(),
+            [
+                {
+                    "kind": "building",
+                },
+                {
+                    "kind": "building",
+                    "bounds": None,
+                },
+            ],
+        )
+
+        self.assertEqual(summary["building_count"], 0)
+
+    def test_build_feature_summary_non_building_invalid_bounds_still_raises(self):
+        with self.assertRaises(ValueError):
+            build_feature_summary_for_grid_cell(
+                self.grid_bounds(),
+                [{"kind": "park", "bounds": None}],
+            )
 
     def test_build_feature_summary_counts_railways_by_surface_type(self):
         summary = build_feature_summary_for_grid_cell(
@@ -2812,7 +3399,6 @@ class DetermineInitialScoreForGridCellTests(TestCase):
         invalid_inputs = (
             ({"north": 1, "south": 1, "east": 1, "west": 0}, []),
             (self.grid_bounds(), None),
-            (self.grid_bounds(), [{"kind": "building", "bounds": None}]),
         )
 
         for grid_cell_bounds, map_features in invalid_inputs:

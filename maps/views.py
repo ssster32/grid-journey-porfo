@@ -1,4 +1,5 @@
 import logging
+from time import perf_counter
 
 from django.contrib import messages
 from django.contrib.auth.forms import UserCreationForm
@@ -29,11 +30,11 @@ from .serializers import (
     GridRatingResponseSerializer,
 )
 from .services import (
-    build_feature_summaries_for_map_area_from_overpass,
     calculate_initial_score_breakdown_from_feature_summary,
     calculate_initial_score_from_feature_summary,
     generate_grid_cells_for_area,
     MIN_FOREST_COVERAGE_RATIO_FOR_SCORE,
+    run_grid_generation_for_area,
     update_grid_cell_score,
     validate_center_grid_limits,
 )
@@ -923,6 +924,92 @@ def log_overpass_waterway_river_bounds_summary(
     )
 
 
+def log_auto_grid_generation_success(area, user_id, feature_summaries_by_position):
+    logger.info(
+        "Overpass auto initial score succeeded: "
+        "area_id=%s user_id=%s initial_score_mode=%s summary_count=%s",
+        area.id,
+        user_id,
+        area.initial_score_mode,
+        len(feature_summaries_by_position),
+    )
+    log_overpass_feature_summary(area, user_id, feature_summaries_by_position)
+    log_overpass_score_breakdown_summary(area, user_id, feature_summaries_by_position)
+    log_overpass_context_candidate_summary(
+        area,
+        user_id,
+        feature_summaries_by_position,
+        getattr(feature_summaries_by_position, "station_proximity_summary", None),
+    )
+    log_overpass_river_summary(
+        area,
+        user_id,
+        feature_summaries_by_position,
+        getattr(feature_summaries_by_position, "river_summary", None),
+    )
+    log_overpass_scored_river_summary(area, user_id, feature_summaries_by_position)
+    log_overpass_scored_natural_coverage_summary(
+        area,
+        user_id,
+        feature_summaries_by_position,
+    )
+    log_overpass_waterway_summary(
+        area,
+        user_id,
+        getattr(feature_summaries_by_position, "waterway_summary", None),
+    )
+    log_overpass_railway_summary(
+        area,
+        user_id,
+        getattr(feature_summaries_by_position, "railway_summary", None),
+    )
+    log_overpass_station_summary(
+        area,
+        user_id,
+        getattr(feature_summaries_by_position, "station_summary", None),
+    )
+    log_overpass_landmark_summary(
+        area,
+        user_id,
+        getattr(feature_summaries_by_position, "landmark_summary", None),
+    )
+    log_overpass_castle_proximity_summary(
+        area,
+        user_id,
+        getattr(feature_summaries_by_position, "castle_proximity_summary", None),
+    )
+    log_overpass_expressway_summary(
+        area,
+        user_id,
+        getattr(feature_summaries_by_position, "expressway_summary", None),
+    )
+    log_overpass_expressway_bounds_summary(
+        area,
+        user_id,
+        getattr(feature_summaries_by_position, "expressway_bounds_summary", None),
+    )
+    log_overpass_effective_expressway_summary(
+        area,
+        user_id,
+        getattr(feature_summaries_by_position, "effective_expressway_summary", None),
+    )
+    log_overpass_waterway_river_bounds_summary(
+        area,
+        user_id,
+        getattr(feature_summaries_by_position, "waterway_river_bounds_summary", None),
+    )
+
+
+def log_auto_grid_generation_failure(area, user_id, error):
+    logger.warning(
+        "Overpass auto initial score failed; using fallback: "
+        "area_id=%s user_id=%s error=%s",
+        area.id,
+        user_id,
+        error,
+    )
+
+
 class MapDemoView(APIView):
     def get(self, request):
         demo_path = finders.find("maps/demo.html")
@@ -974,6 +1061,17 @@ class MapAreaPageDetailView(LoginRequiredMixin, TemplateView):
             if grid_size["max_col_index"] is not None
             else None
         )
+        is_grid_generation_waiting = area.grid_generation_status in [
+            MapArea.GridGenerationStatus.PENDING,
+            MapArea.GridGenerationStatus.RUNNING,
+        ]
+        is_grid_generation_failed = (
+            area.grid_generation_status == MapArea.GridGenerationStatus.FAILED
+        )
+        is_grid_generation_fallback_completed = (
+            area.grid_generation_status
+            == MapArea.GridGenerationStatus.FALLBACK_COMPLETED
+        )
 
         context["area"] = area
         context["is_owner"] = is_owner
@@ -981,6 +1079,14 @@ class MapAreaPageDetailView(LoginRequiredMixin, TemplateView):
         context["created_by_label"] = created_by_label
         context["map_grid_rows"] = map_grid_rows
         context["map_grid_cols"] = map_grid_cols
+        context["is_grid_generation_waiting"] = is_grid_generation_waiting
+        context["is_grid_generation_failed"] = is_grid_generation_failed
+        context["is_grid_generation_fallback_completed"] = (
+            is_grid_generation_fallback_completed
+        )
+        context["show_grid_detail_tools"] = not (
+            is_grid_generation_waiting or is_grid_generation_failed
+        )
         return context
 
 
@@ -1035,6 +1141,7 @@ class MapAreaListCreateView(APIView):
         )
 
     def post(self, request):
+        total_started_at = perf_counter()
         serializer = MapAreaSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         center_grid_options = serializer.center_grid_options
@@ -1065,168 +1172,59 @@ class MapAreaListCreateView(APIView):
         try:
             with transaction.atomic():
                 area = serializer.save(created_by=request.user)
-                grid_generation_options = {
-                    "rows": center_grid_options["rows"],
-                    "cols": center_grid_options["cols"],
-                    "lat_step": center_grid_options["lat_step"],
-                    "lng_step": center_grid_options["lng_step"],
-                }
-                feature_summaries_by_position = None
-
                 if area.initial_score_mode == MapArea.InitialScoreMode.AUTO:
-                    try:
-                        feature_summaries_by_position = (
-                            build_feature_summaries_for_map_area_from_overpass(
-                                area,
-                                **grid_generation_options,
-                            )
-                        )
-                        logger.info(
-                            "Overpass auto initial score succeeded: "
-                            "area_id=%s user_id=%s initial_score_mode=%s "
-                            "summary_count=%s",
-                            area.id,
-                            request.user.id,
-                            area.initial_score_mode,
-                            len(feature_summaries_by_position),
-                        )
-                        log_overpass_feature_summary(
-                            area,
-                            request.user.id,
-                            feature_summaries_by_position,
-                        )
-                        log_overpass_score_breakdown_summary(
-                            area,
-                            request.user.id,
-                            feature_summaries_by_position,
-                        )
-                        log_overpass_context_candidate_summary(
-                            area,
-                            request.user.id,
-                            feature_summaries_by_position,
-                            getattr(
-                                feature_summaries_by_position,
-                                "station_proximity_summary",
-                                None,
-                            ),
-                        )
-                        log_overpass_river_summary(
-                            area,
-                            request.user.id,
-                            feature_summaries_by_position,
-                            getattr(
-                                feature_summaries_by_position,
-                                "river_summary",
-                                None,
-                            ),
-                        )
-                        log_overpass_scored_river_summary(
-                            area,
-                            request.user.id,
-                            feature_summaries_by_position,
-                        )
-                        log_overpass_scored_natural_coverage_summary(
-                            area,
-                            request.user.id,
-                            feature_summaries_by_position,
-                        )
-                        log_overpass_waterway_summary(
-                            area,
-                            request.user.id,
-                            getattr(
-                                feature_summaries_by_position,
-                                "waterway_summary",
-                                None,
-                            ),
-                        )
-                        log_overpass_railway_summary(
-                            area,
-                            request.user.id,
-                            getattr(
-                                feature_summaries_by_position,
-                                "railway_summary",
-                                None,
-                            ),
-                        )
-                        log_overpass_station_summary(
-                            area,
-                            request.user.id,
-                            getattr(
-                                feature_summaries_by_position,
-                                "station_summary",
-                                None,
-                            ),
-                        )
-                        log_overpass_landmark_summary(
-                            area,
-                            request.user.id,
-                            getattr(
-                                feature_summaries_by_position,
-                                "landmark_summary",
-                                None,
-                            ),
-                        )
-                        log_overpass_castle_proximity_summary(
-                            area,
-                            request.user.id,
-                            getattr(
-                                feature_summaries_by_position,
-                                "castle_proximity_summary",
-                                None,
-                            ),
-                        )
-                        log_overpass_expressway_summary(
-                            area,
-                            request.user.id,
-                            getattr(
-                                feature_summaries_by_position,
-                                "expressway_summary",
-                                None,
-                            ),
-                        )
-                        log_overpass_expressway_bounds_summary(
-                            area,
-                            request.user.id,
-                            getattr(
-                                feature_summaries_by_position,
-                                "expressway_bounds_summary",
-                                None,
-                            ),
-                        )
-                        log_overpass_effective_expressway_summary(
-                            area,
-                            request.user.id,
-                            getattr(
-                                feature_summaries_by_position,
-                                "effective_expressway_summary",
-                                None,
-                            ),
-                        )
-                        log_overpass_waterway_river_bounds_summary(
-                            area,
-                            request.user.id,
-                            getattr(
-                                feature_summaries_by_position,
-                                "waterway_river_bounds_summary",
-                                None,
-                            ),
-                        )
-                    except ValueError as error:
-                        logger.warning(
-                            "Overpass auto initial score failed; using fallback: "
-                            "area_id=%s user_id=%s error=%s",
-                            area.id,
-                            request.user.id,
-                            error,
-                        )
-                        feature_summaries_by_position = None
-
-                if feature_summaries_by_position is not None:
-                    grid_generation_options["feature_summaries_by_position"] = (
-                        feature_summaries_by_position
+                    area.grid_generation_status = (
+                        MapArea.GridGenerationStatus.PENDING
                     )
-
-                generate_grid_cells_for_area(area, **grid_generation_options)
+                    area.grid_generation_started_at = None
+                    area.grid_generation_finished_at = None
+                    area.grid_generation_error_message = ""
+                    area.grid_generation_attempt_count = 0
+                    area.save(
+                        update_fields=[
+                            "grid_generation_status",
+                            "grid_generation_started_at",
+                            "grid_generation_finished_at",
+                            "grid_generation_error_message",
+                            "grid_generation_attempt_count",
+                            "updated_at",
+                        ]
+                    )
+                    logger.info(
+                        "[auto_grid_create] area_id=%s user_id=%s rows=%s "
+                        "cols=%s grid_size=%s cells=%s status=pending "
+                        "total_sec=%.3f",
+                        area.id,
+                        request.user.id,
+                        center_grid_options["rows"],
+                        center_grid_options["cols"],
+                        area.grid_size_meters,
+                        0,
+                        perf_counter() - total_started_at,
+                    )
+                else:
+                    created_grid_cells = run_grid_generation_for_area(
+                        area,
+                        rows=center_grid_options["rows"],
+                        cols=center_grid_options["cols"],
+                        lat_step=center_grid_options["lat_step"],
+                        lng_step=center_grid_options["lng_step"],
+                        user_id=request.user.id,
+                        auto_success_callback=log_auto_grid_generation_success,
+                        auto_failure_callback=log_auto_grid_generation_failure,
+                    )
+                    grid_cell_count = len(created_grid_cells)
+                    logger.info(
+                        "[manual_grid_create] area_id=%s user_id=%s rows=%s "
+                        "cols=%s grid_size=%s cells=%s total_sec=%.3f",
+                        area.id,
+                        request.user.id,
+                        center_grid_options["rows"],
+                        center_grid_options["cols"],
+                        area.grid_size_meters,
+                        grid_cell_count,
+                        perf_counter() - total_started_at,
+                    )
         except ValueError as error:
             return Response(
                 {"detail": str(error)},

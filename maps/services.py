@@ -1,14 +1,19 @@
+import logging
+from collections import Counter
 from math import ceil, cos, isfinite, radians
+from time import perf_counter
 
 import requests
 from django.db.models import Avg, Count, Sum
 from django.utils import timezone
 
-from .models import GridCell
+from .models import GridCell, MapArea
 
 
 # MapArea creation, OSM feature collection, auto scoring, and score aggregation live
 # together here because each step feeds the next one in the map preview workflow.
+logger = logging.getLogger(__name__)
+
 METERS_PER_DEGREE = 111000
 MAX_GENERAL_USER_GRID_CELLS = 500
 MAX_GENERAL_USER_GRID_HEIGHT_METERS = 30000
@@ -19,6 +24,25 @@ INITIAL_SCORE_MAX = 3.0
 BASE_INITIAL_SCORE = 0.2
 BUILDING_BASE_SCORE_MAX_BONUS = 0.4
 BUILDING_COUNT_FOR_MAX_BASE_SCORE = 20
+AUTO_SCORE_FETCH_BUILDINGS = True
+# 比較時だけ True にすると、広範囲の building 取得除外を試せる。
+AUTO_SCORE_SKIP_BUILDINGS_WHEN_LARGE = False
+# 画面側の2km制限より手前で、building取得有無を比較するための調査用しきい値。
+AUTO_SCORE_BUILDING_SKIP_LONG_SIDE_METERS = 1500
+AUTO_SCORE_BUILDING_MODE_GEOMETRY = "geometry"
+AUTO_SCORE_BUILDING_MODE_CENTER = "center"
+AUTO_SCORE_BUILDING_MODES = (
+    AUTO_SCORE_BUILDING_MODE_GEOMETRY,
+    AUTO_SCORE_BUILDING_MODE_CENTER,
+)
+AUTO_SCORE_BUILDING_MODE = AUTO_SCORE_BUILDING_MODE_CENTER
+# 分割取得は Overpass の 429 制限に当たりやすい場合があるため、
+# 現時点では比較用としてデフォルト無効。
+AUTO_SCORE_SPLIT_OVERPASS_FETCH = False
+AUTO_SCORE_OVERPASS_SPLIT_ROWS = 2
+AUTO_SCORE_OVERPASS_SPLIT_COLS = 2
+# station / landmark など、詳細 geometry が不要そうな地物を軽量出力で比較するための調査用フラグ。
+AUTO_SCORE_LIGHTWEIGHT_OVERPASS_OUTPUT = False
 ROAD_BASE_SCORE_MAX_BONUS = 0.0
 ROAD_COUNT_FOR_MAX_BASE_SCORE = 10
 WATERFRONT_CONTEXT_BONUS = 0.15
@@ -277,6 +301,87 @@ def _normalize_bounds(bounds):
     return normalized_bounds
 
 
+def _normalize_positive_int(value, name):
+    if isinstance(value, bool):
+        raise ValueError(f"{name} は 1 以上の整数で指定してください。")
+
+    try:
+        value = int(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"{name} は 1 以上の整数で指定してください。")
+
+    if value <= 0:
+        raise ValueError(f"{name} は 1 以上の整数で指定してください。")
+
+    return value
+
+
+def _response_text_preview(response_text, max_length=160):
+    response_text = str(response_text or "")
+    response_text = " ".join(response_text.split())
+    return response_text[:max_length]
+
+
+def _status_code_from_error(error):
+    error_message = str(error)
+    marker = "status_code="
+    if marker not in error_message:
+        return None
+
+    status_code_text = error_message.split(marker, maxsplit=1)[1].split(
+        maxsplit=1
+    )[0]
+    try:
+        return int(status_code_text)
+    except ValueError:
+        return None
+
+
+def normalize_auto_score_building_mode(building_mode=None):
+    if building_mode is None:
+        building_mode = AUTO_SCORE_BUILDING_MODE
+    if building_mode not in AUTO_SCORE_BUILDING_MODES:
+        raise ValueError(
+            "building_mode は geometry または center で指定してください。"
+        )
+    return building_mode
+
+
+def _point_number(point, key):
+    value = point.get(key)
+    if isinstance(value, bool):
+        raise ValueError(f"{key} は数値で指定してください。")
+
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"{key} は数値で指定してください。")
+
+    if not isfinite(value):
+        raise ValueError(f"{key} は有限数で指定してください。")
+
+    return value
+
+
+def _normalize_point(point):
+    if not isinstance(point, dict):
+        raise ValueError("point は辞書で指定してください。")
+
+    return {
+        "lat": _point_number(point, "lat"),
+        "lon": _point_number(point, "lon"),
+    }
+
+
+def _point_in_bounds(point, bounds):
+    point = _normalize_point(point)
+    bounds = _normalize_bounds(bounds)
+    return (
+        bounds["south"] <= point["lat"] <= bounds["north"]
+        and bounds["west"] <= point["lon"] <= bounds["east"]
+    )
+
+
 def classify_osm_element(tags):
     """Classify OSM tags into one app-level map feature kind.
 
@@ -384,6 +489,34 @@ def build_bounds_from_osm_element(element):
         return None
 
 
+def build_center_from_osm_element(element):
+    """Build a normalized center point from one OSM element when available."""
+    if not isinstance(element, dict):
+        raise ValueError("element は辞書で指定してください。")
+
+    center = element.get("center")
+    if center is not None:
+        try:
+            return _normalize_point(center)
+        except ValueError:
+            return None
+
+    if "lat" in element and "lon" in element:
+        try:
+            return _normalize_point({"lat": element["lat"], "lon": element["lon"]})
+        except ValueError:
+            return None
+
+    bounds = build_bounds_from_osm_element(element)
+    if bounds is None:
+        return None
+
+    return {
+        "lat": (bounds["north"] + bounds["south"]) / 2,
+        "lon": (bounds["east"] + bounds["west"]) / 2,
+    }
+
+
 def build_map_feature_from_osm_element(element):
     """Build one app feature from one OSM element when it has usable bounds."""
     if not isinstance(element, dict):
@@ -394,16 +527,25 @@ def build_map_feature_from_osm_element(element):
         return None
 
     bounds = build_bounds_from_osm_element(element)
-    if bounds is None:
+    center = (
+        build_center_from_osm_element(element)
+        if kind in {"building", "station", "landmark"}
+        else None
+    )
+    if bounds is None and center is None:
         return None
 
     map_feature = {
         "kind": kind,
-        "bounds": bounds,
         "source": "osm",
         "source_type": element.get("type"),
         "source_id": element.get("id"),
     }
+    if bounds is not None:
+        map_feature["bounds"] = bounds
+    if center is not None:
+        map_feature["center"] = center
+
     tags = element.get("tags", {})
     waterway = tags.get("waterway")
     if waterway:
@@ -439,6 +581,7 @@ def parse_overpass_elements_to_map_features(elements):
         raise ValueError("elements はリストで指定してください。")
 
     map_features = []
+    skipped_count = 0
     for element in elements:
         if not isinstance(element, dict):
             raise ValueError("elements の各要素は辞書で指定してください。")
@@ -446,28 +589,200 @@ def parse_overpass_elements_to_map_features(elements):
         try:
             map_feature = build_map_feature_from_osm_element(element)
         except ValueError:
+            skipped_count += 1
             continue
 
         if map_feature is not None:
             map_features.append(map_feature)
+        else:
+            skipped_count += 1
+
+    kind_counts = Counter(feature["kind"] for feature in map_features)
+    logger.info(
+        "[auto_grid_create] step=feature_classify raw=%s valid=%s skipped=%s",
+        len(elements),
+        len(map_features),
+        skipped_count,
+    )
+    logger.info(
+        "[auto_grid_create] step=feature_counts building=%s road=%s park=%s "
+        "river=%s water=%s forest=%s railway=%s station=%s expressway=%s "
+        "landmark=%s coastline=%s",
+        kind_counts.get("building", 0),
+        kind_counts.get("road", 0),
+        kind_counts.get("park", 0),
+        kind_counts.get("river", 0),
+        kind_counts.get("water", 0),
+        kind_counts.get("forest", 0),
+        kind_counts.get("railway", 0),
+        kind_counts.get("station", 0),
+        kind_counts.get("expressway", 0),
+        kind_counts.get("landmark", 0),
+        kind_counts.get("coastline", 0),
+    )
 
     return map_features
 
 
-def build_overpass_query(bounds):
+def _log_map_feature_counts(map_features):
+    kind_counts = Counter(feature["kind"] for feature in map_features)
+    logger.info(
+        "[auto_grid_create] step=feature_counts building=%s road=%s park=%s "
+        "river=%s water=%s forest=%s railway=%s station=%s expressway=%s "
+        "landmark=%s coastline=%s",
+        kind_counts.get("building", 0),
+        kind_counts.get("road", 0),
+        kind_counts.get("park", 0),
+        kind_counts.get("river", 0),
+        kind_counts.get("water", 0),
+        kind_counts.get("forest", 0),
+        kind_counts.get("railway", 0),
+        kind_counts.get("station", 0),
+        kind_counts.get("expressway", 0),
+        kind_counts.get("landmark", 0),
+        kind_counts.get("coastline", 0),
+    )
+
+
+def split_bounds(bounds, rows=2, cols=2):
+    """Split one bbox into row x col smaller bboxes."""
+    bounds = _normalize_bounds(bounds)
+    rows = _normalize_positive_int(rows, "rows")
+    cols = _normalize_positive_int(cols, "cols")
+
+    lat_step = (bounds["north"] - bounds["south"]) / rows
+    lng_step = (bounds["east"] - bounds["west"]) / cols
+    split_bbox_list = []
+    for row_index in range(rows):
+        part_north = bounds["north"] - (lat_step * row_index)
+        part_south = bounds["north"] - (lat_step * (row_index + 1))
+        for col_index in range(cols):
+            part_west = bounds["west"] + (lng_step * col_index)
+            part_east = bounds["west"] + (lng_step * (col_index + 1))
+            split_bbox_list.append(
+                _normalize_bounds(
+                    {
+                        "north": part_north,
+                        "south": part_south,
+                        "east": part_east,
+                        "west": part_west,
+                    }
+                )
+            )
+
+    return split_bbox_list
+
+
+def _feature_dedupe_key(map_feature):
+    if not isinstance(map_feature, dict):
+        raise ValueError("map_feature は辞書で指定してください。")
+
+    source_type = map_feature.get("source_type")
+    source_id = map_feature.get("source_id")
+    if source_type is None or source_id is None:
+        return None
+
+    return (source_type, source_id)
+
+
+def dedupe_map_features(map_features):
+    """Remove duplicated OSM features by source type and id when both exist."""
+    if not isinstance(map_features, list):
+        raise ValueError("map_features はリストで指定してください。")
+
+    deduped_features = []
+    seen_keys = set()
+    duplicate_count = 0
+    for map_feature in map_features:
+        if not isinstance(map_feature, dict):
+            raise ValueError("map_features の各要素は辞書で指定してください。")
+
+        dedupe_key = _feature_dedupe_key(map_feature)
+        if dedupe_key is None:
+            deduped_features.append(map_feature)
+            continue
+        if dedupe_key in seen_keys:
+            duplicate_count += 1
+            continue
+
+        seen_keys.add(dedupe_key)
+        deduped_features.append(map_feature)
+
+    return deduped_features, duplicate_count
+
+
+def determine_auto_score_building_fetch_options(grid_size_meters, rows, cols):
+    """Return building fetch options for the auto-score Overpass query."""
+    if (
+        isinstance(grid_size_meters, bool)
+        or isinstance(rows, bool)
+        or isinstance(cols, bool)
+    ):
+        raise ValueError("grid_size_meters, rows, cols は数値で指定してください。")
+
+    try:
+        grid_size_meters = float(grid_size_meters)
+        rows = int(rows)
+        cols = int(cols)
+    except (TypeError, ValueError):
+        raise ValueError("grid_size_meters, rows, cols は数値で指定してください。")
+
+    if (
+        not isfinite(grid_size_meters)
+        or grid_size_meters <= 0
+        or rows <= 0
+        or cols <= 0
+    ):
+        raise ValueError("grid_size_meters, rows, cols は 0 より大きい値にしてください。")
+
+    long_side_meters = grid_size_meters * max(rows, cols)
+    include_buildings = AUTO_SCORE_FETCH_BUILDINGS
+    building_mode = normalize_auto_score_building_mode()
+    building_skip_reason = "none"
+    if not AUTO_SCORE_FETCH_BUILDINGS:
+        building_skip_reason = "disabled"
+    elif (
+        AUTO_SCORE_SKIP_BUILDINGS_WHEN_LARGE
+        and long_side_meters >= AUTO_SCORE_BUILDING_SKIP_LONG_SIDE_METERS
+    ):
+        include_buildings = False
+        building_skip_reason = "large_area"
+
+    return {
+        "include_buildings": include_buildings,
+        "long_side_meters": long_side_meters,
+        "building_skip_reason": building_skip_reason,
+        "building_mode": building_mode,
+    }
+
+
+def build_overpass_query(
+    bounds,
+    *,
+    include_buildings=True,
+    building_mode=None,
+    lightweight_output=None,
+):
     """Build an Overpass QL query for map feature candidates within bounds.
 
     The query intentionally requests broad candidates first; later steps narrow
     them down per GridCell so unsupported or oversized features can be skipped.
     """
+    if not isinstance(include_buildings, bool):
+        raise ValueError("include_buildings は真偽値で指定してください。")
+    building_mode = normalize_auto_score_building_mode(building_mode)
+    if lightweight_output is None:
+        lightweight_output = AUTO_SCORE_LIGHTWEIGHT_OVERPASS_OUTPUT
+    if not isinstance(lightweight_output, bool):
+        raise ValueError("lightweight_output は真偽値で指定してください。")
+
     bounds = _normalize_bounds(bounds)
     bbox = (
         f'{bounds["south"]},{bounds["west"]},'
         f'{bounds["north"]},{bounds["east"]}'
     )
-    target_filters = (
-        '["building"]',
-        '["highway"]',
+    # coverage や線形地物のセル判定に影響しやすい地物は geom を維持する。
+    geometry_filters = (
         '["natural"="water"]',
         '["water"]',
         '["waterway"="riverbank"]',
@@ -479,19 +794,24 @@ def build_overpass_query(bounds):
         '["leisure"="park"]',
         '["leisure"="garden"]',
         '["natural"="coastline"]',
+        '["railway"="rail"]',
+        '["railway"="subway"]',
+        '["railway"="light_rail"]',
+        '["railway"="tram"]',
+        # road は現在の自動採点に寄与しないため、通常道路は取得しない。
+        # expressway は文脈要素として使うため、高速道路相当だけ取得する。
+        '["highway"="motorway"]',
+        '["highway"="motorway_link"]',
+        '["highway"="trunk"]',
+        '["highway"="trunk_link"]',
+    )
+    # 存在や近さが主用途の地物は、軽量出力ON時に center で比較する。
+    lightweight_filters = (
         '["railway"="station"]',
         '["railway"="halt"]',
         '["station"="subway"]',
         '["public_transport"="station"]',
         '["amenity"="bus_station"]',
-        '["railway"="rail"]',
-        '["railway"="subway"]',
-        '["railway"="light_rail"]',
-        '["railway"="tram"]',
-        '["highway"="motorway"]',
-        '["highway"="motorway_link"]',
-        '["highway"="trunk"]',
-        '["highway"="trunk_link"]',
         '["tourism"="attraction"]',
         '["tourism"="museum"]',
         '["tourism"="gallery"]',
@@ -504,16 +824,44 @@ def build_overpass_query(bounds):
     )
     query_lines = [
         "[out:json][timeout:25];",
-        "(",
     ]
-    for target_filter in target_filters:
-        query_lines.append(f"  nwr{target_filter}({bbox});")
-    query_lines.extend(
-        [
-            ");",
-            "out body geom;",
-        ]
-    )
+    if include_buildings and building_mode == AUTO_SCORE_BUILDING_MODE_CENTER:
+        # center mode は building だけ代表点を取得し、ポリゴン geometry 処理を避ける。
+        query_lines.extend(
+            [
+                "(",
+                f'  nwr["building"]({bbox});',
+                ");",
+                "out body center;",
+            ]
+        )
+    elif include_buildings:
+        # geometry mode は既存通り building も他地物と同じ出力形式で取得する。
+        geometry_filters = ('["building"]',) + geometry_filters
+
+    if lightweight_output:
+        query_lines.append("(")
+        for target_filter in lightweight_filters:
+            query_lines.append(f"  nwr{target_filter}({bbox});")
+        query_lines.extend(
+            [
+                ");",
+                "out body center;",
+            ]
+        )
+    else:
+        geometry_filters = geometry_filters + lightweight_filters
+
+    if geometry_filters:
+        query_lines.append("(")
+        for target_filter in geometry_filters:
+            query_lines.append(f"  nwr{target_filter}({bbox});")
+        query_lines.extend(
+            [
+                ");",
+                "out body geom;",
+            ]
+        )
 
     return "\n".join(query_lines)
 
@@ -523,13 +871,22 @@ def fetch_osm_features_from_overpass(
     *,
     endpoint="https://overpass-api.de/api/interpreter",
     timeout=25,
+    include_buildings=True,
+    building_mode=None,
+    lightweight_output=None,
 ):
     """Fetch OSM features from Overpass and convert them into map features.
 
     External API responses may be unavailable or malformed, so this function
     validates the response shape before the scoring pipeline uses it.
     """
-    query = build_overpass_query(bounds)
+    building_mode = normalize_auto_score_building_mode(building_mode)
+    query = build_overpass_query(
+        bounds,
+        include_buildings=include_buildings,
+        building_mode=building_mode,
+        lightweight_output=lightweight_output,
+    )
 
     if not isinstance(endpoint, str) or not endpoint.strip():
         raise ValueError("endpoint は空でない文字列で指定してください。")
@@ -550,6 +907,7 @@ def fetch_osm_features_from_overpass(
         "User-Agent": "portfolio-api-map-score/1.0",
     }
 
+    request_started_at = perf_counter()
     try:
         response = requests.post(
             endpoint,
@@ -558,21 +916,39 @@ def fetch_osm_features_from_overpass(
             timeout=timeout,
         )
     except Exception as exc:
+        logger.info(
+            "[auto_grid_create] step=overpass_fetch_failed elapsed_sec=%.3f "
+            "error=%s",
+            perf_counter() - request_started_at,
+            exc,
+        )
         raise ValueError("Overpass API へのリクエストに失敗しました。") from exc
 
     if response.status_code != 200:
-        response_text = str(getattr(response, "text", ""))[:300]
+        response_text = _response_text_preview(getattr(response, "text", ""))
         error_message = (
             "Overpass API から正常なレスポンスを取得できませんでした。"
             f" status_code={response.status_code}"
         )
         if response_text:
             error_message += f" response_text={response_text}"
+        logger.info(
+            "[auto_grid_create] step=overpass_fetch_failed elapsed_sec=%.3f "
+            "status_code=%s",
+            perf_counter() - request_started_at,
+            response.status_code,
+        )
         raise ValueError(error_message)
 
     try:
         response_data = response.json()
     except ValueError as exc:
+        logger.info(
+            "[auto_grid_create] step=overpass_fetch_failed elapsed_sec=%.3f "
+            "error=%s",
+            perf_counter() - request_started_at,
+            exc,
+        )
         raise ValueError("Overpass API レスポンスをJSONとして読めません。") from exc
 
     if not isinstance(response_data, dict):
@@ -582,10 +958,127 @@ def fetch_osm_features_from_overpass(
     if not isinstance(response_data["elements"], list):
         raise ValueError("Overpass API レスポンスの elements はリストである必要があります。")
 
+    fetch_elapsed_sec = perf_counter() - request_started_at
+    logger.info(
+        "[auto_grid_create] step=overpass_fetch features=%s elapsed_sec=%.3f",
+        len(response_data["elements"]),
+        fetch_elapsed_sec,
+    )
+
+    classify_started_at = perf_counter()
     try:
-        return parse_overpass_elements_to_map_features(response_data["elements"])
+        map_features = parse_overpass_elements_to_map_features(
+            response_data["elements"]
+        )
     except ValueError as exc:
         raise ValueError("Overpass API レスポンスの elements が不正です。") from exc
+    logger.info(
+        "[auto_grid_create] step=feature_classify_elapsed raw=%s valid=%s "
+        "skipped=%s elapsed_sec=%.3f",
+        len(response_data["elements"]),
+        len(map_features),
+        len(response_data["elements"]) - len(map_features),
+        perf_counter() - classify_started_at,
+    )
+
+    return map_features
+
+
+def fetch_osm_features_from_overpass_split(
+    bounds,
+    *,
+    endpoint="https://overpass-api.de/api/interpreter",
+    timeout=25,
+    include_buildings=True,
+    building_mode=None,
+    lightweight_output=None,
+    split_rows=2,
+    split_cols=2,
+    area_id=None,
+):
+    """Fetch OSM features by splitting one bbox into smaller Overpass requests."""
+    building_mode = normalize_auto_score_building_mode(building_mode)
+    split_rows = _normalize_positive_int(split_rows, "split_rows")
+    split_cols = _normalize_positive_int(split_cols, "split_cols")
+    split_bbox_list = split_bounds(bounds, rows=split_rows, cols=split_cols)
+    logger.info(
+        "[auto_grid_create] step=overpass_split_fetch area_id=%s enabled=True "
+        "split_rows=%s split_cols=%s parts=%s lightweight_output=%s",
+        area_id,
+        split_rows,
+        split_cols,
+        len(split_bbox_list),
+        lightweight_output,
+    )
+
+    split_started_at = perf_counter()
+    split_raw_features = []
+    for part_index, part_bounds in enumerate(split_bbox_list, start=1):
+        part_started_at = perf_counter()
+        try:
+            part_features = fetch_osm_features_from_overpass(
+                part_bounds,
+                endpoint=endpoint,
+                timeout=timeout,
+                include_buildings=include_buildings,
+                building_mode=building_mode,
+                lightweight_output=lightweight_output,
+            )
+        except ValueError as exc:
+            status_code = _status_code_from_error(exc)
+            logger.info(
+                "[auto_grid_create] step=overpass_split_part_failed area_id=%s "
+                "split_enabled=True split_rows=%s split_cols=%s part=%s/%s "
+                "elapsed_sec=%.3f status_code=%s fallback=split_fetch_failed",
+                area_id,
+                split_rows,
+                split_cols,
+                part_index,
+                len(split_bbox_list),
+                perf_counter() - part_started_at,
+                status_code,
+            )
+            logger.info(
+                "[auto_grid_create] step=overpass_split_fetch_failed area_id=%s "
+                "split_enabled=True split_rows=%s split_cols=%s "
+                "completed_parts=%s/%s failed_part=%s/%s elapsed_sec=%.3f "
+                "status_code=%s fallback=auto_score_fallback error=%s",
+                area_id,
+                split_rows,
+                split_cols,
+                part_index - 1,
+                len(split_bbox_list),
+                part_index,
+                len(split_bbox_list),
+                perf_counter() - split_started_at,
+                status_code,
+                exc,
+            )
+            raise
+
+        split_raw_features.extend(part_features)
+        logger.info(
+            "[auto_grid_create] step=overpass_split_part area_id=%s part=%s/%s "
+            "raw_features=%s elapsed_sec=%.3f",
+            area_id,
+            part_index,
+            len(split_bbox_list),
+            len(part_features),
+            perf_counter() - part_started_at,
+        )
+
+    deduped_features, duplicate_count = dedupe_map_features(split_raw_features)
+    logger.info(
+        "[auto_grid_create] step=overpass_split_dedupe area_id=%s "
+        "split_raw_features=%s deduped_features=%s duplicate_features=%s",
+        area_id,
+        len(split_raw_features),
+        len(deduped_features),
+        duplicate_count,
+    )
+    _log_map_feature_counts(deduped_features)
+
+    return deduped_features
 
 
 def build_feature_summaries_for_map_area_from_overpass(
@@ -598,6 +1091,8 @@ def build_feature_summaries_for_map_area_from_overpass(
     lng_step=None,
 ):
     """Build feature summaries for unsaved GridCells using Overpass map features."""
+    area_id = getattr(map_area, "id", None)
+    total_started_at = perf_counter()
     grid_cell_contexts = build_grid_cell_contexts_for_area(
         map_area,
         rows=rows,
@@ -605,11 +1100,94 @@ def build_feature_summaries_for_map_area_from_overpass(
         lat_step=lat_step,
         lng_step=lng_step,
     )
+    row_count = (
+        max(context["row_index"] for context in grid_cell_contexts) + 1
+        if grid_cell_contexts
+        else 0
+    )
+    col_count = (
+        max(context["col_index"] for context in grid_cell_contexts) + 1
+        if grid_cell_contexts
+        else 0
+    )
+    building_fetch_options = determine_auto_score_building_fetch_options(
+        map_area.grid_size_meters,
+        row_count,
+        col_count,
+    )
     overpass_bounds = build_overpass_bbox_for_map_area(
         map_area,
         padding_meters=padding_meters,
     )
-    map_features = fetch_osm_features_from_overpass(overpass_bounds)
+    logger.info(
+        "[auto_grid_create] step=overpass_query area_id=%s "
+        "include_buildings=%s building_mode=%s long_side_meters=%.0f "
+        "building_skip_reason=%s split_enabled=%s split_rows=%s split_cols=%s "
+        "lightweight_output=%s output_geometry_kinds=%s output_lightweight_kinds=%s",
+        area_id,
+        building_fetch_options["include_buildings"],
+        building_fetch_options["building_mode"],
+        building_fetch_options["long_side_meters"],
+        building_fetch_options["building_skip_reason"],
+        AUTO_SCORE_SPLIT_OVERPASS_FETCH,
+        AUTO_SCORE_OVERPASS_SPLIT_ROWS,
+        AUTO_SCORE_OVERPASS_SPLIT_COLS,
+        AUTO_SCORE_LIGHTWEIGHT_OVERPASS_OUTPUT,
+        (
+            "park,water,river,forest,coastline,railway,expressway"
+            if AUTO_SCORE_LIGHTWEIGHT_OVERPASS_OUTPUT
+            else "park,water,river,forest,coastline,railway,expressway,station,landmark"
+        ),
+        (
+            "building,station,landmark"
+            if AUTO_SCORE_LIGHTWEIGHT_OVERPASS_OUTPUT
+            else "building"
+        ),
+    )
+    fetch_started_at = perf_counter()
+    try:
+        if AUTO_SCORE_SPLIT_OVERPASS_FETCH:
+            map_features = fetch_osm_features_from_overpass_split(
+                overpass_bounds,
+                include_buildings=building_fetch_options["include_buildings"],
+                building_mode=building_fetch_options["building_mode"],
+                lightweight_output=AUTO_SCORE_LIGHTWEIGHT_OVERPASS_OUTPUT,
+                split_rows=AUTO_SCORE_OVERPASS_SPLIT_ROWS,
+                split_cols=AUTO_SCORE_OVERPASS_SPLIT_COLS,
+                area_id=area_id,
+            )
+        else:
+            map_features = fetch_osm_features_from_overpass(
+                overpass_bounds,
+                include_buildings=building_fetch_options["include_buildings"],
+                building_mode=building_fetch_options["building_mode"],
+                lightweight_output=AUTO_SCORE_LIGHTWEIGHT_OVERPASS_OUTPUT,
+            )
+    except ValueError as exc:
+        status_code = _status_code_from_error(exc)
+        logger.info(
+            "[auto_grid_create] step=overpass_fetch_failed area_id=%s "
+            "split_enabled=%s split_rows=%s split_cols=%s lightweight_output=%s "
+            "elapsed_sec=%.3f status_code=%s fallback=auto_score_fallback error=%s",
+            area_id,
+            AUTO_SCORE_SPLIT_OVERPASS_FETCH,
+            AUTO_SCORE_OVERPASS_SPLIT_ROWS,
+            AUTO_SCORE_OVERPASS_SPLIT_COLS,
+            AUTO_SCORE_LIGHTWEIGHT_OVERPASS_OUTPUT,
+            perf_counter() - fetch_started_at,
+            status_code,
+            exc,
+        )
+        raise
+    logger.info(
+        "[auto_grid_create] step=overpass_fetch area_id=%s features=%s "
+        "elapsed_sec=%.3f split_enabled=%s lightweight_output=%s",
+        area_id,
+        len(map_features),
+        perf_counter() - fetch_started_at,
+        AUTO_SCORE_SPLIT_OVERPASS_FETCH,
+        AUTO_SCORE_LIGHTWEIGHT_OVERPASS_OUTPUT,
+    )
     map_area_bounds = {
         "north": map_area.north,
         "south": map_area.south,
@@ -617,12 +1195,62 @@ def build_feature_summaries_for_map_area_from_overpass(
         "west": map_area.west,
     }
 
+    summary_started_at = perf_counter()
     feature_summaries = FeatureSummariesByPosition(
         build_feature_summaries_for_grid_cell_contexts(
             grid_cell_contexts,
             map_features,
             map_area_bounds=map_area_bounds,
         )
+    )
+    summary_elapsed_sec = perf_counter() - summary_started_at
+    avg_cell_ms = (
+        (summary_elapsed_sec / len(grid_cell_contexts)) * 1000
+        if grid_cell_contexts
+        else 0.0
+    )
+    logger.info(
+        "[auto_grid_create] step=feature_summary area_id=%s cells=%s "
+        "features=%s elapsed_sec=%.3f avg_cell_ms=%.2f",
+        area_id,
+        len(grid_cell_contexts),
+        len(map_features),
+        summary_elapsed_sec,
+        avg_cell_ms,
+    )
+    building_count_total = sum(
+        summary.get("building_count", 0) for summary in feature_summaries.values()
+    )
+    building_skipped_missing_position = 0
+    building_center_fallback_count = 0
+    for feature in map_features:
+        if not isinstance(feature, dict) or feature.get("kind") != "building":
+            continue
+        building_position = _building_position_for_grid_cell(
+            feature,
+            building_fetch_options["building_mode"],
+        )
+        if building_position is None:
+            building_skipped_missing_position += 1
+        elif (
+            building_fetch_options["building_mode"] == AUTO_SCORE_BUILDING_MODE_GEOMETRY
+            and building_position[0] == "center"
+        ):
+            building_center_fallback_count += 1
+
+    logger.info(
+        "[auto_grid_create] step=building_summary area_id=%s "
+        "building_mode=%s building_count_total=%s building_cells=%s "
+        "building_skipped_missing_position=%s building_center_fallback_count=%s",
+        area_id,
+        building_fetch_options["building_mode"],
+        building_count_total,
+        sum(
+            summary.get("building_count", 0) > 0
+            for summary in feature_summaries.values()
+        ),
+        building_skipped_missing_position,
+        building_center_fallback_count,
     )
     feature_summaries.river_summary = (
         summarize_river_feature_matches_for_grid_cell_contexts(
@@ -690,6 +1318,14 @@ def build_feature_summaries_for_map_area_from_overpass(
             map_features,
             grid_cell_contexts=grid_cell_contexts,
         )
+    )
+    logger.info(
+        "[auto_grid_create] step=feature_summary_total area_id=%s cells=%s "
+        "features=%s elapsed_sec=%.3f",
+        area_id,
+        len(grid_cell_contexts),
+        len(map_features),
+        perf_counter() - total_started_at,
     )
 
     return feature_summaries
@@ -963,6 +1599,69 @@ def _bounds_center(bounds):
     )
 
 
+def _map_feature_center_point(feature):
+    if not isinstance(feature, dict):
+        raise ValueError("feature は辞書で指定してください。")
+
+    center = feature.get("center")
+    if center is not None:
+        return _normalize_point(center)
+
+    center_lat, center_lng = _bounds_center(feature.get("bounds"))
+    return {"lat": center_lat, "lon": center_lng}
+
+
+def _map_feature_center_tuple(feature):
+    center = _map_feature_center_point(feature)
+    return (center["lat"], center["lon"])
+
+
+def _center_tuple_in_bounds(center_tuple, bounds):
+    return _point_in_bounds(
+        {"lat": center_tuple[0], "lon": center_tuple[1]},
+        bounds,
+    )
+
+
+def _feature_match_for_grid_cell_by_bounds_or_center(feature, grid_cell_bounds):
+    try:
+        feature_bounds = _normalize_bounds(feature.get("bounds"))
+    except ValueError as bounds_error:
+        try:
+            feature_center = _map_feature_center_tuple(feature)
+        except ValueError:
+            raise bounds_error
+
+        if _center_tuple_in_bounds(feature_center, grid_cell_bounds):
+            return ("center", feature_center, feature_center)
+        return None
+
+    if not feature_intersects_grid_cell(feature_bounds, grid_cell_bounds):
+        return None
+
+    return ("bounds", feature_bounds, _bounds_center(feature_bounds))
+
+
+def _building_position_for_grid_cell(feature, building_mode):
+    """Return how a building can be matched to a GridCell, or None if unusable."""
+    if not isinstance(feature, dict):
+        raise ValueError("feature は辞書で指定してください。")
+
+    if building_mode == AUTO_SCORE_BUILDING_MODE_CENTER:
+        try:
+            return ("center", _map_feature_center_point(feature))
+        except ValueError:
+            return None
+
+    try:
+        return ("bounds", _normalize_bounds(feature.get("bounds")))
+    except ValueError:
+        try:
+            return ("center", _map_feature_center_point(feature))
+        except ValueError:
+            return None
+
+
 def _distance_between_points_meters(first_point, second_point):
     first_lat, first_lng = first_point
     second_lat, second_lng = second_point
@@ -1023,7 +1722,7 @@ def _castle_centers_from_map_features(map_features):
         if classify_landmark_feature_type(feature) != "historic_castle":
             continue
 
-        castle_centers.append(_bounds_center(feature.get("bounds")))
+        castle_centers.append(_map_feature_center_tuple(feature))
 
     return castle_centers
 
@@ -1040,8 +1739,13 @@ def _scored_station_centers_from_map_features(map_features):
         if station_type not in STATION_PROXIMITY_SUMMARY_TYPES:
             continue
 
-        feature_bounds = _normalize_bounds(feature.get("bounds"))
-        station_entries.append((feature_bounds, _bounds_center(feature_bounds)))
+        try:
+            feature_bounds = _normalize_bounds(feature.get("bounds"))
+            feature_center = _bounds_center(feature_bounds)
+        except ValueError:
+            feature_bounds = None
+            feature_center = _map_feature_center_tuple(feature)
+        station_entries.append((feature_bounds, feature_center))
 
     return station_entries
 
@@ -1207,15 +1911,18 @@ def summarize_station_feature_matches_for_grid_cell_contexts(
         station_field = _station_summary_field(station_type)
         station_summary["station_features"] += 1
         station_summary[f"{station_field}_features"] += 1
-        feature_bounds = _normalize_bounds(feature.get("bounds"))
-        feature_center = _bounds_center(feature_bounds)
 
         for cell_key, grid_cell_bounds in grid_cell_entries:
-            if feature_intersects_grid_cell(feature_bounds, grid_cell_bounds):
-                cell_keys_by_type["station"].add(cell_key)
-                cell_keys_by_type[station_field].add(cell_key)
-                if station_type in SCORED_STATION_SUMMARY_TYPES:
-                    station_centers_by_cell[cell_key].append(feature_center)
+            feature_match = _feature_match_for_grid_cell_by_bounds_or_center(
+                feature,
+                grid_cell_bounds,
+            )
+            if feature_match is None:
+                continue
+            cell_keys_by_type["station"].add(cell_key)
+            cell_keys_by_type[station_field].add(cell_key)
+            if station_type in SCORED_STATION_SUMMARY_TYPES:
+                station_centers_by_cell[cell_key].append(feature_match[2])
 
     station_summary["station_cells"] = len(cell_keys_by_type["station"])
     for station_type in STATION_SUMMARY_KEYS:
@@ -1284,8 +1991,12 @@ def summarize_station_proximity_for_grid_cell_contexts(
     proximity_cell_keys = set()
     for cell_key, grid_cell_bounds in grid_cell_entries:
         is_station_body_cell = any(
-            feature_intersects_grid_cell(station_bounds, grid_cell_bounds)
-            for station_bounds, _station_center in station_entries
+            (
+                feature_intersects_grid_cell(station_bounds, grid_cell_bounds)
+                if station_bounds is not None
+                else _center_tuple_in_bounds(station_center, grid_cell_bounds)
+            )
+            for station_bounds, station_center in station_entries
         )
         if is_station_body_cell:
             station_body_cells.add(cell_key)
@@ -1352,10 +2063,15 @@ def summarize_landmark_feature_matches_for_grid_cell_contexts(
         landmark_field = _landmark_summary_field(landmark_type)
         landmark_summary["landmark_features"] += 1
         landmark_summary[f"{landmark_field}_features"] += 1
-        feature_bounds = _normalize_bounds(feature.get("bounds"))
 
         for cell_key, grid_cell_bounds in grid_cell_entries:
-            if feature_intersects_grid_cell(feature_bounds, grid_cell_bounds):
+            if (
+                _feature_match_for_grid_cell_by_bounds_or_center(
+                    feature,
+                    grid_cell_bounds,
+                )
+                is not None
+            ):
                 cell_keys_by_type["landmark"].add(cell_key)
                 cell_keys_by_type[landmark_field].add(cell_key)
 
@@ -2067,6 +2783,7 @@ def build_feature_summary_for_grid_cell(
         station_center for _station_bounds, station_center in station_proximity_entries
     ]
     castle_centers = _castle_centers_from_map_features(map_features)
+    building_mode = normalize_auto_score_building_mode()
 
     for feature in map_features:
         if not isinstance(feature, dict):
@@ -2088,13 +2805,52 @@ def build_feature_summary_for_grid_cell(
         }:
             continue
 
+        if feature_kind == "building":
+            building_position = _building_position_for_grid_cell(
+                feature,
+                building_mode,
+            )
+            if building_position is None:
+                continue
+            position_type, position_value = building_position
+            if position_type == "bounds":
+                if feature_intersects_grid_cell(position_value, grid_cell_bounds):
+                    feature_summary["building_count"] += 1
+                continue
+            if _point_in_bounds(position_value, grid_cell_bounds):
+                feature_summary["building_count"] += 1
+            continue
+
+        if feature_kind in {"station", "landmark"}:
+            feature_match = _feature_match_for_grid_cell_by_bounds_or_center(
+                feature,
+                grid_cell_bounds,
+            )
+            if feature_match is None:
+                continue
+
+            if feature_kind == "station":
+                station_type = classify_station_feature_type(feature)
+                if station_type == "unknown":
+                    feature_summary["unknown_station_count"] += 1
+                else:
+                    feature_summary[f"{station_type}_count"] += 1
+                    if station_type in SCORED_STATION_SUMMARY_TYPES:
+                        station_centers.append(feature_match[2])
+                continue
+
+            landmark_type = classify_landmark_feature_type(feature)
+            if landmark_type == "unknown":
+                feature_summary["unknown_landmark_count"] += 1
+            else:
+                feature_summary[f"{landmark_type}_count"] += 1
+            continue
+
         feature_bounds = _normalize_bounds(feature.get("bounds"))
         if not feature_intersects_grid_cell(feature_bounds, grid_cell_bounds):
             continue
 
-        if feature_kind == "building":
-            feature_summary["building_count"] += 1
-        elif feature_kind == "road":
+        if feature_kind == "road":
             # Very large road bounds are often coarse OSM geometry, so they are
             # ignored for road counts to avoid making every nearby cell busy.
             size_ratios = calculate_bounds_size_ratios(
@@ -2158,14 +2914,6 @@ def build_feature_summary_for_grid_cell(
         elif feature_kind == "railway":
             railway_type = classify_railway_feature_surface_type(feature)
             feature_summary[f"{railway_type}_railway_count"] += 1
-        elif feature_kind == "station":
-            station_type = classify_station_feature_type(feature)
-            if station_type == "unknown":
-                feature_summary["unknown_station_count"] += 1
-            else:
-                feature_summary[f"{station_type}_count"] += 1
-                if station_type in SCORED_STATION_SUMMARY_TYPES:
-                    station_centers.append(_bounds_center(feature_bounds))
         elif feature_kind == "expressway":
             # Expressway bounds can be much larger than the actual road segment;
             # counting only local-sized bounds keeps the score from spreading.
@@ -2179,12 +2927,6 @@ def build_feature_summary_for_grid_cell(
                 feature_summary["unknown_expressway_count"] += 1
             else:
                 feature_summary[f"{expressway_type}_count"] += 1
-        elif feature_kind == "landmark":
-            landmark_type = classify_landmark_feature_type(feature)
-            if landmark_type == "unknown":
-                feature_summary["unknown_landmark_count"] += 1
-            else:
-                feature_summary[f"{landmark_type}_count"] += 1
 
     feature_summary["station_cluster_count"] = _max_station_cluster_size(
         station_centers,
@@ -3061,6 +3803,7 @@ def generate_grid_cells_for_area(
     if map_area.grid_cells.exists():
         raise ValueError("この MapArea には既に GridCell があります。")
 
+    total_started_at = perf_counter()
     grid_cell_contexts = build_grid_cell_contexts_for_area(
         map_area,
         rows=rows,
@@ -3070,6 +3813,8 @@ def generate_grid_cells_for_area(
     )
 
     grid_cells = []
+    score_started_at = perf_counter()
+    initial_scores = []
     for grid_context in grid_cell_contexts:
         row_index = grid_context["row_index"]
         col_index = grid_context["col_index"]
@@ -3087,6 +3832,7 @@ def generate_grid_cells_for_area(
                 region_feature_level=map_area.region_feature_level,
                 grid_context=grid_context,
             )
+        initial_scores.append(initial_score)
 
         grid_cells.append(
             GridCell(
@@ -3106,7 +3852,178 @@ def generate_grid_cells_for_area(
             )
         )
 
-    return GridCell.objects.bulk_create(grid_cells)
+    score_elapsed_sec = perf_counter() - score_started_at
+    if feature_summaries_by_position:
+        logger.info(
+            "[auto_grid_create] step=auto_score area_id=%s cells=%s avg=%.2f "
+            "min=%.2f max=%.2f elapsed_sec=%.3f",
+            map_area.id,
+            len(grid_cells),
+            sum(initial_scores) / len(initial_scores) if initial_scores else 0.0,
+            min(initial_scores) if initial_scores else 0.0,
+            max(initial_scores) if initial_scores else 0.0,
+            score_elapsed_sec,
+        )
+
+    db_started_at = perf_counter()
+    created_grid_cells = GridCell.objects.bulk_create(grid_cells)
+    logger.info(
+        "[%s] step=gridcell_bulk_create area_id=%s cells=%s elapsed_sec=%.3f",
+        (
+            "auto_grid_create"
+            if feature_summaries_by_position
+            else "manual_grid_create"
+        ),
+        map_area.id,
+        len(created_grid_cells),
+        perf_counter() - db_started_at,
+    )
+    logger.info(
+        "[%s] step=gridcell_generate area_id=%s cells=%s elapsed_sec=%.3f",
+        (
+            "auto_grid_create"
+            if feature_summaries_by_position
+            else "manual_grid_create"
+        ),
+        map_area.id,
+        len(created_grid_cells),
+        perf_counter() - total_started_at,
+    )
+
+    return created_grid_cells
+
+
+def truncate_grid_generation_error_message(message, max_length=500):
+    """Return a short single-line error message for MapArea status fields."""
+    message = " ".join(str(message or "").split())
+    if len(message) <= max_length:
+        return message
+    return message[:max_length]
+
+
+def _save_grid_generation_status(map_area, status, *, finished_at=None, error_message=""):
+    map_area.grid_generation_status = status
+    map_area.grid_generation_finished_at = finished_at
+    map_area.grid_generation_error_message = truncate_grid_generation_error_message(
+        error_message
+    )
+    map_area.save(
+        update_fields=[
+            "grid_generation_status",
+            "grid_generation_finished_at",
+            "grid_generation_error_message",
+            "updated_at",
+        ]
+    )
+
+
+def run_grid_generation_for_area(
+    map_area,
+    *,
+    rows=None,
+    cols=None,
+    lat_step=None,
+    lng_step=None,
+    user_id=None,
+    auto_success_callback=None,
+    auto_failure_callback=None,
+):
+    """Run the current synchronous GridCell generation flow for one MapArea.
+
+    This is the high-level entry point that can later be called from a
+    management command or job worker. It still runs synchronously, but records
+    the final generation state on MapArea.
+    """
+    now = timezone.now()
+    map_area.grid_generation_status = MapArea.GridGenerationStatus.RUNNING
+    map_area.grid_generation_started_at = now
+    map_area.grid_generation_finished_at = None
+    map_area.grid_generation_error_message = ""
+    map_area.grid_generation_attempt_count = (
+        (map_area.grid_generation_attempt_count or 0) + 1
+    )
+    map_area.save(
+        update_fields=[
+            "grid_generation_status",
+            "grid_generation_started_at",
+            "grid_generation_finished_at",
+            "grid_generation_error_message",
+            "grid_generation_attempt_count",
+            "updated_at",
+        ]
+    )
+
+    grid_generation_options = {
+        "rows": rows,
+        "cols": cols,
+        "lat_step": lat_step,
+        "lng_step": lng_step,
+    }
+    feature_summaries_by_position = None
+    fallback_error = None
+
+    if map_area.initial_score_mode == MapArea.InitialScoreMode.AUTO:
+        try:
+            feature_summaries_by_position = (
+                build_feature_summaries_for_map_area_from_overpass(
+                    map_area,
+                    **grid_generation_options,
+                )
+            )
+            if auto_success_callback is not None:
+                auto_success_callback(
+                    map_area,
+                    user_id,
+                    feature_summaries_by_position,
+                )
+        except ValueError as error:
+            fallback_error = error
+            if auto_failure_callback is not None:
+                auto_failure_callback(map_area, user_id, error)
+            else:
+                logger.warning(
+                    "Overpass auto initial score failed; using fallback: "
+                    "area_id=%s user_id=%s error=%s",
+                    map_area.id,
+                    user_id,
+                    error,
+                )
+            feature_summaries_by_position = None
+
+    if feature_summaries_by_position is not None:
+        grid_generation_options["feature_summaries_by_position"] = (
+            feature_summaries_by_position
+        )
+
+    try:
+        created_grid_cells = generate_grid_cells_for_area(
+            map_area,
+            **grid_generation_options,
+        )
+    except ValueError as error:
+        _save_grid_generation_status(
+            map_area,
+            MapArea.GridGenerationStatus.FAILED,
+            finished_at=timezone.now(),
+            error_message=error,
+        )
+        raise
+
+    if fallback_error is not None:
+        _save_grid_generation_status(
+            map_area,
+            MapArea.GridGenerationStatus.FALLBACK_COMPLETED,
+            finished_at=timezone.now(),
+            error_message=fallback_error,
+        )
+    else:
+        _save_grid_generation_status(
+            map_area,
+            MapArea.GridGenerationStatus.COMPLETED,
+            finished_at=timezone.now(),
+        )
+
+    return created_grid_cells
 
 
 def update_grid_cell_score(grid_cell):

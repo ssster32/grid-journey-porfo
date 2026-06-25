@@ -165,6 +165,58 @@
     return `縦 ${area.map_grid_rows} × 横 ${area.map_grid_cols}`;
   }
 
+  function gridGenerationStatusLabel(area) {
+    const statusValue = area ? area.grid_generation_status : "";
+    if (statusValue === "fallback_completed") {
+      return "標準値で作成";
+    }
+    return textOrFallback(
+      area && area.grid_generation_status_display,
+      "作成状態不明"
+    );
+  }
+
+  function gridGenerationStatusNote(area) {
+    const statusValue = area ? area.grid_generation_status : "";
+    if (statusValue === "pending") {
+      return "自動設定の処理待ちです。";
+    }
+    if (statusValue === "running") {
+      return "地図データを取得中です。";
+    }
+    if (statusValue === "fallback_completed") {
+      return "自動設定に失敗したため標準値で作成しました。";
+    }
+    if (statusValue === "failed") {
+      return "メモグリッドの作成に失敗しました。";
+    }
+    return "";
+  }
+
+  function createGridGenerationStatus(area) {
+    const wrapper = document.createElement("div");
+    const statusValue = textOrFallback(
+      area && area.grid_generation_status,
+      "unknown"
+    );
+    wrapper.className = "map-area-generation-status";
+
+    const badge = document.createElement("span");
+    badge.className = `status-badge status-badge--${statusValue}`;
+    badge.textContent = gridGenerationStatusLabel(area);
+    wrapper.appendChild(badge);
+
+    const noteText = gridGenerationStatusNote(area);
+    if (noteText) {
+      const note = document.createElement("p");
+      note.className = "status-note";
+      note.textContent = noteText;
+      wrapper.appendChild(note);
+    }
+
+    return wrapper;
+  }
+
   function createMetaItem(label, value) {
     const item = document.createElement("li");
     const labelElement = document.createElement("span");
@@ -198,6 +250,7 @@
     badge.textContent = area.is_owner
       ? `自分の${displayType}`
       : displayType;
+    const gridGenerationStatus = createGridGenerationStatus(area);
 
     const metaList = document.createElement("ul");
     metaList.className = "map-area-meta-list";
@@ -241,7 +294,14 @@
       dangerArea.append(dangerNote, deleteButton);
     }
 
-    article.append(heading, badge, description, metaList, actionWrapper);
+    article.append(
+      heading,
+      badge,
+      gridGenerationStatus,
+      description,
+      metaList,
+      actionWrapper
+    );
     if (dangerArea) {
       article.appendChild(dangerArea);
     }

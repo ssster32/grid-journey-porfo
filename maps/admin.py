@@ -10,13 +10,19 @@ class MapAreaAdmin(admin.ModelAdmin):
     list_display = (
         "id",
         "name",
+        "grid_generation_status",
+        "grid_generation_attempt_count",
         "grid_size_meters",
         "source",
         "created_by",
         "created_at",
     )
     search_fields = ("name", "source")
-    list_filter = ("source", "created_at")
+    list_filter = ("grid_generation_status", "source", "created_at")
+    readonly_fields = (
+        "grid_generation_started_at",
+        "grid_generation_finished_at",
+    )
 
 
 @admin.register(MapAreaShare)

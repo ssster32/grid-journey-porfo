@@ -17,6 +17,13 @@ class MapArea(models.Model):
         NORMAL = 2, "普通の地域"
         DISTINCTIVE = 3, "特徴的な地域"
 
+    class GridGenerationStatus(models.TextChoices):
+        PENDING = "pending", "作成待ち"
+        RUNNING = "running", "作成中"
+        COMPLETED = "completed", "作成完了"
+        FALLBACK_COMPLETED = "fallback_completed", "標準値で作成完了"
+        FAILED = "failed", "作成失敗"
+
     name = models.CharField(max_length=100)
     description = models.TextField(blank=True)
     north = models.FloatField()
@@ -33,6 +40,15 @@ class MapArea(models.Model):
         choices=InitialScoreMode.choices,
         default=InitialScoreMode.MANUAL,
     )
+    grid_generation_status = models.CharField(
+        max_length=30,
+        choices=GridGenerationStatus.choices,
+        default=GridGenerationStatus.COMPLETED,
+    )
+    grid_generation_started_at = models.DateTimeField(blank=True, null=True)
+    grid_generation_finished_at = models.DateTimeField(blank=True, null=True)
+    grid_generation_error_message = models.TextField(blank=True)
+    grid_generation_attempt_count = models.PositiveIntegerField(default=0)
     source = models.CharField(max_length=100, blank=True)
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,

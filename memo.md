@@ -1,11 +1,13 @@
 # 引き継ぎメモ
 
-更新日: 2026-06-15
+更新日: 2026-06-25
 
 ## 概要
 
 - Django REST Framework を使った地図採点 API。
-- `MapArea` を作成すると、中心座標・行数・列数・セルサイズから地図範囲を計算し、`GridCell` を自動生成する。
+- `MapArea` を作成すると、中心座標・行数・列数・セルサイズから地図範囲を計算する。
+- `initial_score_mode=manual` では作成リクエスト内で `GridCell` を即時生成する。
+- `initial_score_mode=auto` では作成リクエスト内で `GridCell` を生成せず、`grid_generation_status=pending` で返す。生成待ちの MapArea は `process_pending_grid_areas` management command で後から処理する。
 - demo 画面では、メモグリッド一覧、Map Preview、選択中セルの採点、共有相手管理を確認できる。
 - Score Map は削除済み。現在のセル確認・選択・範囲選択は Map Preview に一本化している。
 - `initial_score_mode=auto` では、Overpass / OSM 由来の地物情報を使って初期スコアを計算し、`GridCell.auto_score_breakdown` に自動採点理由を保存する。
@@ -87,9 +89,11 @@ git diff --stat
   - Overpass helper は呼ばない。
   - `region_feature_level` を `initial_score` / `calculated_score` に入れる。
 - `auto`:
-  - Overpass / OSM feature summary から GridCell ごとの初期スコアを計算する。
-  - OSM 取得や feature summary 作成が失敗した場合は、MapArea 作成自体は止めず fallback する。
-  - fallback では従来どおり `region_feature_level` を使う。
+  - MapArea 作成時点では GridCell を即時生成しない。
+  - API レスポンス時点では `grid_generation_status=pending`、`grid_generation_attempt_count=0`。
+  - 後続の `process_pending_grid_areas` management command が `run_grid_generation_for_area(area)` を呼び、Overpass / OSM feature summary から GridCell ごとの初期スコアを計算する。
+  - OSM 取得や feature summary 作成が失敗した場合は、MapArea 自体は残し、コマンド処理時に fallback 生成を試す。
+  - fallback では従来どおり `region_feature_level` を使い、成功時は `grid_generation_status=fallback_completed` にする。
 
 ### score breakdown
 
@@ -152,6 +156,364 @@ git diff --stat
 
 - Overpass クエリ全文やレスポンス全文はログに出さない方針。
 - 緯度経度の詳細範囲や GridCell ごとの詳細 summary も原則ログに出さない。
+
+## 自動設定の負荷対策メモ（2026-06 追記）
+
+自動設定作成時の負荷を調べるため、`[auto_grid_create]` 系ログを追加した。
+
+主に次を分けて確認できる。
+
+- Overpass 取得時間と取得件数。
+- OSM element から map feature への分類件数。
+- `feature_counts` の building / road / park / river / water / forest / railway / station / expressway / landmark / coastline 件数。
+- GridCell ごとの feature_summary 作成時間と平均 ms。
+- 自動スコア計算の `avg` / `min` / `max`。
+- GridCell bulk create と全体の `total_sec`。
+- building 集計の `building_count_total` / `building_cells` / `building_skipped_missing_position` / `building_center_fallback_count`。
+
+目的は、どの処理が重いかを見える化し、今後の制限緩和や非同期化を検討しやすくすること。
+
+### road 取得除外
+
+通常 road は現在の自動初期スコアに寄与しないため、Overpass クエリから広い `nwr["highway"]` 取得を除外した。
+
+一方で、expressway は景観・文脈要素として使っているため、以下は取得対象として残している。
+
+- `motorway`
+- `motorway_link`
+- `trunk`
+- `trunk_link`
+
+検証時の一例:
+
+```text
+road除外前:
+features=7500
+road=4437
+feature_summary=0.983秒
+total=18.978秒
+
+road除外後:
+features=約3200
+road=0
+feature_summary=約0.4秒
+total=約9〜17秒程度
+```
+
+Overpass 取得時間は外部 API の混雑でも変わるため、常に短縮されるとは限らない。
+
+### building 取得と軽量化
+
+road 除外後は building が最も多い地物になった。
+building を完全除外すると取得件数は減るが、スコア傾向が大きく崩れたため、通常運用では採用しない方針。
+
+検証時の一例:
+
+```text
+buildingあり:
+auto_score avg=約1.73
+max=3.00
+
+buildingなし:
+auto_score avg=約0.33
+max=約1.14
+```
+
+そのため、building は取得しつつ、扱い方を `geometry` / `center` で比較できるようにした。
+
+- `geometry`: 従来に近く、bounds / geometry 由来の範囲で GridCell との関係を見る。
+- `center`: building の中心点を使って `building_count` に反映する。
+
+実装上、building の自動スコア寄与は主に `building_count` ベースで行われている。
+現在のデフォルトは `center` mode。
+検証時には、center mode でもスコア傾向はかなり維持できた。
+
+検証時の一例:
+
+```text
+geometry:
+feature_summary=約0.43秒
+auto_score avg=約1.73
+max=3.00
+
+center:
+feature_summary=約0.32秒
+auto_score avg=約1.68
+max=3.00
+```
+
+`AUTO_SCORE_SKIP_BUILDINGS_WHEN_LARGE` は比較用フラグとして残しているが、デフォルトでは無効。
+building 完全除外や広範囲除外を通常運用にする予定は、現時点ではない。
+
+### 不完全 building feature の安全化
+
+OSM / Overpass 由来の building には、bounds や center が欠けるケースがある。
+以前は不完全な building feature が混ざると、feature_summary 作成中に `bounds は辞書で指定してください。` で失敗し、自動設定全体が fallback に落ちることがあった。
+
+現在は building に限り、次のように扱う。
+
+- bounds があれば bounds 判定に使う。
+- bounds がなく center があれば center 判定に使う。
+- bounds も center もなければ、その building feature だけスキップする。
+
+building 以外の park / water / river / forest などは範囲や重なりが重要なため、不正 bounds の扱いは従来どおりエラー寄りにしている。
+
+### Overpass 分割取得の検証
+
+初回処理そのものの安定化を調べるため、Overpass 取得を 2×2 に分割する試験実装を追加した。
+
+実装上の整理:
+
+- `AUTO_SCORE_SPLIT_OVERPASS_FETCH` で通常取得 / 分割取得を切り替える。
+- デフォルトは `False` で、通常運用では従来どおり MapArea 全体を 1 回で取得する。
+- 分割取得時は MapArea 全体の bounds を 2×2 に分け、それぞれ Overpass に問い合わせる。
+- 境界付近や大きな地物は重複する可能性があるため、`source_type + source_id` で重複除去する。
+- 1 区画でも失敗した場合は、欠落した地物で自動採点しないように全体失敗扱いにし、既存の fallback に流す。
+
+実測では、分割取得 ON 時に Overpass API から `429` が返り、fallback に落ちるケースがあった。
+
+```text
+split_enabled=False:
+features=3073
+overpass_fetch=約6.9秒
+total=約7.4秒
+
+split_enabled=True:
+status_code=429
+overpass_fetch_failed=約31.8秒
+fallback
+```
+
+このため、現時点では Overpass 分割取得は本採用しない。
+`AUTO_SCORE_SPLIT_OVERPASS_FETCH=False` のまま、比較用機能として残す。
+
+次の候補は、リクエスト回数を増やす方向ではなく、Overpass の出力形式や取得対象をさらに見直すこと。
+ただし、road 除外を戻す、expressway 取得を削る、building mode やスコア重みを変える、といった変更は別タスクとして慎重に扱う。
+
+### Overpass 軽量出力の検証
+
+リクエスト回数を増やさずに 1 回の Overpass レスポンスを軽くできるかを調べるため、出力形式の軽量化を試験実装した。
+
+実装上の整理:
+
+- `AUTO_SCORE_LIGHTWEIGHT_OVERPASS_OUTPUT` を追加した。
+- デフォルトは `False` で、通常運用では既存に近い出力形式を使う。
+- 軽量出力 ON 時は、`station` / `landmark` を `out body center;` 側へ分離する。
+- `park` / `water` / `river` / `forest` / `coastline` は coverage や重なりがスコアに影響するため `geom` を維持する。
+- `railway` / `expressway` は線形地物で center 化するとセルとの関係が不自然になる可能性があるため、今回は `geom` を維持する。
+- building は既存の `AUTO_SCORE_BUILDING_MODE_CENTER` を維持する。
+
+実測では、軽量出力 ON / OFF で feature_counts は一致し、auto_score avg もほぼ同じだった。
+一方で、処理時間は Overpass 側の混雑や応答時間のブレが大きく、安定した高速化とは判断しない。
+
+検証時の一例:
+
+```text
+lightweight=True
+t1: total_sec=16.256 / overpass_fetch=15.795 / auto_score avg=2.09
+t2: total_sec=8.770 / overpass_fetch=8.309 / auto_score avg=2.09
+
+lightweight=False
+f1: total_sec=11.537 / overpass_fetch=11.083 / auto_score avg=2.10
+f2: total_sec=10.011 / overpass_fetch=9.555 / auto_score avg=2.10
+```
+
+平均すると、`lightweight=True` の total_sec は約 12.51 秒、`lightweight=False` の total_sec は約 10.77 秒だった。
+今回の追加計測では、軽量出力 ON の方が安定して速いとは言えない。
+ただし、feature_counts とスコア傾向は維持できている。
+
+このため、現時点では Overpass 軽量出力は本採用しない。
+`AUTO_SCORE_LIGHTWEIGHT_OVERPASS_OUTPUT=False` のまま、比較用機能として残す。
+
+分割取得は 429 に当たりやすいためデフォルト無効、軽量出力は速度改善が安定して確認できていないためデフォルト無効、という扱いで分けて考える。
+次の候補は、非同期化設計、または取得対象・出力形式のさらなる調査。
+
+### 自動設定作成の非同期化試験実装
+
+目的:
+
+- `initial_score_mode=auto` の作成時に、Overpass 取得と feature summary 作成でリクエストが長時間待たされる問題を分離する。
+- MapArea 作成自体は早く返し、GridCell 生成の進行状況を API と画面で扱えるようにする。
+- いきなり Celery / RQ / Redis を導入せず、初心者が追いやすい段階に分ける。
+
+現在の作成フロー:
+
+- `/maps/new/` の画面 JS は `POST /api/maps/areas/` を呼び、成功後に `/maps/<area_id>/` へ移動する。
+- `MapAreaSerializer.validate()` が中心座標、行数、列数、1マスの大きさから `north/south/east/west` と `center_grid_options` を作る。
+- `initial_score_mode=manual` の場合:
+  - `MapAreaListCreateView.post()` が MapArea を保存する。
+  - 同じリクエスト内で `run_grid_generation_for_area(area)` を呼ぶ。
+  - `run_grid_generation_for_area()` は `running` に更新してから GridCell を生成する。
+  - 成功時は `grid_generation_status=completed`、`grid_generation_attempt_count=1` になってから `201 Created` を返す。
+  - レスポンス後すぐに `GET /api/maps/areas/<area_id>/grids/` で GridCell を取得できる。
+- `initial_score_mode=auto` の場合:
+  - `MapAreaListCreateView.post()` が MapArea を保存する。
+  - 作成リクエスト内では GridCell を生成しない。
+  - `grid_generation_status=pending`、開始/完了時刻は `null`、error message は空文字、attempt count は `0` で `201 Created` を返す。
+  - auto 作成直後は GridCell が存在しないため、GridCell 一覧 API は空になる場合がある。
+  - 後から `python manage.py process_pending_grid_areas` を実行し、pending の MapArea を生成処理する。
+  - コマンド処理では `run_grid_generation_for_area(area)` が呼ばれ、成功時は `completed`、Overpass 失敗から fallback 生成できた場合は `fallback_completed`、GridCell 生成自体が失敗した場合は `failed` になる。
+
+状態管理:
+
+- field 名は `auto_score_status` ではなく `grid_generation_status` を採用済み。
+- 理由は、待っている対象が「自動採点」だけでなく、詳細画面表示に必要な GridCell 作成全体だから。
+- 手動設定でも GridCell 作成は必要なので、共通状態として扱う。
+
+MapArea の状態管理 field:
+
+- `grid_generation_status`
+- `grid_generation_started_at`
+- `grid_generation_finished_at`
+- `grid_generation_error_message`
+- `grid_generation_attempt_count`
+
+補足:
+
+- `grid_generation_status` は API レスポンスにも read-only で返す。
+- `grid_generation_started_at` / `grid_generation_finished_at` は生成開始・完了時刻。
+- `grid_generation_error_message` は fallback / failed 時の短い内部エラー。ユーザーに長い外部 API レスポンス全文を見せる用途ではない。
+- `grid_generation_attempt_count` は生成処理の試行回数。
+
+status 値:
+
+- `pending`: MapArea は保存済みだが、GridCell 生成はまだ始まっていない。
+- `running`: GridCell 生成中。auto では Overpass 取得や feature summary 作成もここに含む。
+- `completed`: 期待どおり GridCell 生成が完了した。
+- `fallback_completed`: auto 作成は失敗したが、手動設定相当の fallback で GridCell 生成は完了した。
+- `failed`: fallback も含めて GridCell を作れなかった。詳細画面で採点できない状態。
+
+`not_required` は初期実装では使わない方がよい。
+このアプリでは MapArea の通常利用に GridCell が必要なので、「GridCell 生成が不要」という状態が今の仕様にほぼ存在しないため。
+既存データや手動設定は `completed` に寄せる方が、画面側の分岐が少ない。
+
+既存データへの移行方針:
+
+- migration の default は `completed` が安全。
+- 既存 MapArea の多くは、現在の同期処理で GridCell 作成済みの前提だから。
+- GridCell が 0 件の既存 MapArea を厳密に洗い出す処理は、別タスクの data migration または管理コマンドで検討する。
+
+API レスポンスの設計:
+
+- `MapAreaSerializer` / `MapAreaListSerializer` / detail API に `grid_generation_status` を read-only で含める。
+- 一覧では `grid_cells_count` または既存の `map_grid_rows` / `map_grid_cols` と合わせて、生成済みかを判断できるようにする。
+- 現在の `GET /api/maps/areas/<area_id>/grids/` は、MapArea に GridCell がまだ無い場合も `200 OK` で `grids: []` を返す。
+- pending / running の状態自体は MapArea 一覧 API / 詳細 API で確認する。
+- `grid_generation_error_message` はユーザーに見せてもよい短い文にし、Overpass の詳細レスポンスや内部例外全文はログ側に残す。
+
+画面設計:
+
+- 一覧画面:
+  - GridCell 生成状態バッジを表示する。
+  - `pending` / `running` / `completed` / `fallback_completed` / `failed` を区別する。
+  - `pending` / `running` / `fallback_completed` / `failed` は短い補足文も表示する。
+- 詳細画面:
+  - `pending` / `running` / `failed` では基本情報と状態メッセージ、再読み込みリンクを表示する。
+  - `pending` / `running` / `failed` では GridCell 地図、採点フォーム、一括採点 UI、共有/削除 UI、詳細画面 JS を表示しない。
+  - `fallback_completed` では地図と採点を使えるようにしつつ、自動設定ではなく fallback で作られたことを表示する。
+  - `completed` は通常表示する。
+
+management command:
+
+```bash
+python manage.py process_pending_grid_areas
+python manage.py process_pending_grid_areas --dry-run
+python manage.py process_pending_grid_areas --limit 1
+```
+
+- これは HTTP API ではなく、Django の運用・開発用 management command。
+- `pending` の MapArea を `created_at`, `id` 順に取得する。
+- 対象ごとに `run_grid_generation_for_area(area)` を呼ぶ。
+- 1件失敗しても残りの pending MapArea 処理を続行する。
+- `--dry-run` は対象表示のみで生成処理は行わない。
+- `--limit` は処理件数を制限する。
+- 現状は手動実行、または将来のスケジューラ実行を想定している。
+
+現時点で未実装のこと:
+
+- Celery / RQ / Redis は未導入。
+- 自動で management command を起動する仕組みは未実装。
+- 自動ポーリングは未実装。
+- 本番スケジューラ設定は未実装。
+- 再試行ボタンは未実装。
+- 現状は完全な非同期ジョブキューではなく、management command を使った試験的な遅延実行。
+
+注意点:
+
+- auto 作成直後は GridCell が存在しない。
+- pending のままでは詳細画面に地図は出ない。
+- GridCell 生成には management command の実行が必要。
+- `fallback_completed` は「自動設定に成功した」状態ではないが、GridCell は生成済みなので採点は可能。
+
+fallback 方針:
+
+- 現在は `fallback_completed` を採用している。
+- 理由は、Overpass が混雑していてもユーザーはメモグリッド自体を使い始められるため。
+- ただし、fallback は「自動設定に成功した」とは扱わない。状態と画面表示で区別する。
+- fallback 生成に失敗した場合だけ `failed` にする。
+
+再試行の扱い:
+
+- 初期実装では自動再試行ボタンや再試行 API は作らない。
+- `grid_generation_attempt_count` は将来の再試行に備えて持っておく。
+- 再試行を入れる場合は、既存 GridCell がある `fallback_completed` を消して作り直すのか、別 MapArea として作るのかを先に決める必要がある。
+- ユーザー採点済み GridCell を消す可能性があるため、再生成は削除と同じくらい慎重に扱う。
+
+段階的な実装状況:
+
+1. `MapArea` に `grid_generation_status` などの状態 field を追加済み。
+2. serializer / list / detail API に状態 field を read-only で追加済み。
+3. GridCell 生成処理を `run_grid_generation_for_area(area)` に切り出し済み。
+4. manual 作成では同期のまま新 service を呼び、状態を記録済み。
+5. pending MapArea を処理する management command を追加済み。
+6. auto 作成時だけ `pending` で返し、management command が後から生成する流れに切り替え済み。
+7. 一覧画面と詳細画面に `pending` / `running` / `fallback_completed` / `failed` 表示を追加済み。
+8. Celery / RQ / Redis は未導入。必要性と運用方法が固まってから検討する。
+
+方式比較:
+
+- A: service 切り出しだけの疑似非同期
+  - 既存動作を保ったまま整理できる。
+  - 状態遷移のテストを書きやすい。
+  - ただし、リクエスト待ち時間そのものはまだ短くならない。
+- B: management command で pending を処理
+  - Celery なしで非同期に近い運用ができる。
+  - Render などでは別プロセスや手動実行の設計が必要。
+  - 初心者が処理の入口を追いやすい。
+- C: Celery / RQ
+  - 本格的な job queue と retry が扱える。
+  - Redis などの追加依存と運用が必要。
+  - 現段階では導入コストが大きい。
+
+今後の検討:
+
+- A の service 切り出しと状態 field は実装済み。
+- B の management command による pending 処理も試験実装済み。
+- C の Celery / RQ は、非同期処理の必要性と運用方法が固まってから検討する。
+- 次に本格運用する場合は、スケジューラ設定、失敗時の再試行、再生成時の既存 GridCell / 採点データの扱いを先に決める。
+
+### 現時点の方針
+
+採用済み・採用候補:
+
+- 通常 road 取得除外。
+- expressway 取得維持。
+- 不完全 building feature の安全化。
+- building center mode は本採用候補として検証中。現在のデフォルトは center。
+
+保留:
+
+- building 完全除外。
+- building 広範囲除外のデフォルト有効化。
+- Overpass 取得分割。
+- Overpass 軽量出力の本採用。
+- 2km 制限解除。
+- キャッシュ。
+- Celery / RQ / Redis による本格的な非同期ジョブキュー。
+
+現在は自動設定の安定性を優先して、画面側で広範囲作成を制限している。
+road 取得除外や building 処理の軽量化は、将来的に制限緩和できるかを検証するための負荷対策であり、現時点で 2km 制限を解除したわけではない。
+非同期化については、management command を使った試験的な遅延実行まで実装済みで、完全なジョブキュー化は未実装。
 
 ## テスト状況
 
