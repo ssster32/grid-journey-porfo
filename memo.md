@@ -340,6 +340,9 @@ f2: total_sec=10.011 / overpass_fetch=9.555 / auto_score avg=2.10
 
 - `/maps/new/` の画面 JS は `POST /api/maps/areas/` を呼び、成功後に `/maps/<area_id>/` へ移動する。
 - `MapAreaSerializer.validate()` が中心座標、行数、列数、1マスの大きさから `north/south/east/west` と `center_grid_options` を作る。
+- 作成入力の `rows` / `cols` は、MapArea の `map_grid_rows` / `map_grid_cols` に保存する。
+- 以前は GridCell をすぐ生成していたため、`rows` / `cols` が serializer の `write_only` 入力でも問題が見えにくかった。
+- auto pending 化後は、後続の `process_pending_grid_areas` で作成時の行数・列数が必要になるため、MapArea 側に保存する。
 - `initial_score_mode=manual` の場合:
   - `MapAreaListCreateView.post()` が MapArea を保存する。
   - 同じリクエスト内で `run_grid_generation_for_area(area)` を呼ぶ。
@@ -362,6 +365,8 @@ f2: total_sec=10.011 / overpass_fetch=9.555 / auto_score avg=2.10
 
 MapArea の状態管理 field:
 
+- `map_grid_rows`
+- `map_grid_cols`
 - `grid_generation_status`
 - `grid_generation_started_at`
 - `grid_generation_finished_at`
@@ -370,6 +375,8 @@ MapArea の状態管理 field:
 
 補足:
 
+- `map_grid_rows` / `map_grid_cols` は作成時に指定された行数・列数。GridCell 生成前でも API レスポンスに返す。
+- `rows` / `cols` は作成入力専用で、API レスポンスでは `map_grid_rows` / `map_grid_cols` を使う。
 - `grid_generation_status` は API レスポンスにも read-only で返す。
 - `grid_generation_started_at` / `grid_generation_finished_at` は生成開始・完了時刻。
 - `grid_generation_error_message` は fallback / failed 時の短い内部エラー。ユーザーに長い外部 API レスポンス全文を見せる用途ではない。
@@ -396,7 +403,7 @@ status 値:
 API レスポンスの設計:
 
 - `MapAreaSerializer` / `MapAreaListSerializer` / detail API に `grid_generation_status` を read-only で含める。
-- 一覧では `grid_cells_count` または既存の `map_grid_rows` / `map_grid_cols` と合わせて、生成済みかを判断できるようにする。
+- `map_grid_rows` / `map_grid_cols` も read-only で返し、pending 中でも作成時の行数・列数を確認できるようにする。
 - 現在の `GET /api/maps/areas/<area_id>/grids/` は、MapArea に GridCell がまだ無い場合も `200 OK` で `grids: []` を返す。
 - pending / running の状態自体は MapArea 一覧 API / 詳細 API で確認する。
 - `grid_generation_error_message` はユーザーに見せてもよい短い文にし、Overpass の詳細レスポンスや内部例外全文はログ側に残す。
@@ -405,6 +412,7 @@ API レスポンスの設計:
 
 - 一覧画面:
   - GridCell 生成状態バッジを表示する。
+  - `map_grid_rows` / `map_grid_cols` を使い、pending 中でもマス数を表示する。
   - `pending` / `running` / `completed` / `fallback_completed` / `failed` を区別する。
   - `pending` / `running` / `fallback_completed` / `failed` は短い補足文も表示する。
 - 詳細画面:
@@ -424,6 +432,7 @@ python manage.py process_pending_grid_areas --limit 1
 - これは HTTP API ではなく、Django の運用・開発用 management command。
 - `pending` の MapArea を `created_at`, `id` 順に取得する。
 - 対象ごとに `run_grid_generation_for_area(area)` を呼ぶ。
+- GridCell 生成時は MapArea に保存済みの `map_grid_rows` / `map_grid_cols` を使う。
 - 1件失敗しても残りの pending MapArea 処理を続行する。
 - `--dry-run` は対象表示のみで生成処理は行わない。
 - `--limit` は処理件数を制限する。
@@ -658,8 +667,8 @@ demo 画面で確認していた主要機能は、本サイト側の画面へか
 - `/maps/`
   - 0 件時に `/maps/new/` への導線を表示する。
   - 一覧取得失敗時に再読み込みボタンを表示し、既存の一覧取得処理を再実行できる。
-  - 一覧カードのメタ情報に `マスの数` を追加済み。`1マスの大きさ` の次に `マスの数: 縦 10 × 横 10` 形式で表示し、値がない場合は `未設定`。
-  - 一覧 API レスポンスに `map_grid_rows` / `map_grid_cols` を追加済み。`Max("grid_cells__row_index")` / `Max("grid_cells__col_index")` を `annotate()` し、それぞれ +1 して算出することで、MapArea ごとの個別集計による N+1 を避けている。
+  - 一覧カードのメタ情報に `マスの数` を追加済み。`1マスの大きさ` の次に `マスの数: 縦 10 × 横 10` 形式で表示する。
+  - 一覧 API レスポンスに `map_grid_rows` / `map_grid_cols` を追加済み。現在は MapArea に保存した作成時の行数・列数を返すため、pending 中で GridCell がなくても表示できる。
   - 一覧 API レスポンス変更に合わせて `API_SPEC.md` も更新済み。
   - 通常メモグリッドカードは青系の枠線で表示する。
   - 共有メモグリッドカードは緑系の枠線、薄い緑背景、緑系バッジで表示する。
@@ -691,8 +700,8 @@ demo 画面で確認していた主要機能は、本サイト側の画面へか
   - 説明文は常時表示する。
   - `種別`、`作成者`、`1マスの大きさ`、`マスの数`、`初期スコア設定`、`地域特徴レベル`、`作成日時` は `詳細情報` の折りたたみ欄に入れている。
   - `マスの数` は `縦 10 × 横 10` 形式。
-  - `MapArea` に `rows / cols` は保存されていないため、詳細画面では `area.grid_cells` の `row_index` / `col_index` 最大値 + 1 から `map_grid_rows` / `map_grid_cols` を算出している。
-  - GridCell が無い場合、`マスの数` は `未設定`。
+  - `MapArea` に保存した `map_grid_rows` / `map_grid_cols` を使って表示する。
+  - pending / running / failed で GridCell が無い場合も、作成時の `マスの数` は表示できる。
 - Leaflet Map Preview
   - 詳細画面は地図プレビュー中心の UI に整理済み。
   - PC 幅では左に地図プレビュー、右に `選択中のマス` と `採点フォーム` を配置する。
@@ -867,9 +876,9 @@ demo 画面で確認していた主要機能は、本サイト側の画面へか
 
 - 一覧カードのサービス名・説明文を `Grid Journey` に合わせた。
 - 一覧カードに `マスの数: 縦 n × 横 n` を表示するようにした。
-- GridCell がない場合は `未設定` と表示する。
 - 一覧 API レスポンスに `map_grid_rows` / `map_grid_cols` を追加した。
-- `Max("grid_cells__row_index")` / `Max("grid_cells__col_index")` を `annotate()` し、それぞれ +1 して算出することで N+1 を避けている。
+- `map_grid_rows` / `map_grid_cols` は MapArea に保存した作成時の行数・列数を返す。
+- pending 中で GridCell がまだ無い場合も、一覧画面は保存済みの行数・列数を表示できる。
 - APIレスポンス変更に合わせて `API_SPEC.md` も更新済み。
 - 自動設定時の地域特徴レベルは `-` と表示するようにした。
 - 通常メモグリッドカードは、はっきりめの青い枠線にした。

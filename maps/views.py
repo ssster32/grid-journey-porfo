@@ -6,7 +6,7 @@ from django.contrib.auth.forms import UserCreationForm
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.contrib.staticfiles import finders
 from django.db import transaction
-from django.db.models import Max, Prefetch, Q
+from django.db.models import Prefetch, Q
 from django.http import Http404, HttpResponse
 from django.urls import reverse_lazy
 from django.views.generic import CreateView, TemplateView
@@ -1047,20 +1047,6 @@ class MapAreaPageDetailView(LoginRequiredMixin, TemplateView):
             created_by_label = area.created_by.username
         else:
             created_by_label = "不明"
-        grid_size = area.grid_cells.aggregate(
-            max_row_index=Max("row_index"),
-            max_col_index=Max("col_index"),
-        )
-        map_grid_rows = (
-            grid_size["max_row_index"] + 1
-            if grid_size["max_row_index"] is not None
-            else None
-        )
-        map_grid_cols = (
-            grid_size["max_col_index"] + 1
-            if grid_size["max_col_index"] is not None
-            else None
-        )
         is_grid_generation_waiting = area.grid_generation_status in [
             MapArea.GridGenerationStatus.PENDING,
             MapArea.GridGenerationStatus.RUNNING,
@@ -1077,8 +1063,8 @@ class MapAreaPageDetailView(LoginRequiredMixin, TemplateView):
         context["is_owner"] = is_owner
         context["display_type"] = "メモグリッド" if is_owner else "共有メモグリッド"
         context["created_by_label"] = created_by_label
-        context["map_grid_rows"] = map_grid_rows
-        context["map_grid_cols"] = map_grid_cols
+        context["map_grid_rows"] = area.map_grid_rows
+        context["map_grid_cols"] = area.map_grid_cols
         context["is_grid_generation_waiting"] = is_grid_generation_waiting
         context["is_grid_generation_failed"] = is_grid_generation_failed
         context["is_grid_generation_fallback_completed"] = (
@@ -1119,10 +1105,6 @@ class MapAreaListCreateView(APIView):
                 Q(created_by=request.user) | Q(id__in=shared_area_ids)
             )
             .distinct()
-            .annotate(
-                max_grid_row_index=Max("grid_cells__row_index"),
-                max_grid_col_index=Max("grid_cells__col_index"),
-            )
             .order_by("name", "id")
         )
 

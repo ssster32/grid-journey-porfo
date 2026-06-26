@@ -31,6 +31,8 @@ class MapArea(models.Model):
     east = models.FloatField()
     west = models.FloatField()
     grid_size_meters = models.PositiveIntegerField()
+    map_grid_rows = models.PositiveIntegerField(default=1)
+    map_grid_cols = models.PositiveIntegerField(default=1)
     region_feature_level = models.PositiveSmallIntegerField(
         choices=RegionFeatureLevel.choices,
         default=RegionFeatureLevel.INITIAL,

@@ -3742,10 +3742,24 @@ def build_grid_cell_contexts_for_area(
         row_count = rows
         col_count = cols
     else:
-        lat_step = map_area.grid_size_meters / METERS_PER_DEGREE
-        lng_step = map_area.grid_size_meters / METERS_PER_DEGREE
-        row_count = ceil((map_area.north - map_area.south) / lat_step)
-        col_count = ceil((map_area.east - map_area.west) / lng_step)
+        saved_rows = getattr(map_area, "map_grid_rows", None)
+        saved_cols = getattr(map_area, "map_grid_cols", None)
+        if saved_rows is not None and saved_cols is not None:
+            _validate_positive_grid_dimensions(
+                map_area.grid_size_meters,
+                saved_rows,
+                saved_cols,
+            )
+            row_count = saved_rows
+            col_count = saved_cols
+            lat_step = (map_area.north - map_area.south) / row_count
+            lng_step = (map_area.east - map_area.west) / col_count
+            uses_explicit_grid_size = True
+        else:
+            lat_step = map_area.grid_size_meters / METERS_PER_DEGREE
+            lng_step = map_area.grid_size_meters / METERS_PER_DEGREE
+            row_count = ceil((map_area.north - map_area.south) / lat_step)
+            col_count = ceil((map_area.east - map_area.west) / lng_step)
 
     grid_cell_contexts = []
     for row_index in range(row_count):

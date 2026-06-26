@@ -279,6 +279,19 @@ class MapAreaModelTests(TestCase):
         self.assertEqual(area.grid_generation_error_message, "")
         self.assertEqual(area.grid_generation_attempt_count, 0)
 
+    def test_map_grid_dimensions_have_safe_defaults(self):
+        area = MapArea.objects.create(
+            name="Default Grid Dimensions Area",
+            north=35.7,
+            south=35.6,
+            east=139.8,
+            west=139.7,
+            grid_size_meters=500,
+        )
+
+        self.assertEqual(area.map_grid_rows, 1)
+        self.assertEqual(area.map_grid_cols, 1)
+
     def test_grid_generation_status_choices_include_expected_states(self):
         choice_values = {
             choice.value for choice in MapArea.GridGenerationStatus
@@ -340,6 +353,8 @@ class MapAreaSerializerTests(TestCase):
         self.assertNotIn("center_lng", serializer.validated_data)
         self.assertNotIn("rows", serializer.validated_data)
         self.assertNotIn("cols", serializer.validated_data)
+        self.assertEqual(serializer.validated_data["map_grid_rows"], 6)
+        self.assertEqual(serializer.validated_data["map_grid_cols"], 8)
 
     def test_center_based_map_area_sets_center_grid_options(self):
         serializer = MapAreaSerializer(data=self.center_payload())
@@ -358,8 +373,23 @@ class MapAreaSerializerTests(TestCase):
         self.assertNotIn("center_lng", serializer.data)
         self.assertNotIn("rows", serializer.data)
         self.assertNotIn("cols", serializer.data)
+        self.assertEqual(serializer.data["map_grid_rows"], 6)
+        self.assertEqual(serializer.data["map_grid_cols"], 8)
         self.assertIn("region_feature_level", serializer.data)
         self.assertIn("initial_score_mode", serializer.data)
+
+    def test_map_grid_dimensions_input_is_ignored(self):
+        serializer = MapAreaSerializer(
+            data={
+                **self.center_payload(),
+                "map_grid_rows": 99,
+                "map_grid_cols": 99,
+            }
+        )
+
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        self.assertEqual(serializer.validated_data["map_grid_rows"], 6)
+        self.assertEqual(serializer.validated_data["map_grid_cols"], 8)
 
     def test_grid_generation_fields_are_read_only(self):
         serializer = MapAreaSerializer(
@@ -854,6 +884,8 @@ class GenerateGridCellsForAreaTests(TestCase):
             east=1.0,
             west=0.85,
             grid_size_meters=11100,
+            map_grid_rows=2,
+            map_grid_cols=2,
             created_by=self.user,
         )
 
@@ -872,6 +904,8 @@ class GenerateGridCellsForAreaTests(TestCase):
             east=bounds["east"],
             west=bounds["west"],
             grid_size_meters=500,
+            map_grid_rows=bounds["rows"],
+            map_grid_cols=bounds["cols"],
             created_by=self.user,
         )
 
@@ -923,6 +957,46 @@ class GenerateGridCellsForAreaTests(TestCase):
         self.assertIsNotNone(self.area.grid_generation_finished_at)
         self.assertEqual(self.area.grid_generation_error_message, "")
         self.assertEqual(self.area.grid_generation_attempt_count, 1)
+
+    def test_run_grid_generation_for_area_uses_saved_map_grid_dimensions(self):
+        bounds = calculate_bounds_from_center(
+            center_lat=35.695,
+            center_lng=139.795,
+            grid_size_meters=300,
+            rows=9,
+            cols=9,
+        )
+        area = MapArea.objects.create(
+            name="Saved Dimensions Area",
+            north=bounds["north"],
+            south=bounds["south"],
+            east=bounds["east"],
+            west=bounds["west"],
+            grid_size_meters=300,
+            map_grid_rows=9,
+            map_grid_cols=9,
+            region_feature_level=2,
+            created_by=self.user,
+        )
+
+        grid_cells = run_grid_generation_for_area(area)
+
+        self.assertEqual(len(grid_cells), 81)
+        self.assertEqual(GridCell.objects.filter(area=area).count(), 81)
+        self.assertEqual(
+            GridCell.objects.filter(area=area)
+            .order_by("-row_index")
+            .first()
+            .row_index,
+            8,
+        )
+        self.assertEqual(
+            GridCell.objects.filter(area=area)
+            .order_by("-col_index")
+            .first()
+            .col_index,
+            8,
+        )
 
     @patch("maps.services.build_feature_summaries_for_map_area_from_overpass")
     def test_run_grid_generation_for_area_uses_auto_feature_summaries(
@@ -1858,6 +1932,8 @@ class MapAreaCreateViewTests(TestCase):
         self.assertNotIn("rows", response.data)
         self.assertNotIn("cols", response.data)
         self.assertEqual(response.data["grid_size_meters"], 500)
+        self.assertEqual(response.data["map_grid_rows"], 6)
+        self.assertEqual(response.data["map_grid_cols"], 8)
         self.assertEqual(response.data["region_feature_level"], 0)
         self.assertEqual(response.data["initial_score_mode"], "manual")
         self.assertEqual(response.data["grid_generation_status"], "completed")
@@ -1871,6 +1947,8 @@ class MapAreaCreateViewTests(TestCase):
         self.assertIn("created_at", response.data)
         self.assertIn("updated_at", response.data)
         self.assertEqual(area.created_by, self.user)
+        self.assertEqual(area.map_grid_rows, 6)
+        self.assertEqual(area.map_grid_cols, 8)
         self.assertEqual(area.region_feature_level, 0)
         self.assertEqual(area.initial_score_mode, MapArea.InitialScoreMode.MANUAL)
         self.assertEqual(GridCell.objects.filter(area=area).count(), 48)
@@ -1898,6 +1976,23 @@ class MapAreaCreateViewTests(TestCase):
         self.assertEqual(area.grid_generation_error_message, "")
         self.assertEqual(area.grid_generation_attempt_count, 1)
 
+    def test_map_grid_dimension_input_is_ignored_on_create(self):
+        self.client.force_authenticate(user=self.user)
+        payload = {
+            **self.center_payload(),
+            "map_grid_rows": 99,
+            "map_grid_cols": 99,
+        }
+
+        response = self.client.post(self.url, payload, format="json")
+        area = MapArea.objects.get(id=response.data["id"])
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["map_grid_rows"], 6)
+        self.assertEqual(response.data["map_grid_cols"], 8)
+        self.assertEqual(area.map_grid_rows, 6)
+        self.assertEqual(area.map_grid_cols, 8)
+
     def test_authenticated_user_can_create_center_based_map_area(self):
         self.client.force_authenticate(user=self.user)
 
@@ -1913,6 +2008,8 @@ class MapAreaCreateViewTests(TestCase):
         self.assertNotIn("center_lng", response.data)
         self.assertNotIn("rows", response.data)
         self.assertNotIn("cols", response.data)
+        self.assertEqual(response.data["map_grid_rows"], 6)
+        self.assertEqual(response.data["map_grid_cols"], 8)
         self.assertEqual(area.created_by, self.user)
 
     def test_center_based_map_area_generates_rows_times_cols_grid_cells(self):
@@ -1922,6 +2019,8 @@ class MapAreaCreateViewTests(TestCase):
         area = MapArea.objects.get(id=response.data["id"])
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(area.map_grid_rows, 6)
+        self.assertEqual(area.map_grid_cols, 8)
         self.assertEqual(GridCell.objects.filter(area=area).count(), 48)
 
     def test_create_map_area_with_region_feature_level_sets_grid_initial_scores(self):
@@ -1978,6 +2077,8 @@ class MapAreaCreateViewTests(TestCase):
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertEqual(response.data["initial_score_mode"], "auto")
+        self.assertEqual(response.data["map_grid_rows"], 6)
+        self.assertEqual(response.data["map_grid_cols"], 8)
         self.assertEqual(response.data["grid_generation_status"], "pending")
         self.assertEqual(response.data["grid_generation_status_display"], "作成待ち")
         self.assertIsNone(response.data["grid_generation_started_at"])
@@ -1985,6 +2086,8 @@ class MapAreaCreateViewTests(TestCase):
         self.assertEqual(response.data["grid_generation_error_message"], "")
         self.assertEqual(response.data["grid_generation_attempt_count"], 0)
         self.assertEqual(area.initial_score_mode, MapArea.InitialScoreMode.AUTO)
+        self.assertEqual(area.map_grid_rows, 6)
+        self.assertEqual(area.map_grid_cols, 8)
         self.assertEqual(
             area.grid_generation_status,
             MapArea.GridGenerationStatus.PENDING,
@@ -2014,6 +2117,8 @@ class MapAreaCreateViewTests(TestCase):
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertEqual(response.data["grid_generation_status"], "pending")
+        self.assertEqual(response.data["map_grid_rows"], 6)
+        self.assertEqual(response.data["map_grid_cols"], 8)
         self.assertEqual(
             area.grid_generation_status,
             MapArea.GridGenerationStatus.PENDING,
@@ -2039,6 +2144,8 @@ class MapAreaCreateViewTests(TestCase):
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertEqual(response.data["grid_generation_status"], "pending")
+        self.assertEqual(response.data["map_grid_rows"], 6)
+        self.assertEqual(response.data["map_grid_cols"], 8)
         self.assertEqual(
             area.grid_generation_status,
             MapArea.GridGenerationStatus.PENDING,
@@ -2053,12 +2160,61 @@ class MapAreaCreateViewTests(TestCase):
         )
         self.assertEqual(area.grid_generation_error_message, "")
         self.assertEqual(area.grid_generation_attempt_count, 1)
-        self.assertGreater(GridCell.objects.filter(area=area).count(), 0)
+        self.assertEqual(GridCell.objects.filter(area=area).count(), 48)
         mock_overpass.assert_called_once()
         self.assertIn(
             "Done. processed=1 completed=1 fallback_completed=0 failed=0",
             output.getvalue(),
         )
+
+    @patch("maps.services.build_feature_summaries_for_map_area_from_overpass")
+    def test_pending_auto_map_area_uses_saved_grid_dimensions_when_processed(
+        self,
+        mock_overpass,
+    ):
+        self.client.force_authenticate(user=self.user)
+        mock_overpass.return_value = {}
+        payload = {
+            **self.center_payload(),
+            "rows": 9,
+            "cols": 9,
+            "initial_score_mode": "auto",
+        }
+        response = self.client.post(self.url, payload, format="json")
+        area = MapArea.objects.get(id=response.data["id"])
+        output = StringIO()
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["grid_generation_status"], "pending")
+        self.assertEqual(response.data["map_grid_rows"], 9)
+        self.assertEqual(response.data["map_grid_cols"], 9)
+        self.assertEqual(GridCell.objects.filter(area=area).count(), 0)
+
+        call_command("process_pending_grid_areas", "--limit", "1", stdout=output)
+        area.refresh_from_db()
+
+        self.assertEqual(
+            area.grid_generation_status,
+            MapArea.GridGenerationStatus.COMPLETED,
+        )
+        self.assertEqual(area.map_grid_rows, 9)
+        self.assertEqual(area.map_grid_cols, 9)
+        self.assertEqual(GridCell.objects.filter(area=area).count(), 81)
+        self.assertEqual(
+            GridCell.objects.filter(area=area)
+            .order_by("-row_index")
+            .first()
+            .row_index,
+            8,
+        )
+        self.assertEqual(
+            GridCell.objects.filter(area=area)
+            .order_by("-col_index")
+            .first()
+            .col_index,
+            8,
+        )
+        mock_overpass.assert_called_once()
 
     def test_create_map_area_without_region_feature_level_uses_zero(self):
         self.client.force_authenticate(user=self.user)
@@ -2474,6 +2630,30 @@ class MapAreaListViewTests(TestCase):
                 display,
             )
 
+    def test_list_response_uses_saved_grid_dimensions_without_grid_cells(self):
+        pending_area = MapArea.objects.create(
+            name="Pending Saved Dimensions Area",
+            north=35.7,
+            south=35.6,
+            east=139.8,
+            west=139.7,
+            grid_size_meters=300,
+            map_grid_rows=9,
+            map_grid_cols=9,
+            grid_generation_status=MapArea.GridGenerationStatus.PENDING,
+            created_by=self.user,
+        )
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.get(self.url)
+        area = response.data["areas"][0]
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(area["id"], pending_area.id)
+        self.assertEqual(area["map_grid_rows"], 9)
+        self.assertEqual(area["map_grid_cols"], 9)
+        self.assertEqual(GridCell.objects.filter(area=pending_area).count(), 0)
+
     def test_grid_list_javascript_renders_grid_generation_status_badge(self):
         grid_list_js_path = finders.find("maps/js/grid-list.js")
 
@@ -2486,6 +2666,8 @@ class MapAreaListViewTests(TestCase):
         self.assertIn("地図データを取得中です。", script)
         self.assertIn("自動設定に失敗したため標準値で作成しました。", script)
         self.assertIn("メモグリッドの作成に失敗しました。", script)
+        self.assertIn("area.map_grid_rows", script)
+        self.assertIn("area.map_grid_cols", script)
 
     def test_shared_map_area_is_included_in_list(self):
         owner = get_user_model().objects.create_user(
@@ -4226,6 +4408,8 @@ class GridCellGenerateViewTests(TestCase):
             east=1.0,
             west=0.85,
             grid_size_meters=11100,
+            map_grid_rows=2,
+            map_grid_cols=2,
             created_by=self.user,
         )
         self.url = reverse("grid-cell-generate", kwargs={"area_id": self.area.id})

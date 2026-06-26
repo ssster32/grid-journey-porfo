@@ -43,6 +43,8 @@ class MapAreaSerializer(serializers.ModelSerializer):
             "center_lat",
             "center_lng",
             "grid_size_meters",
+            "map_grid_rows",
+            "map_grid_cols",
             "region_feature_level",
             "initial_score_mode",
             "grid_generation_status",
@@ -61,6 +63,8 @@ class MapAreaSerializer(serializers.ModelSerializer):
         read_only_fields = [
             "id",
             "created_by",
+            "map_grid_rows",
+            "map_grid_cols",
             "grid_generation_status",
             "grid_generation_status_display",
             "grid_generation_started_at",
@@ -114,6 +118,8 @@ class MapAreaSerializer(serializers.ModelSerializer):
         attrs["south"] = bounds["south"]
         attrs["east"] = bounds["east"]
         attrs["west"] = bounds["west"]
+        attrs["map_grid_rows"] = bounds["rows"]
+        attrs["map_grid_cols"] = bounds["cols"]
         self.center_grid_options = {
             "rows": bounds["rows"],
             "cols": bounds["cols"],
@@ -138,8 +144,6 @@ class MapAreaListSerializer(MapAreaSerializer):
     display_type = serializers.SerializerMethodField()
     is_owner = serializers.SerializerMethodField()
     created_by_username = serializers.SerializerMethodField()
-    map_grid_rows = serializers.SerializerMethodField()
-    map_grid_cols = serializers.SerializerMethodField()
 
     class Meta(MapAreaSerializer.Meta):
         fields = MapAreaSerializer.Meta.fields + [
@@ -147,8 +151,6 @@ class MapAreaListSerializer(MapAreaSerializer):
             "display_type",
             "is_owner",
             "created_by_username",
-            "map_grid_rows",
-            "map_grid_cols",
         ]
         read_only_fields = fields
 
@@ -170,18 +172,6 @@ class MapAreaListSerializer(MapAreaSerializer):
         if obj.created_by is None:
             return None
         return obj.created_by.username
-
-    def get_map_grid_rows(self, obj):
-        max_row_index = getattr(obj, "max_grid_row_index", None)
-        if max_row_index is None:
-            return None
-        return max_row_index + 1
-
-    def get_map_grid_cols(self, obj):
-        max_col_index = getattr(obj, "max_grid_col_index", None)
-        if max_col_index is None:
-            return None
-        return max_col_index + 1
 
 
 class UserSummarySerializer(serializers.ModelSerializer):

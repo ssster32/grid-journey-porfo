@@ -13,6 +13,8 @@ class MapAreaAdmin(admin.ModelAdmin):
         "grid_generation_status",
         "grid_generation_attempt_count",
         "grid_size_meters",
+        "map_grid_rows",
+        "map_grid_cols",
         "source",
         "created_by",
         "created_at",

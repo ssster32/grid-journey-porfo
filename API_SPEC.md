@@ -117,6 +117,8 @@ POST /api/maps/areas/
 `initial_score_mode="auto"` では、作成 API は GridCell を生成せず、`grid_generation_status="pending"` の MapArea を返します。
 現在の作成 API は中心座標方式を基本にしています。
 `north` / `south` / `east` / `west` の直接指定は作成入力では使えません。
+作成入力の `rows` / `cols` は、MapArea の `map_grid_rows` / `map_grid_cols` に保存されます。
+そのため、`auto` 作成直後の `pending` 中でも作成時の行数・列数をレスポンスで確認できます。
 
 作成時の GridCell 生成フロー:
 
@@ -126,6 +128,7 @@ POST /api/maps/areas/
 | `auto` | GridCell は生成しない | `grid_generation_status="pending"` | 未生成のため空になる場合がある |
 
 `auto` の GridCell 生成は、後述の `process_pending_grid_areas` management command、または将来のジョブ処理で行います。
+この後続生成では、MapArea に保存済みの `map_grid_rows` / `map_grid_cols` を使います。
 
 リクエスト:
 
@@ -158,6 +161,10 @@ POST /api/maps/areas/
 | `region_feature_level` | integer | 任意 | 0〜3。未指定時は 0 |
 | `source` | string | 任意 | model / serializer には残っている任意項目。現在の作成画面の主要入力ではない |
 
+`rows` / `cols` は作成入力専用です。
+レスポンスでは、保存済みの行数・列数として `map_grid_rows` / `map_grid_cols` を返します。
+`map_grid_rows` / `map_grid_cols` は read-only で、作成リクエストで直接指定しても上書きには使いません。
+
 `source` は API 項目としては残っていますが、現在の `/maps/new/` 画面では入力欄や主要 payload から外しています。
 
 一般ユーザー向けの API 側制限:
@@ -188,6 +195,8 @@ manual 作成レスポンス例:
   "east": 135.506,
   "west": 135.486,
   "grid_size_meters": 200,
+  "map_grid_rows": 10,
+  "map_grid_cols": 10,
   "region_feature_level": 2,
   "initial_score_mode": "manual",
   "grid_generation_status": "completed",
@@ -215,6 +224,8 @@ auto 作成レスポンス例:
   "east": 135.506,
   "west": 135.486,
   "grid_size_meters": 200,
+  "map_grid_rows": 10,
+  "map_grid_cols": 10,
   "region_feature_level": 0,
   "initial_score_mode": "auto",
   "grid_generation_status": "pending",
@@ -336,10 +347,11 @@ GET /api/maps/areas/
 | `display_type` | `メモグリッド` または `共有メモグリッド` |
 | `is_owner` | ログインユーザーが作成者かどうか |
 | `created_by_username` | 作成者の username。作成者がない場合は `null` |
-| `map_grid_rows` | GridCell の最大 `row_index` + 1。GridCell がない場合は `null` |
-| `map_grid_cols` | GridCell の最大 `col_index` + 1。GridCell がない場合は `null` |
+| `map_grid_rows` | MapArea 作成時に保存した縦方向のマス数。`pending` 中でも返る |
+| `map_grid_cols` | MapArea 作成時に保存した横方向のマス数。`pending` 中でも返る |
 
-`map_grid_rows` / `map_grid_cols` は、一覧 API で `annotate()` を使ってまとめて取得し、MapArea ごとの個別集計による N+1 を避けています。
+`map_grid_rows` / `map_grid_cols` は MapArea に保存される read-only レスポンス項目です。
+GridCell がまだ存在しない `pending` 中でも、一覧画面はこの値を使って `9×9` などのマス数を表示できます。
 
 GridCell 生成状態のレスポンス項目:
 
