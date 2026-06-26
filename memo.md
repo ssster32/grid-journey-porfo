@@ -580,6 +580,150 @@ Celery / RQ / Redis との比較:
 - 現段階のポートフォリオ用途では、まず Render Cron Job + management command の方が小さく始めやすい。
 - 利用者が増え、pending 消化や再試行が重要になった段階で Celery / RQ / Redis を再検討する。
 
+## Render上でのprocess_pending_grid_areas単発実行確認
+
+目的:
+
+- Render Cron Job 化の前に、Render 本番環境で `process_pending_grid_areas` が単発実行できるか確認する。
+- command が本番 DB に接続できること、migration 適用済みであること、Overpass 後処理が本番環境で動くことを切り分けて確認する。
+- いきなり Cron Job を作らず、まず手動の `dry-run` と `--limit 1` で安全に確認する。
+
+実行前提:
+
+- 最新コードが GitHub に push 済みである。
+- Render の最新デプロイが成功している。
+- 本番 DB に migration が適用済みである。
+- Render 上の単発実行環境が、Web Service と同じ `DATABASE_URL` などの環境変数を参照できる。
+- Render Shell、Manual Job / One-Off Job 相当の機能、または Render 管理画面からの単発コマンド実行手段が使える。
+
+本番 DB migration 確認:
+
+```bash
+python manage.py showmigrations maps
+```
+
+- `map_grid_rows` / `map_grid_cols` を追加する migration が本番 DB に適用済みか確認する。
+- migration 未適用のまま command を実行すると、DB カラム不足で失敗する可能性がある。
+- 必要な場合のみ、慎重に以下を実行する。
+
+```bash
+python manage.py migrate
+```
+
+注意:
+
+- 本番 DB への `migrate` はデータ構造を変える操作なので、実行前にローカルや検証環境で成功確認しておく。
+- 今回は Render 上での実行手順を整理するだけで、こちらでは本番 DB に対する操作は行わない。
+
+実行前の画面確認:
+
+1. 本番 URL で `initial_score_mode=auto` の MapArea を1件作成する。
+2. 作成直後の一覧で `pending` / `作成待ち` 表示になることを確認する。
+3. pending 中でも `9×9` などの行数・列数が表示されることを確認する。
+4. 詳細画面で作成待ち/作成中表示になり、GridCell 地図や採点 UI がまだ表示されないことを確認する。
+
+最初に実行する command:
+
+```bash
+python manage.py process_pending_grid_areas --dry-run
+```
+
+確認すること:
+
+- command 自体が起動できる。
+- 本番 DB に接続できる。
+- pending MapArea の件数が表示される。
+- `Dry run: no changes will be made.` が表示され、DB 更新が行われない。
+- `no such column: maps_maparea.map_grid_rows` などの migration 未適用エラーが出ない。
+
+dry-run で問題がない場合に1件だけ処理:
+
+```bash
+python manage.py process_pending_grid_areas --limit 1
+```
+
+確認すること:
+
+- `Processing MapArea id=...` が表示される。
+- `Completed MapArea id=... status=... cells=...` が表示される。
+- 最後に `Done. processed=1 ...` の summary が表示される。
+- command 全体が例外で落ちず、1件処理で止まる。
+
+実行後の画面確認:
+
+1. 本番 URL の一覧を再読み込みする。
+2. 状態バッジが `completed` / `fallback_completed` / `failed` のいずれかに変わることを確認する。
+3. `completed` の場合、詳細画面に地図、GridCell、採点 UI が表示されることを確認する。
+4. `fallback_completed` の場合、標準値で作成した注意表示が出ることを確認する。
+5. `failed` の場合、失敗メッセージが出ることを確認する。
+6. `9×9` で作成した場合、pending 中も生成後も `9×9` 表記が維持され、生成後の GridCell 数が 81 件になることを確認する。
+
+Django shell での補助確認:
+
+```bash
+python manage.py shell
+```
+
+```python
+from django.db.models import Min, Max
+from maps.models import MapArea
+
+area = MapArea.objects.order_by("-id").first()
+
+print(area.id)
+print(area.name)
+print(area.initial_score_mode)
+print(area.grid_generation_status)
+print(area.map_grid_rows, area.map_grid_cols)
+print(area.grid_cells.count())
+print(area.grid_cells.aggregate(
+    min_row=Min("row_index"),
+    max_row=Max("row_index"),
+    min_col=Min("col_index"),
+    max_col=Max("col_index"),
+))
+```
+
+期待例:
+
+```text
+pending中:
+grid_generation_status=pending
+map_grid_rows=9
+map_grid_cols=9
+grid_cells.count()=0
+
+生成後:
+grid_generation_status=completed または fallback_completed
+map_grid_rows=9
+map_grid_cols=9
+grid_cells.count()=81
+row_index: 0〜8
+col_index: 0〜8
+```
+
+失敗時に見るポイント:
+
+- migration 未適用:
+  - `no such column: maps_maparea.map_grid_rows`
+  - `no such column: maps_maparea.map_grid_cols`
+  - 対応: `python manage.py showmigrations maps` で確認し、必要なら `python manage.py migrate` を検討する。
+- 環境変数不足:
+  - `DATABASE_URL` が参照できない。
+  - `DJANGO_SECRET_KEY` や `DJANGO_SETTINGS_MODULE` 周辺で起動に失敗する。
+  - 対応: 単発実行環境が Web Service と同じ環境変数を参照できているか確認する。
+- Overpass API 失敗:
+  - `status_code=504`
+  - `status_code=429`
+  - 対応: `fallback_completed` なら仕様どおり。`failed` なら Render ログと `grid_generation_error_message` を確認する。大量処理せず `--limit 1` を維持する。
+
+この確認でやらないこと:
+
+- Render Cron Job はまだ作成しない。
+- `render.yaml` は追加・変更しない。
+- HTTP endpoint、自動ポーリング、background thread は追加しない。
+- `failed` / `fallback_completed` の自動再処理は行わない。
+
 現時点で未実装のこと:
 
 - Celery / RQ / Redis は未導入。
