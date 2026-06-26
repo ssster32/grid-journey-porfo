@@ -2,12 +2,15 @@ import logging
 from time import perf_counter
 
 from django.contrib import messages
+from django.contrib.auth.decorators import login_required
 from django.contrib.auth.forms import UserCreationForm
 from django.contrib.auth.mixins import LoginRequiredMixin
+from django.core.exceptions import PermissionDenied
 from django.contrib.staticfiles import finders
 from django.db import transaction
 from django.db.models import Prefetch, Q
-from django.http import Http404, HttpResponse
+from django.http import Http404, HttpResponse, HttpResponseNotAllowed
+from django.shortcuts import redirect, render
 from django.urls import reverse_lazy
 from django.views.generic import CreateView, TemplateView
 from rest_framework import status
@@ -1028,6 +1031,59 @@ class MapAreaPageListView(LoginRequiredMixin, TemplateView):
 class MapAreaPageCreateView(LoginRequiredMixin, TemplateView):
     login_url = "login"
     template_name = "maps/grid_create.html"
+
+
+@login_required(login_url="login")
+def pending_grid_jobs_view(request):
+    if not request.user.is_staff:
+        raise PermissionDenied("この管理画面を表示する権限がありません。")
+
+    if request.method not in ("GET", "POST"):
+        return HttpResponseNotAllowed(["GET", "POST"])
+
+    if request.method == "POST":
+        pending_area = (
+            MapArea.objects.filter(
+                grid_generation_status=MapArea.GridGenerationStatus.PENDING,
+            )
+            .order_by("created_at", "id")
+            .first()
+        )
+        if pending_area is None:
+            messages.info(request, "処理待ちのメモグリッドはありません。")
+        else:
+            try:
+                grid_cells = run_grid_generation_for_area(pending_area)
+                pending_area.refresh_from_db()
+                messages.success(
+                    request,
+                    (
+                        f"MapArea #{pending_area.id} を処理しました。"
+                        f"状態: {pending_area.get_grid_generation_status_display()} / "
+                        f"GridCell: {len(grid_cells)}件"
+                    ),
+                )
+            except Exception as error:
+                pending_area.refresh_from_db()
+                messages.error(
+                    request,
+                    (
+                        f"MapArea #{pending_area.id} の処理に失敗しました。"
+                        f"状態: {pending_area.get_grid_generation_status_display()} / "
+                        f"エラー: {error}"
+                    ),
+                )
+
+        return redirect("pending_grid_jobs")
+
+    pending_areas = MapArea.objects.filter(
+        grid_generation_status=MapArea.GridGenerationStatus.PENDING,
+    ).order_by("created_at", "id")
+    context = {
+        "pending_count": pending_areas.count(),
+        "next_pending_area": pending_areas.select_related("created_by").first(),
+    }
+    return render(request, "maps/pending_grid_jobs.html", context)
 
 
 class MapAreaPageDetailView(LoginRequiredMixin, TemplateView):

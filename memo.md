@@ -724,6 +724,32 @@ col_index: 0〜8
 - HTTP endpoint、自動ポーリング、background thread は追加しない。
 - `failed` / `fallback_completed` の自動再処理は行わない。
 
+## 管理者限定pending処理画面
+
+目的:
+
+- Render無料環境で Shell や Cron Job が使いにくい場合の代替手段として用意する。
+- staffユーザーが画面上のボタンから、古い pending MapArea を1件だけ処理できるようにする。
+- 一般ユーザーには処理ボタンを出さず、URLを直接開いても実行できないようにする。
+
+仕様:
+
+- URL は `/maps/admin/pending-grid-jobs/`。
+- staffユーザーのみアクセス可能。
+- 一覧画面には staffユーザーだけ `pending処理管理` リンクを表示する。
+- GET では pending 件数と、次に処理される MapArea の情報だけを表示する。
+- POST では `grid_generation_status=pending` の MapArea を `created_at`, `id` 順に1件だけ取得する。
+- 取得した MapArea に対して `run_grid_generation_for_area(area)` を呼び出す。
+- 処理後は同じ画面へ redirect し、Django messages で結果を表示する。
+- `failed` / `fallback_completed` / `completed` は処理対象にしない。
+
+注意:
+
+- この画面はHTTPリクエスト中に Overpass API を使う可能性があるため、10〜20秒程度かかる場合がある。
+- 短時間に連続して実行しない。
+- 1回のPOSTで処理するのは1件だけ。
+- 本格運用では Render Cron Job や Celery / RQ / Redis に置き換える可能性がある。
+
 現時点で未実装のこと:
 
 - Celery / RQ / Redis は未導入。

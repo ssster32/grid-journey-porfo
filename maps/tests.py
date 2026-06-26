@@ -2868,6 +2868,155 @@ class MapAreaListViewTests(TestCase):
         },
     }
 )
+class PendingGridJobsViewTests(TestCase):
+    def setUp(self):
+        self.staff_user = get_user_model().objects.create_user(
+            username="staffuser",
+            password="test-password",
+            is_staff=True,
+        )
+        self.user = get_user_model().objects.create_user(
+            username="testuser",
+            password="test-password",
+        )
+        self.url = reverse("pending_grid_jobs")
+
+    def create_area(self, name, status=MapArea.GridGenerationStatus.PENDING):
+        return MapArea.objects.create(
+            name=name,
+            north=35.7,
+            south=35.6,
+            east=139.8,
+            west=139.7,
+            grid_size_meters=300,
+            map_grid_rows=9,
+            map_grid_cols=9,
+            initial_score_mode=MapArea.InitialScoreMode.AUTO,
+            grid_generation_status=status,
+            created_by=self.user,
+        )
+
+    def login_staff(self):
+        self.client.login(username="staffuser", password="test-password")
+
+    def test_unauthenticated_user_is_redirected_to_login(self):
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(reverse("login"), response["Location"])
+
+    def test_non_staff_user_is_forbidden(self):
+        self.client.login(username="testuser", password="test-password")
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_staff_user_can_get_page(self):
+        self.create_area("Pending Area")
+        self.login_staff()
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "pendingメモグリッド処理")
+        self.assertContains(response, "pending件数")
+        self.assertContains(response, "1件")
+        self.assertContains(response, "Pending Area")
+
+    @patch("maps.views.run_grid_generation_for_area")
+    def test_get_does_not_process_pending_area(self, mock_run_generation):
+        area = self.create_area("Pending Area")
+        self.login_staff()
+
+        response = self.client.get(self.url)
+        area.refresh_from_db()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            area.grid_generation_status,
+            MapArea.GridGenerationStatus.PENDING,
+        )
+        self.assertEqual(GridCell.objects.filter(area=area).count(), 0)
+        mock_run_generation.assert_not_called()
+
+    @patch("maps.views.run_grid_generation_for_area")
+    def test_post_processes_only_oldest_pending_area(self, mock_run_generation):
+        first_area = self.create_area("First Pending Area")
+        second_area = self.create_area("Second Pending Area")
+
+        def complete_area(area):
+            area.grid_generation_status = MapArea.GridGenerationStatus.COMPLETED
+            area.save(update_fields=["grid_generation_status"])
+            return [object()]
+
+        mock_run_generation.side_effect = complete_area
+        self.login_staff()
+
+        response = self.client.post(self.url)
+        first_area.refresh_from_db()
+        second_area.refresh_from_db()
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response["Location"], self.url)
+        mock_run_generation.assert_called_once_with(first_area)
+        self.assertEqual(
+            first_area.grid_generation_status,
+            MapArea.GridGenerationStatus.COMPLETED,
+        )
+        self.assertEqual(
+            second_area.grid_generation_status,
+            MapArea.GridGenerationStatus.PENDING,
+        )
+
+    @patch("maps.views.run_grid_generation_for_area")
+    def test_post_without_pending_area_shows_message(self, mock_run_generation):
+        self.login_staff()
+
+        response = self.client.post(self.url, follow=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "処理待ちのメモグリッドはありません。")
+        mock_run_generation.assert_not_called()
+
+    @patch("maps.views.run_grid_generation_for_area")
+    def test_post_ignores_non_pending_areas(self, mock_run_generation):
+        self.create_area("Completed Area", MapArea.GridGenerationStatus.COMPLETED)
+        self.create_area(
+            "Fallback Area",
+            MapArea.GridGenerationStatus.FALLBACK_COMPLETED,
+        )
+        self.create_area("Failed Area", MapArea.GridGenerationStatus.FAILED)
+        self.login_staff()
+
+        response = self.client.post(self.url, follow=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "処理待ちのメモグリッドはありません。")
+        mock_run_generation.assert_not_called()
+
+    def test_staff_link_is_visible_only_for_staff_user(self):
+        self.login_staff()
+
+        staff_response = self.client.get(reverse("map-area-page-list"))
+        self.client.logout()
+        self.client.login(username="testuser", password="test-password")
+        user_response = self.client.get(reverse("map-area-page-list"))
+
+        self.assertContains(staff_response, "pending処理管理")
+        self.assertNotContains(user_response, "pending処理管理")
+
+
+@override_settings(
+    STORAGES={
+        "default": {
+            "BACKEND": "django.core.files.storage.FileSystemStorage",
+        },
+        "staticfiles": {
+            "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
+        },
+    }
+)
 class MapAreaPageDetailViewTests(TestCase):
     def setUp(self):
         self.user = get_user_model().objects.create_user(

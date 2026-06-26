@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+
+{% block title %}pendingメモグリッド処理 | Grid Journey{% endblock %}
+
+{% block content %}
+  <div class="detail-shell">
+    <p>
+      <a class="back-link" href="{% url 'map-area-page-list' %}">メモグリッド一覧へ戻る</a>
+    </p>
+
+    <section class="page-heading" aria-labelledby="pending-grid-jobs-heading">
+      <div>
+        <h1 id="pending-grid-jobs-heading">pendingメモグリッド処理</h1>
+        <p>作成待ちのメモグリッドを、管理者が1件ずつ処理します。</p>
+      </div>
+    </section>
+
+    {% if messages %}
+      <div class="admin-message-list" aria-live="polite">
+        {% for message in messages %}
+          <div class="message" data-message-type="{{ message.tags|default:'info' }}">
+            {{ message }}
+          </div>
+        {% endfor %}
+      </div>
+    {% endif %}
+
+    <section class="content-section admin-panel" aria-labelledby="pending-grid-jobs-summary-heading">
+      <h2 id="pending-grid-jobs-summary-heading">処理待ち状況</h2>
+      <dl class="definition-list admin-job-summary">
+        <dt>pending件数</dt>
+        <dd>{{ pending_count }}件</dd>
+      </dl>
+
+      {% if next_pending_area %}
+        <p>次に処理されるメモグリッドは以下です。</p>
+        <dl class="definition-list admin-job-summary">
+          <dt>ID</dt>
+          <dd>#{{ next_pending_area.id }}</dd>
+
+          <dt>名前</dt>
+          <dd>{{ next_pending_area.name|default:"名称未設定" }}</dd>
+
+          <dt>作成者</dt>
+          <dd>
+            {% if next_pending_area.created_by %}
+              {{ next_pending_area.created_by.username }}
+            {% else %}
+              不明
+            {% endif %}
+          </dd>
+
+          <dt>作成日時</dt>
+          <dd>{{ next_pending_area.created_at }}</dd>
+
+          <dt>マスの数</dt>
+          <dd>縦 {{ next_pending_area.map_grid_rows }} × 横 {{ next_pending_area.map_grid_cols }}</dd>
+
+          <dt>1マスの大きさ</dt>
+          <dd>{{ next_pending_area.grid_size_meters }}m</dd>
+
+          <dt>初期スコア設定</dt>
+          <dd>{{ next_pending_area.initial_score_mode }}</dd>
+        </dl>
+
+        <form class="admin-action-form" method="post">
+          {% csrf_token %}
+          <button type="submit">pendingを1件処理する</button>
+        </form>
+      {% else %}
+        <p>現在処理待ちのメモグリッドはありません。</p>
+      {% endif %}
+    </section>
+
+    <section class="content-section admin-warning" aria-labelledby="pending-grid-jobs-warning-heading">
+      <h2 id="pending-grid-jobs-warning-heading">実行時の注意</h2>
+      <p>この処理はOverpass APIへ問い合わせるため、10〜20秒程度かかる場合があります。</p>
+      <p>短時間に連続して実行しないでください。1回のPOSTで処理するのは1件だけです。</p>
+      <p>`failed` や `fallback_completed` の再処理は、この画面では行いません。</p>
+    </section>
+  </div>
+{% endblock %}

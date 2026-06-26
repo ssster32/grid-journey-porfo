@@ -4,6 +4,7 @@ from .views import (
     MapAreaPageCreateView,
     MapAreaPageDetailView,
     MapAreaPageListView,
+    pending_grid_jobs_view,
 )
 
 # /maps/ 配下の画面URLをまとめる。
@@ -18,6 +19,11 @@ urlpatterns = [
         "new/",
         MapAreaPageCreateView.as_view(),
         name="map-area-page-create",
+    ),
+    path(
+        "admin/pending-grid-jobs/",
+        pending_grid_jobs_view,
+        name="pending_grid_jobs",
     ),
     path(
         "<int:area_id>/",

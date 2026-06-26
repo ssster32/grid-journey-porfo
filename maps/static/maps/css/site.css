@@ -277,6 +277,11 @@ textarea {
 }
 
 .page-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 0.65rem;
   color: var(--muted);
   font-size: 0.92rem;
 }
@@ -332,6 +337,27 @@ textarea {
 }
 
 .grid-generation-state-list {
+  margin: 1rem 0 0;
+}
+
+.admin-message-list {
+  margin-bottom: 1rem;
+}
+
+.admin-panel {
+  border-left: 4px solid var(--accent);
+}
+
+.admin-warning {
+  margin-top: 1rem;
+  border-left: 4px solid var(--warning);
+}
+
+.admin-job-summary {
+  margin-bottom: 1rem;
+}
+
+.admin-action-form {
   margin: 1rem 0 0;
 }
 

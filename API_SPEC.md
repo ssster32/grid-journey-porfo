@@ -528,6 +528,7 @@ python manage.py process_pending_grid_areas --limit 1
 - 本番で自動実行する場合は、Render Cron Job などの別途運用設定が必要です。
 - Render Cron Job で実行する場合も HTTP API ではなく、運用側で management command を定期実行する扱いです。
 - 定期実行前に、Render 上でこの management command が本番 DB に接続して単発実行できることを確認します。
+- staffユーザー向けの運用画面から、pending MapArea を1件ずつ処理できる場合があります。これは通常APIではなく管理者限定画面です。
 - この仕様整理では、Render 設定や `render.yaml` は追加しません。
 - `failed` / `fallback_completed` の自動再処理は現時点では仕様外です。
 - Celery / RQ / Redis などのジョブキューは未導入です。

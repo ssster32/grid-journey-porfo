@@ -11,6 +11,9 @@
     </div>
 
     <div class="page-actions">
+      {% if request.user.is_staff %}
+        <a class="secondary-button" href="{% url 'pending_grid_jobs' %}">pending処理管理</a>
+      {% endif %}
       <a class="detail-link" href="{% url 'map-area-page-create' %}">新しいメモグリッドを作成</a>
     </div>
   </section>
