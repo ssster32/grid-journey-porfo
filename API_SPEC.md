@@ -526,7 +526,9 @@ python manage.py process_pending_grid_areas --limit 1
 
 - 現状は手動実行または将来のスケジューラ実行を想定しています。
 - 本番で自動実行する場合は、Render Cron Job などの別途運用設定が必要です。
+- Render Cron Job で実行する場合も HTTP API ではなく、運用側で management command を定期実行する扱いです。
 - この仕様整理では、Render 設定や `render.yaml` は追加しません。
+- `failed` / `fallback_completed` の自動再処理は現時点では仕様外です。
 - Celery / RQ / Redis などのジョブキューは未導入です。
 - 自動でこのコマンドを起動する仕組みや自動ポーリングは未実装です。
 - 現状は完全な非同期ジョブキューではなく、management command を使った試験的な遅延実行です。

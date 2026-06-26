@@ -484,6 +484,102 @@ process_pending_grid_areas の運用方針:
   - Render では、まず手動実行で確認し、Cron Job が利用できるなら低頻度かつ `--limit 1` で試す。
   - 本格運用やユーザー数増加が見えてから、Celery / RQ / Redis を再検討する。
 
+## process_pending_grid_areas のRender Cron Job運用方針
+
+目的:
+
+- 公開アプリでは、auto 作成後の `pending` MapArea を手動実行だけに依存すると、GridCell 生成が進まない。
+- ただし、Web リクエスト内で Overpass 取得を戻すとタイムアウトしやすくなる。
+- そのため、短期運用では Render Cron Job で management command を定期実行する案を第一候補にする。
+
+推奨する初期コマンド:
+
+```bash
+python manage.py process_pending_grid_areas --limit 1
+```
+
+- `--limit 1` は1回の実行で処理する MapArea を1件に制限する。
+- pending が0件なら、対象なしとして終了する。
+- limitなしの実行は、Overpass API への連続アクセスが増えるため現段階では使わない。
+
+実行頻度候補:
+
+| 頻度 | 利点 | 注意点 | 初期判断 |
+| --- | --- | --- | --- |
+| 5分ごと | 待ち時間が短い | Overpass へのアクセス頻度が増える | 最初は少し攻めた設定 |
+| 10分ごと | 待ち時間と負荷のバランスがよい | 利用が増えると pending が溜まる可能性 | 初期候補 |
+| 15分ごと | Overpass 負荷を抑えやすい | 完了まで少し待つ | 初期候補 |
+| 30分ごと | かなり安全寄り | ユーザーの待ち時間が長い | 低頻度デモ向け |
+
+推奨:
+
+- 初期運用は 10〜15分に1回、`--limit 1`。
+- ポートフォリオ用途で利用頻度が低いうちは、まずこの設定で様子を見る。
+- pending が溜まるようになってから、頻度や `--limit` を見直す。
+
+limit 値候補:
+
+| limit | 利点 | 注意点 | 初期判断 |
+| --- | --- | --- | --- |
+| `--limit 1` | 最も安全。連続した Overpass 取得を避けやすい | pending 解消は遅い | 推奨 |
+| `--limit 2`〜`--limit 3` | pending を少し早く消化できる | Overpass 失敗率や負荷が上がる可能性 | 様子を見てから |
+| limitなし | pending を一気に処理できる | Overpass への負荷が大きい | 非推奨 |
+
+Render 設定時に確認すること:
+
+- Cron Job は既存 Web Service とは別の定期実行サービスとして作る想定。
+- command は `python manage.py process_pending_grid_areas --limit 1` を候補にする。
+- 既存 Web Service と同じ本番 DB を参照できるように、`DATABASE_URL` など必要な環境変数をそろえる。
+- `DJANGO_SECRET_KEY`、`DJANGO_DEBUG`、`DJANGO_ALLOWED_HOSTS` など、Django 起動に必要な環境変数も確認する。
+- 実際の Render 画面操作、`render.yaml` 追加、料金・プラン条件の確認は今回行わない。
+- Render の Cron Job 利用可否や料金は変わる可能性があるため、実設定前に最新情報を確認する。
+
+migration との関係:
+
+- Cron Job は本番 DB の `MapArea` と `GridCell` を直接読む。
+- Cron Job を動かす前に、本番 DB へ migration が適用済みである必要がある。
+- 特に `map_grid_rows` / `map_grid_cols` など、pending 後の GridCell 生成に必要な列が本番 DB に存在している必要がある。
+- migration 未適用の状態で Cron Job を動かすと、DB列不足でエラーになる可能性がある。
+
+Overpass API への配慮:
+
+- auto 作成の後処理では Overpass API を使う。
+- Overpass API は混雑時に 504 / 429 などで失敗することがある。
+- 失敗しても fallback 生成できた場合は `fallback_completed` になり、標準値で GridCell は使える。
+- 短い間隔や limitなしで大量処理すると、失敗率や外部 API 負荷が上がる可能性がある。
+- 初期運用は低頻度・少件数にし、ログと `grid_generation_status` を見て調整する。
+
+pending が溜まった場合:
+
+- `--limit 1` では、作成数が増えると pending が溜まる可能性がある。
+- まずは手動で `python manage.py process_pending_grid_areas --limit 3` を一時実行して解消する案を検討する。
+- 継続的に溜まる場合は、Cron 頻度を上げる、`--limit 2`〜`--limit 3` を試す、または Celery / RQ / Redis を検討する。
+- limitなしで一気に処理する運用は、Overpass への負荷が読みにくいため避ける。
+
+`failed` / `fallback_completed` の扱い:
+
+- 現在の command は `grid_generation_status=pending` の MapArea だけを処理する。
+- `completed` は処理対象外。
+- `fallback_completed` は処理対象外。
+- `failed` は処理対象外。
+- Cron Job では自動再試行を行わない。
+- failed 再処理や fallback からの再採点は、既存 GridCell やユーザー採点をどう扱うかが関わるため別タスクで設計する。
+
+background thread を採用しない理由:
+
+- Web リクエスト内で重い処理を走らせると、Web 応答がタイムアウトしやすい。
+- background thread は、Render の再起動や複数プロセス構成で処理完了を保証しづらい。
+- 処理が途中で消えた場合の追跡や再実行が難しい。
+- ログや失敗状態を command / Cron Job に寄せた方が、初心者にも運用を追いやすい。
+
+Celery / RQ / Redis との比較:
+
+- Celery / RQ / Redis は、本格的な非同期ジョブキューとしては有力。
+- MapArea 作成直後にジョブ投入でき、retry や worker 管理もしやすい。
+- ただし Redis などの追加サービス、Render 側の構成、料金、学習コストが増える。
+- 現段階のポートフォリオ用途では、まず Render Cron Job + management command の方が小さく始めやすい。
+- 利用者が増え、pending 消化や再試行が重要になった段階で Celery / RQ / Redis を再検討する。
+
 現時点で未実装のこと:
 
 - Celery / RQ / Redis は未導入。
