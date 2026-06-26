@@ -429,12 +429,59 @@ python manage.py process_pending_grid_areas --limit 1
 - `--limit` は処理件数を制限する。
 - 現状は手動実行、または将来のスケジューラ実行を想定している。
 
+process_pending_grid_areas の運用方針:
+
+- 現段階の基本方針:
+  - 完全な非同期ジョブキューではなく、management command を使った「試験的な遅延実行」として扱う。
+  - auto 作成 API は `pending` の MapArea を返し、GridCell 生成は `process_pending_grid_areas` に分離する。
+  - Python コード、model、migration、serializer、view、画面 JS はこの方針整理では変更しない。
+- ローカル開発:
+  - `.venv` の Python で実行する。
+  - まず `--dry-run` で対象件数を確認する。
+  - 実処理は `--limit 1` から始め、Overpass への負荷と失敗時の挙動を確認する。
+  - コマンド例:
+
+```bash
+.venv/bin/python manage.py process_pending_grid_areas --dry-run
+.venv/bin/python manage.py process_pending_grid_areas --limit 1
+```
+
+- Render での短期運用:
+  - まずは手動実行を基本にする。
+  - デモ前や検証前に `pending` が残っていないか確認し、必要な分だけ処理する。
+  - 手動実行できる環境がある場合も、最初は `--dry-run` と `--limit 1` を使う。
+  - この方法では、ユーザーが auto 作成した直後に自動で完了するわけではない点に注意する。
+- Render Cron Job を使う案:
+  - Render 側で Cron Job が利用できる場合、低頻度で `python manage.py process_pending_grid_areas --limit 1` を実行する案がある。
+  - Cron は「決めた間隔でコマンドを実行する仕組み」。Celery / RQ / Redis を入れずに、疑似的な非同期処理にできる。
+  - 間隔が長すぎると `pending` の待ち時間が長くなり、短すぎると Overpass やDBへの負荷が増える。
+  - まずは低頻度、少件数から始める。件数を増やす場合も `--limit 3` 程度までを検討し、実測してから判断する。
+  - Render のプラン、料金、Cron Job の利用可否は別途確認が必要。このメモでは設定を追加しない。
+- 外部 cron + HTTP endpoint 案:
+  - 現在の `process_pending_grid_areas` は HTTP API ではないため、外部 cron から直接は呼べない。
+  - 外部 cron で実行するには、認証付きの管理用 endpoint を新しく作る必要がある。
+  - 管理用 endpoint は不正実行や連打への対策が必要になるため、現段階では採用しない。
+- background thread 案:
+  - Web リクエスト内で background thread を起動して処理する案は、本番運用では避ける。
+  - 理由は、デプロイや再起動で処理が失われやすく、複数プロセス時の重複実行やエラー追跡が難しいため。
+- Celery / RQ / Redis 案:
+  - 将来、利用量が増えたら検討する本格案。
+  - Celery / RQ は「重い処理を別 worker に渡すジョブキュー」、Redis はその待ち行列や状態管理に使うことが多い。
+  - 利点は、MapArea 作成直後にジョブ登録できること、再試行や失敗状態を扱いやすいこと。
+  - 欠点は、追加サービス、Render 側の運用設定、料金、学習コストが増えること。
+- 推奨:
+  - 現段階は management command 方式を継続する。
+  - ローカルとデモでは手動実行を使う。
+  - Render では、まず手動実行で確認し、Cron Job が利用できるなら低頻度かつ `--limit 1` で試す。
+  - 本格運用やユーザー数増加が見えてから、Celery / RQ / Redis を再検討する。
+
 現時点で未実装のこと:
 
 - Celery / RQ / Redis は未導入。
 - 自動で management command を起動する仕組みは未実装。
 - 自動ポーリングは未実装。
 - 本番スケジューラ設定は未実装。
+- Render Cron Job 設定や `render.yaml` の追加は未実装。
 - 再試行ボタンは未実装。
 - 現状は完全な非同期ジョブキューではなく、management command を使った試験的な遅延実行。
 

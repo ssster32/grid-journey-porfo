@@ -1,380 +1,354 @@
-# TASK: 非同期化試験実装の現在仕様を memo.md と API_SPEC.md に整理する
+# TASK: 未コミット差分を整理して、コミット単位を分ける
 
 ## 目的
 
-メモグリッド自動設定作成の非同期化に向けた試験実装が進み、現在の仕様が大きく変わった。
+ここまでの実装で、MapArea / GridCell / Overpass / 非同期化試験実装 / 画面表示 / 文書更新に関する変更が多数発生している。
 
-これまでの変更で、以下が実装済み。
+このまま1つの大きなコミットにすると、後から内容を追いにくくなるため、未コミット差分を確認し、意味のある単位に分けてコミットできるよう整理する。
 
-```text
-- MapArea に GridCell生成状態管理フィールドを追加
-- MapArea API レスポンスに grid_generation_status 系フィールドを read-only で追加
-- GridCell生成処理を run_grid_generation_for_area(area) に切り出し
-- run_grid_generation_for_area() 内で running / completed / fallback_completed / failed を更新
-- pending 状態の MapArea を処理する management command を追加
-- initial_score_mode=auto の MapArea 作成時は GridCell を即時生成せず pending で返却
-- manual 作成時は従来通り即時 GridCell 生成
-- 詳細画面で pending / running / failed / fallback_completed に応じた表示を追加
-- 一覧画面で GridCell生成状態バッジを表示
-```
-
-今回は、これらの現在仕様を `memo.md` と `API_SPEC.md` に整理して反映する。
+今回は **実装変更は行わない**。
+目的は、現在の差分を確認し、コミット候補を分類し、どの順番でコミットすべきかを提案すること。
 
 ## 今回のタスク範囲
 
-実装する:
+やること:
 
 ```text
-- memo.md に非同期化試験実装の現在仕様を整理して追記・更新する
-- API_SPEC.md に auto 作成時 pending 返却、状態フィールド、management command による生成フローを整理して追記・更新する
-- 既存記述と矛盾している箇所があれば修正する
+- git status で未コミット差分を確認する
+- git diff --name-only で変更ファイル一覧を確認する
+- 各ファイルの差分内容をざっくり分類する
+- コミット単位を提案する
+- 各コミットの候補メッセージを提案する
+- コミット前に確認すべきコマンドを提案する
 ```
 
-実装しない:
+やらないこと:
 
 ```text
-- Pythonコード変更
-- model変更
-- migration作成
-- serializer変更
-- views変更
-- JavaScript変更
-- CSS変更
-- テスト変更
-- Overpass処理変更
-- スコア計算変更
-- 2km制限変更
+- 実装変更
+- ファイル編集
+- コミット実行
+- git add 実行
+- git commit 実行
+- git reset / checkout / restore 実行
+- ブランチ操作
+- rebase / merge
+- force push
+- テスト実行
 ```
 
-## 対象ファイル
+## 対象
 
-変更対象:
+確認対象はリポジトリ全体。
 
-* `memo.md`
-* `API_SPEC.md`
-
-確認対象:
-
-* `maps/models.py`
-* `maps/serializers.py`
-* `maps/views.py`
-* `maps/services.py`
-* `maps/management/commands/process_pending_grid_areas.py`
-* `maps/templates/maps/grid_detail.html`
-* `maps/static/maps/js/grid-list.js`
-
-今回は変更しない:
-
-* Pythonコード
-* migration
-* JavaScript
-* CSS
-* README.md
-* tests
-
-## memo.md に整理する内容
-
-既存の非同期化設計・負荷対策・現在仕様の記述に合わせて、以下を自然に追記・更新する。
-
-### 1. 現在の作成フロー
-
-以下を整理する。
+主に想定される変更カテゴリ:
 
 ```text
-manual作成:
-MapArea作成
-→ run_grid_generation_for_area(area)
-→ GridCell即時生成
-→ grid_generation_status=completed
-→ レスポンス返却
-
-auto作成:
-MapArea作成
-→ GridCellは即時生成しない
-→ grid_generation_status=pending
-→ レスポンス返却
-→ process_pending_grid_areas で後からGridCell生成
-→ completed / fallback_completed / failed
+- Overpass負荷対策
+- GridCell生成状態管理
+- APIレスポンスへの状態追加
+- GridCell生成service切り出し
+- management command追加
+- auto作成pending返却
+- 詳細画面のpending/running/failed表示
+- 一覧画面の状態バッジ表示
+- memo.md / API_SPEC.md / README.md / TASK.md などの文書更新
 ```
 
-### 2. 状態値の意味
+## 実行してよい確認コマンド
 
-以下の状態を整理する。
-
-```text
-pending:
-MapAreaは作成済みだが、GridCell生成はまだ開始されていない
-
-running:
-GridCell生成処理中
-
-completed:
-GridCell生成完了
-
-fallback_completed:
-自動設定に失敗したが、標準値でGridCell生成完了
-
-failed:
-GridCell生成失敗
-```
-
-### 3. MapAreaの状態管理フィールド
-
-以下のフィールドを記録する。
-
-```text
-grid_generation_status
-grid_generation_started_at
-grid_generation_finished_at
-grid_generation_error_message
-grid_generation_attempt_count
-```
-
-補足:
-
-```text
-- status は API レスポンスにも read-only で返す
-- started_at / finished_at は生成開始・完了時刻
-- error_message は fallback / failed 時の短い内部エラー
-- attempt_count は生成処理の試行回数
-```
-
-### 4. management command
-
-以下を記録する。
+以下の確認コマンドは実行してよい。
 
 ```bash
-python manage.py process_pending_grid_areas
-python manage.py process_pending_grid_areas --dry-run
-python manage.py process_pending_grid_areas --limit 1
-```
-
-説明:
-
-```text
-- pending の MapArea を created_at, id 順に取得
-- run_grid_generation_for_area(area) を呼ぶ
-- 1件失敗しても残りを続行
-- dry-run は対象表示のみ
-- limit は処理件数制限
-```
-
-### 5. 画面表示
-
-一覧画面:
-
-```text
-- GridCell生成状態バッジを表示
-- pending / running / completed / fallback_completed / failed を区別
-- pending / running / fallback_completed / failed は短い補足文も表示
-```
-
-詳細画面:
-
-```text
-- pending / running / failed では基本情報と状態メッセージ、再読み込みリンクを表示
-- pending / running / failed では地図・採点フォーム・共有/削除UI・詳細JSを表示しない
-- fallback_completed は通常表示しつつ、標準値で作成した注意表示を出す
-- completed は通常表示
-```
-
-### 6. 現時点で未実装のこと
-
-以下を明確に書く。
-
-```text
-- Celery / RQ / Redis は未導入
-- 自動でmanagement commandを起動する仕組みは未実装
-- 自動ポーリングは未実装
-- 本番スケジューラ設定は未実装
-- 再試行ボタンは未実装
-```
-
-### 7. 注意点
-
-以下も必要に応じて記録する。
-
-```text
-- auto作成直後はGridCellが存在しない
-- pendingのままでは詳細画面に地図は出ない
-- GridCell生成には management command の実行が必要
-- 現状は「完全な非同期ジョブキュー」ではなく、management command を使った試験的な遅延実行
-```
-
-## API_SPEC.md に整理する内容
-
-API仕様として、以下を追記・更新する。
-
-### 1. MapArea作成APIの挙動
-
-`POST /api/maps/areas/` の説明に、manual / auto の違いを明記する。
-
-```text
-initial_score_mode=manual:
-- 作成リクエスト内でGridCellを即時生成する
-- レスポンス時点で grid_generation_status=completed
-- GridCell一覧APIでGridCellを取得できる
-
-initial_score_mode=auto:
-- 作成リクエスト内ではGridCellを生成しない
-- レスポンス時点で grid_generation_status=pending
-- GridCell生成は management command / 将来のジョブ処理で行う
-- pending中はGridCell一覧APIが空になる場合がある
-```
-
-### 2. MapAreaレスポンス項目
-
-既に追加済みの以下の項目を、説明とともに整理する。
-
-```text
-grid_generation_status
-grid_generation_status_display
-grid_generation_started_at
-grid_generation_finished_at
-grid_generation_error_message
-grid_generation_attempt_count
-```
-
-説明例:
-
-```text
-grid_generation_status:
-GridCell生成状態。pending / running / completed / fallback_completed / failed のいずれか。
-
-grid_generation_status_display:
-grid_generation_status の表示名。
-
-grid_generation_started_at:
-GridCell生成開始日時。未開始の場合は null。
-
-grid_generation_finished_at:
-GridCell生成完了日時。未完了の場合は null。
-
-grid_generation_error_message:
-GridCell生成失敗または fallback 時の短い内部エラーメッセージ。通常は空文字。
-
-grid_generation_attempt_count:
-GridCell生成処理の試行回数。
-```
-
-### 3. GridCell一覧APIのpending時挙動
-
-`GET /api/maps/areas/<area_id>/grids/` について、pending中はGridCellが未生成のため空になる可能性があることを明記する。
-
-```text
-- grid_generation_status=pending/running の場合、GridCellがまだ存在しない場合がある
-- その場合、レスポンスは空配列になる可能性がある
-- GridCell生成完了後に再取得する
-```
-
-### 4. management command はAPIではないことを明記
-
-API_SPEC.md に書く場合は、「運用・開発用コマンド」として整理する。
-
-```bash
-python manage.py process_pending_grid_areas
-python manage.py process_pending_grid_areas --dry-run
-python manage.py process_pending_grid_areas --limit 1
-```
-
-注意:
-
-```text
-- これはHTTP APIではない
-- pendingのMapAreaを処理するためのDjango management command
-- 現状は手動実行または将来のスケジューラ想定
-```
-
-### 5. 例レスポンスの更新
-
-MapArea作成レスポンス例に、状態フィールドを含める。
-
-manual例:
-
-```json
-{
-  "id": 1,
-  "name": "手動作成サンプル",
-  "initial_score_mode": "manual",
-  "grid_generation_status": "completed",
-  "grid_generation_status_display": "作成完了",
-  "grid_generation_started_at": "2026-06-25T12:00:00+09:00",
-  "grid_generation_finished_at": "2026-06-25T12:00:01+09:00",
-  "grid_generation_error_message": "",
-  "grid_generation_attempt_count": 1
-}
-```
-
-auto例:
-
-```json
-{
-  "id": 2,
-  "name": "自動作成サンプル",
-  "initial_score_mode": "auto",
-  "grid_generation_status": "pending",
-  "grid_generation_status_display": "作成待ち",
-  "grid_generation_started_at": null,
-  "grid_generation_finished_at": null,
-  "grid_generation_error_message": "",
-  "grid_generation_attempt_count": 0
-}
-```
-
-実際の既存レスポンス項目に合わせ、必要に応じて既存項目を省略せず更新する。
-
-## 書き方の注意
-
-* 「完全な非同期化が完了した」と書かない
-* 「Celeryを導入済み」と書かない
-* 「自動でバックグラウンド実行される」と断定しない
-* 「auto作成後すぐGridCellがある」と書かない
-* 「2km制限を解除した」と書かない
-* 「GridCell生成は management command / 将来のジョブ処理で行う」と書く
-* 現状は「management command を使った試験的な遅延実行」として整理する
-
-## やってよい変更
-
-* `memo.md` の現在仕様追記・整理
-* `API_SPEC.md` の作成API・レスポンス例・GridCell一覧API説明の更新
-* 既存記述との矛盾修正
-* 表現の軽微な整理
-
-## やってはいけない変更
-
-* Pythonコードを変更する
-* JavaScriptを変更する
-* CSSを変更する
-* migrationを作る
-* README.mdを変更する
-* testsを変更する
-* Overpass処理を変更する
-* スコア計算を変更する
-* 2km制限を変更する
-* management commandの挙動を変更する
-
-## 確認
-
-確認コマンドやテストコマンドは実行しない。
-
-文書更新のみなので、作業後は以下のような差分確認だけでよい。
-
-```bash
-git diff -- memo.md API_SPEC.md
-rg -n "grid_generation_status|process_pending_grid_areas|pending|fallback_completed" memo.md API_SPEC.md
+git status --short
 git diff --name-only
+git diff --stat
+git diff -- maps/models.py
+git diff -- maps/serializers.py
+git diff -- maps/views.py
+git diff -- maps/services.py
+git diff -- maps/tests.py
+git diff -- maps/test_osm_services.py
+git diff -- maps/admin.py
+git diff -- maps/static/maps/js/grid-list.js
+git diff -- maps/static/maps/css/site.css
+git diff -- maps/templates/maps/grid_detail.html
+git diff -- memo.md
+git diff -- API_SPEC.md
+git diff -- README.md
+git diff -- TASK.md
+```
+
+必要に応じて、追加で以下も実行してよい。
+
+```bash
+find maps/management -maxdepth 3 -type f -print
+git diff -- maps/management
+```
+
+## 実行してはいけないコマンド
+
+以下は実行しない。
+
+```bash
+git add
+git commit
+git reset
+git checkout
+git restore
+git clean
+git stash
+git merge
+git rebase
+git push
+```
+
+また、今回はテストコマンドも実行しない。
+
+```bash
+.venv/bin/python manage.py check
+.venv/bin/python manage.py test maps.tests
+```
+
+ただし、作業後に「ユーザーが実行すべき確認コマンド」として提示するのはよい。
+
+## コミット分割の推奨方針
+
+差分を確認した上で、次のような単位に分けられるか検討する。
+
+### 1. Overpass負荷対策系
+
+候補内容:
+
+```text
+- road取得除外
+- building center mode
+- 不完全building feature安全化
+- Overpass分割取得の比較用実装
+- Overpass軽量出力の比較用実装
+- ログ追加
+- 関連テスト
+```
+
+候補コミットメッセージ:
+
+```text
+Improve Overpass auto scoring performance diagnostics
+```
+
+または日本語なら:
+
+```text
+Overpass自動採点の負荷対策と検証ログを追加
+```
+
+### 2. GridCell生成状態管理のDB/API基盤
+
+候補内容:
+
+```text
+- MapArea に grid_generation_status 系フィールド追加
+- migration追加
+- admin表示追加
+- serializer/APIレスポンスに read-only 状態フィールド追加
+- API_SPEC.md の状態フィールド説明
+- 関連テスト
+```
+
+候補コミットメッセージ:
+
+```text
+Add GridCell generation status fields to MapArea
+```
+
+または:
+
+```text
+MapAreaにGridCell生成状態管理を追加
+```
+
+### 3. GridCell生成service化と状態更新
+
+候補内容:
+
+```text
+- run_grid_generation_for_area(area) 追加
+- views.py からservice呼び出しへ整理
+- service内で running / completed / fallback_completed / failed 更新
+- manual / auto / fallback の既存挙動維持
+- 関連テスト
+```
+
+候補コミットメッセージ:
+
+```text
+Extract GridCell generation into service with status updates
+```
+
+または:
+
+```text
+GridCell生成処理をservice化し状態更新を追加
+```
+
+### 4. pending処理用management command
+
+候補内容:
+
+```text
+- maps/management/commands/process_pending_grid_areas.py
+- --dry-run
+- --limit
+- pending MapArea処理
+- 1件失敗時も続行
+- 関連テスト
+```
+
+候補コミットメッセージ:
+
+```text
+Add command to process pending GridCell generation
+```
+
+または:
+
+```text
+pending状態のGridCell生成を処理する管理コマンドを追加
+```
+
+### 5. auto作成pending返却
+
+候補内容:
+
+```text
+- initial_score_mode=auto 作成時に即時GridCell生成しない
+- auto作成時は pending 返却
+- manual作成は従来通り即時生成
+- process_pending_grid_areas で後から生成できる
+- API_SPEC.md更新
+- 関連テスト
+```
+
+候補コミットメッセージ:
+
+```text
+Return pending MapArea for auto grid generation
+```
+
+または:
+
+```text
+自動設定のMapArea作成をpending返却に変更
+```
+
+### 6. pending/running/failedの画面表示
+
+候補内容:
+
+```text
+- 詳細画面で pending / running / failed 表示
+- fallback_completed の注意表示
+- pending/running/failed 時は地図・採点UI・詳細JSを非表示
+- 一覧画面の状態バッジ
+- grid-list.js の状態バッジ描画
+- CSS追加
+- 関連テスト
+```
+
+候補コミットメッセージ:
+
+```text
+Show GridCell generation status in map pages
+```
+
+または:
+
+```text
+MapArea一覧・詳細にGridCell生成状態表示を追加
+```
+
+### 7. 文書更新
+
+候補内容:
+
+```text
+- memo.md
+- API_SPEC.md
+- README.md
+- 非同期化試験実装の現在仕様
+- process_pending_grid_areas の運用方針
+- Render運用方針
+```
+
+候補コミットメッセージ:
+
+```text
+Document async grid generation trial workflow
+```
+
+または:
+
+```text
+非同期化試験実装と運用方針を文書化
+```
+
+## 注意点
+
+実際の差分を見て、上記の通りにきれいに分けられない場合は、無理に分けない。
+
+例えば、同じファイル内に複数カテゴリの変更が混ざっている場合は、以下を提案する。
+
+```text
+- 安全に分けられるファイル単位で分ける
+- どうしても混ざっている場合は1コミットにまとめる
+- git add -p が必要そうな箇所は「ユーザー判断」として明記する
+```
+
+Codex側で `git add -p` やコミット操作はしない。
+
+## 確認してほしいこと
+
+差分整理時に、特に以下を確認する。
+
+```text
+- README.md と TASK.md に意図しない差分があるか
+- migrationファイルが作成済みか
+- maps/management/__init__.py と commands/__init__.py が含まれているか
+- API_SPEC.md と memo.md の内容が現在仕様と矛盾していないか
+- services.py にOverpass検証系とGridCell生成service系の変更が混ざっているか
+- tests.py に複数カテゴリのテストが混在しているか
 ```
 
 ## 作業後に報告してほしいこと
 
-* 変更したファイル
-* memo.md に追記・整理した内容
-* API_SPEC.md に追記・整理した内容
-* manual / auto の作成フローを明記したこと
-* pending中はGridCellが未生成の場合があることを明記したこと
-* management command がHTTP APIではないことを明記したこと
-* 現状は完全な非同期ジョブキューではないことを明記したこと
-* Pythonコード / JS / CSS / tests / README.md を変更していないこと
-* 確認コマンドやテストコマンドを実行したかどうか
+以下を報告する。
 
-  * 実行していない場合は「実行していない」と明記する
+```text
+- 未コミットの変更ファイル一覧
+- 変更ファイルごとの内容要約
+- 推奨コミット分割案
+- 各コミットに含めるファイル候補
+- 各コミットの候補メッセージ
+- 分割が難しいファイルと理由
+- README.md / TASK.md に意図しない差分があるか
+- コミット前にユーザーが実行すべき確認コマンド
+- 今回 git add / commit / reset / restore 等は実行していないこと
+```
+
+## コミット前にユーザーが実行するとよい確認コマンド
+
+作業後の報告に、以下を含める。
+
+```bash
+.venv/bin/python manage.py check
+.venv/bin/python manage.py test maps.tests
+.venv/bin/python manage.py test maps.test_osm_services
+.venv/bin/python manage.py makemigrations --check --dry-run
+```
+
+必要に応じて、手動確認として以下も提案する。
+
+```bash
+.venv/bin/python manage.py process_pending_grid_areas --dry-run
+.venv/bin/python manage.py process_pending_grid_areas --limit 1
+```
